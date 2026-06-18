@@ -6,7 +6,7 @@ description: Run deterministic expiry workers.
 Timed relations stay active until a worker records the expiry transition. Run
 that worker from cron, a queue worker, or a service loop outside request paths.
 
-The worker loop should stay small and repeatable:
+Keep the worker loop small and repeatable:
 
 ```rust
 let repo = repo.at(chrono::Utc::now());

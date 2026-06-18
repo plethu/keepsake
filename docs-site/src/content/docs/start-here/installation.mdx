@@ -6,35 +6,24 @@ description: Add Keepsake to a Rust application.
 Add the core crate and the SQLx adapter to a Rust service that already uses
 Postgres:
 
-```toml
-[dependencies]
-keepsake = "0.1"
-keepsake-sqlx = "0.1"
-sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls"] }
+```sh
+cargo add keepsake keepsake-sqlx
+cargo add sqlx --features postgres,runtime-tokio-rustls
 ```
 
 The core crate has no backend features. The SQLx adapter enables embedded
 migrations, relation-definition caching, and simple fulfillment counters by
 default.
 
-Run the embedded migration from application startup or from a dedicated
-migration job:
+Run the embedded migration with a `sqlx::PgPool`:
 
 ```rust
+use sqlx::PgPool;
 use keepsake_sqlx::KeepsakeRepository;
 
+let pool = PgPool::connect(&database_url).await?;
 let repo = KeepsakeRepository::new(pool);
 repo.migrate().await?;
-```
-
-Production services often run this from a migration job so deploy order,
-backups, lock budgets, and rollback policy stay in the application release
-process.
-
-For local development in this repository, install pinned tools with:
-
-```sh
-mise install
 ```
 
 Applications own authorization, entity tables, and any domain-specific joins.

@@ -1,6 +1,6 @@
 ---
 title: Feature Flags
-description: Workspace feature surfaces.
+description: Feature flags exposed by the Keepsake crates.
 ---
 
 `keepsake` has no backend features. The core model and evaluator stay small,
@@ -12,8 +12,8 @@ synchronous, and persistence-agnostic.
 | --- | --- | --- |
 | `test` | No | Exposes in-memory test doubles such as `InMemoryAuditSink`. |
 
-Production code should implement provider traits with durable sinks instead of
-using test doubles.
+In production, implement provider traits with durable sinks instead of using
+test doubles.
 
 ## SQLx Adapter
 
@@ -25,7 +25,6 @@ semantics.
 | `migrations` | Yes | Exposes embedded SQLx migrations through `KeepsakeRepository::migrate()`. |
 | `cache` | Yes | Exposes opt-in relation-definition caching through repository cache helpers. |
 | `fulfillment-counters` | Yes | Exposes simple built-in counter projection writes. |
-| `postgres-tests` | No | Enables Docker-backed Postgres integration tests for this workspace. |
 
 Disable `migrations` when your service vendors the SQL into a separate
 migration framework. Disable `fulfillment-counters` when fulfillment state is
@@ -48,10 +47,11 @@ These are always part of the contract:
 - application-owned authorization and joins.
 
 Indexes are not feature flags. They are part of the Postgres schema contract
-because disabling them turns correct APIs into slow or unsafe production APIs.
+because disabling them can make otherwise correct APIs too slow or
+contention-prone in production.
 
-Relation-definition caching is a feature because Keepsake can define a useful
-bounded contract for it. Local caching is the default implementation, but the
-generic `RelationCache` trait allows application-owned Valkey, Redis, or
-control-plane adapters. Active lifecycle state caching remains application-owned:
-applications know TTLs, invalidation, partitioning, and memory budgets.
+Relation-definition caching is a feature because the key space is bounded and
+the invalidation rules are small. Local caching is the default implementation,
+and the generic `RelationCache` trait supports application Valkey, Redis, or
+control-plane adapters. Applications handle active lifecycle state caching
+because they know TTLs, invalidation, partitioning, and memory budgets.

@@ -3,13 +3,12 @@ title: Overview
 description: What Keepsake is for.
 ---
 
-Keepsake helps applications store relations that have policy attached to them.
-A relation can be simple, such as `account:acct_123` has the `tag:trusted`
-relation. It can also expire on its own, such as `account:acct_123` has the
-`sanction:mute_24h` relation until 24 hours after it was applied.
+Keepsake stores relations that have lifecycle rules. A relation can be simple:
+`account:acct_123` has the `tag:trusted` relation. It can also expire:
+`account:acct_123` has the `sanction:mute_24h` relation until 24 hours after it
+was applied.
 
-Those workflows look small at first. They become brittle when several services
-need the same answers:
+Several services may need the same data:
 
 - is this subject active in this relation right now?
 - can a retry safely run the same apply command again?
@@ -17,18 +16,18 @@ need the same answers:
 - which subjects currently have this relation?
 - where should audit history live?
 
-Keepsake gives those questions one lifecycle model. The core crate defines the
-types, commands, expiry policies, evaluator, audit traits, and errors. The SQLx
-adapter stores the lifecycle state in Postgres and provides the query shapes
-that request paths and workers need.
+Keepsake models these operations as one relation lifecycle. The core crate
+provides the types, commands, expiry policies, evaluator, audit traits, and
+errors. The SQLx adapter stores the state in Postgres and provides query
+helpers for request paths and workers.
 
-## The Mental Model
+## Core Model
 
-Keepsake stores opaque subjects and relation definitions. Your application owns
-users, accounts, authorization, tenancy, display data, and product workflows.
-Keepsake owns the lifecycle state for "this subject has this relation".
+Keepsake stores opaque subjects and relation definitions. Your application
+handles users, accounts, authorization, tenancy, display data, and product
+workflows. Keepsake stores whether "this subject has this relation".
 
-| Concept | Example | Who owns it |
+| Concept | Example | Source |
 | --- | --- | --- |
 | Subject | `account:acct_123` | Application |
 | Relation | `tag:trusted` | Application catalogue, stored by Keepsake |
@@ -36,21 +35,19 @@ Keepsake owns the lifecycle state for "this subject has this relation".
 | Expiry policy | manual, timed, or fulfillment-based | Relation definition |
 | Audit context | operator id, ticket id, reason code | Application values on Keepsake events |
 
-The main rule is that time and inputs are explicit. Callers pass `now`, relation
-definitions, current state, and any fulfillment snapshot into the lifecycle
-path. That makes retries, expiry workers, tests, and audit records easier to
-reason about.
+Pass lifecycle inputs explicitly. Callers provide `now`, relation definitions,
+current state, and any fulfillment snapshot. Retries, expiry workers, tests,
+and audit records all use the same values.
 
 ## When To Use It
 
-Use Keepsake when relation state must survive retries, remain queryable, and
-expire or revoke deterministically. Good fits include tags, sanctions,
-entitlements, holds, risk flags, feature gates, and similar workflows.
+Use Keepsake when relation state needs retry-safe writes, queryable active
+state, and deterministic expiry or revoke behavior. Good fits include tags,
+sanctions, entitlements, holds, risk flags, feature gates, and similar
+workflows.
 
-Do not use Keepsake to replace your application tables or authorization model.
-It stores relation lifecycle state for opaque subjects. Join back to your own
-tables when a request needs display data, permissions, tenant scope, or product
-context.
+Use application tables for display data, permissions, tenant scope, and product
+context. Keepsake stores relation lifecycle state for opaque subjects.
 
 Use the Rust crates directly when Rust and Postgres fit your service. Use the
 docs as implementation guidance when another language, database, migration

@@ -23,6 +23,5 @@ or audit export. Add those outside the crate migration unless the query shape is
 generic enough to belong to Keepsake itself.
 
 Keep application-specific filters out of Keepsake's default schema. A service
-with tenant partitions, regional retention, or warehouse export jobs should add
-those indexes in its own migration layer where rollout cost and lock budgets can
-be reviewed with the rest of the application schema.
+with tenant partitions, regional retention, or warehouse export jobs can add
+those indexes in its own migration layer.

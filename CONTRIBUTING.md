@@ -12,6 +12,12 @@ Run database tests with Docker:
 make test-db
 ```
 
+Tool versions are pinned in `.mise.toml`:
+
+```sh
+mise install
+```
+
 Keep public-facing changes grounded in maintainability, reliability, adoption,
 interoperability, and clear contributor workflows.
 

@@ -4,23 +4,16 @@ description: Crate, API, and schema compatibility expectations.
 ---
 
 Keepsake uses crate versions for both API and schema expectations. Before 1.0,
-minor versions may still refine public contracts, but every release should keep
-schema impact explicit in the changelog.
+minor versions may still refine public contracts. Check the changelog before
+upgrading, especially when `keepsake-sqlx` adds or changes migrations.
 
-## Compatibility Expectations
+## Upgrade Checklist
 
-- Core model and evaluator changes should follow Rust semver.
-- SQL adapter releases should document migration files added, changed indexes,
-  and any required deploy ordering.
-- Backwards-incompatible schema changes require either a major release after 1.0
-  or an explicit pre-1.0 migration note with operational steps.
-- Applications should pin crate versions and run migrations in the same release
-  train as code that depends on the new schema.
+- Pin `keepsake` and `keepsake-sqlx` together.
+- Read the changelog for API changes, new migration files, changed indexes, and
+  required ordering.
+- Apply matching migrations before deploying code that depends on new schema.
+- Test request paths and workers that use changed query helpers.
 
-Do not treat embedded migrations as a replacement for application migration
-review. They define the required schema; your service still owns when and how
-that schema is applied.
-
-For applications, the safest release shape is to pin crate versions, run the
-matching migrations in the same release train, and deploy code that depends on
-new schema only after the schema is present.
+Embedded migrations define the required schema. Your service still decides when
+and how to apply it.

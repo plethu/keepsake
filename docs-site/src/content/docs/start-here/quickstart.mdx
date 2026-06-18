@@ -6,7 +6,8 @@ description: Apply a relation and scan active memberships.
 This example defines a manual `tag:trusted` relation, applies it to an account,
 then reads the active relations for that account.
 
-Start with a migrated repository:
+Start with a migrated repository. `pool` is a `sqlx::PgPool` connected to the
+Postgres database where Keepsake stores lifecycle rows.
 
 ```rust
 use keepsake_sqlx::KeepsakeRepository;
@@ -58,15 +59,3 @@ let active = repo.active_relations_for_subject(&subject).await?;
 Use `active_relations_for_subject_by_keys` when the request only needs a small
 known set of relation keys. Use membership scans when a worker needs all active
 subjects for one relation.
-
-Run the repository checks with:
-
-```sh
-make check
-```
-
-Run Postgres integration tests with Docker available:
-
-```sh
-make test-db
-```

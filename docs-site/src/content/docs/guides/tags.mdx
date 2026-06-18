@@ -34,7 +34,7 @@ After the apply succeeds, request paths can read active tags by subject. Batch
 jobs can scan active members by relation id when they need every subject with
 that tag.
 
-Tags are a good first integration because they do not require background expiry
-workers or fulfillment projections. The application still owns the meaning of
-the tag, who may apply or revoke it, and any joins back to user or account
+Tags are the simplest integration because they do not require background expiry
+workers or fulfillment projections. The application defines what the tag means,
+who may apply or revoke it, and how tag rows join back to user or account
 tables.

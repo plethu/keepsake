@@ -3,13 +3,11 @@ title: Observability
 description: Record lifecycle outcomes without leaking application data.
 ---
 
-Observability should show whether lifecycle work is healthy without turning
-application subjects into metric labels.
+Observability needs to show whether lifecycle commands, scans, and workers are
+succeeding without putting application subjects in metric labels.
 
-Useful metric dimensions include command type, relation kind/name, transition
-result, batch size, expired count, no-op category, and error category. These
-values stay bounded and help answer whether applies, revokes, expiry workers,
-and scans are behaving as expected.
+Track bounded dimensions such as command type, relation kind/name, transition
+result, batch size, expired count, no-op category, and error category.
 
 Do not put opaque subject ids in metric labels. Use audit rows or trace spans
 for subject id, request id, ticket id, and other high-cardinality values.
@@ -25,4 +23,4 @@ A practical dashboard starts with:
 | repository error counts | is the adapter failing by category |
 
 Keep business-level dashboards in the application. Keepsake emits lifecycle
-outcomes; the product decides what those outcomes mean.
+outcomes; interpret their product meaning in application dashboards.

@@ -4,24 +4,23 @@ description: Keep queries bounded and application-owned joins external.
 ---
 
 Use relation ids for hot membership scans and subject kind/id for active
-lookups. Applications should join against their own entity tables outside
-Keepsake so lifecycle storage remains portable and predictable.
+lookups. Join against application entity tables outside Keepsake so lifecycle
+rows stay simple.
 
 ## Read Shapes
 
-The SQLx adapter includes the read shapes every implementation needs: active
-subject lookup, active relation membership, due timed expiry, and fulfillment
-projection scans when the `fulfillment-counters` feature is enabled.
-Applications should not have to re-create those query paths.
+The SQLx adapter includes common read paths: active subject lookup, active
+relation membership, due timed expiry, and fulfillment projection scans when the
+`fulfillment-counters` feature is enabled.
 
 Use `active_relations_for_subject_by_keys` when a request only needs a small
 known set of relation keys for one subject. That keeps the query bounded without
 making callers fetch all active subject relations and filter locally.
 
-Indexes are part of that contract. Making them optional would optimize for a
-small install-time diff while leaving adopters exposed to production-scale query
-failures. If an application needs extra tenancy, retention, or partitioning
-indexes, add those in the application migration layer.
+Indexes are part of that contract. Making them optional would reduce the
+install-time diff while making production-scale query failures more likely. If
+an application needs extra tenancy, retention, or partitioning indexes, add
+those in the application migration layer.
 
 ## Pagination
 
@@ -40,7 +39,7 @@ pagination inputs. Avoid caching open-ended scans without the full query shape
 in the key.
 
 The SQLx adapter includes an opt-in relation-definition cache behind the default
-`cache` feature:
+`cache` feature. This example assumes `pool` is a `sqlx::PgPool`.
 
 ```rust
 use std::time::Duration;
@@ -56,25 +55,24 @@ or invalidate cached relation definitions; writes from other processes may
 remain cached until TTL expiry. Mutation paths such as `apply` still read and
 lock relation definitions in Postgres, not from the cache.
 
-The local cache uses deterministic maps internally. Relation definitions are
-normally small enough that the consistency and review benefits beat the marginal
-constant-factor lookup win from hash maps.
+Relation definitions are usually low-cardinality data. Start with a short TTL
+and raise it only if relation lookups are hot enough to show up in traces or
+query metrics.
 
 In Kubernetes or another multi-replica deployment, the local cache is per pod.
-That is usually acceptable for low-churn relation definitions with short TTLs.
+That fits low-churn relation definitions with short TTLs.
 If relation definition changes need cross-pod invalidation, implement the
 `RelationCache` trait with an application cache such as Valkey, Redis, or a
-control-plane-backed cache. Keepsake should not pick that operational topology
-for every adopter.
+control-plane-backed cache. Choose that topology in application code.
 
 `KeepsakeRepository` is generic over its cache implementation and defaults to
-`NoopRelationCache`. That keeps the basic API simple while letting applications
-use concrete, type-checked cache adapters without trait-object dispatch.
+`NoopRelationCache`. Applications can supply concrete, type-checked cache
+adapters without trait-object dispatch.
 
-Active subject lookups and membership scans stay application-owned cache
-decisions because applications know partitioning, staleness tolerance, memory
-budgets, and invalidation transport. Cache those only with the full relation id,
-subject, cursor, limit, and any application partition scope in the key.
+Applications decide how to cache active subject lookups and membership scans
+because they know partitioning, staleness tolerance, memory budgets, and
+invalidation transport. Cache those only with the full relation id, subject,
+cursor, limit, and any application partition scope in the key.
 
 ## Mutation Contention
 
@@ -87,6 +85,6 @@ should tolerate already-terminal rows.
 Large write volumes mainly contend on the relation definition row during applies
 and expiry, because those operations take a shared lock to order themselves with
 relation disable. This is intentional: disabling a relation is a policy change
-that must not race ambiguously with new lifecycle transitions. If a relation is
-extremely hot, keep disable operations rare and operationally planned, and use
-multiple expiry workers with bounded batch sizes.
+that must not interleave unpredictably with new lifecycle transitions. If a
+relation is extremely hot, keep disable operations rare and operationally
+planned, and use multiple expiry workers with bounded batch sizes.

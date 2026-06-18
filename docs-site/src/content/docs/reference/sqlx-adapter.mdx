@@ -94,7 +94,7 @@ index order.
 ## Caching
 
 With the default `cache` feature, callers may enable a local TTL cache for
-relation definitions:
+relation definitions. This example assumes `pool` is a `sqlx::PgPool`.
 
 ```rust
 use std::time::Duration;
@@ -108,12 +108,11 @@ let repo = KeepsakeRepository::new(pool)
 The cache only affects relation read helpers. Lifecycle mutations still read
 authoritative state from Postgres.
 
-`KeepsakeRepository` is generic over the `RelationCache` trait and defaults to
-`NoopRelationCache`, so callers do not pay for a cache they did not configure.
-Applications that need cross-pod invalidation should provide their own cache
+`KeepsakeRepository` is generic over the `RelationCache` trait. Unconfigured
+repositories use `NoopRelationCache`.
+Applications that need cross-pod invalidation can provide their own cache
 adapter.
 
-Active subject lookups and membership scans stay application-owned cache
-decisions. Put those policies in an application wrapper keyed by bounded values
-such as relation id, relation kind/name, subject kind/id, cursor, limit, and any
-application partition scope.
+Put active subject lookup and membership scan caches in an application wrapper
+keyed by bounded values such as relation id, relation kind/name, subject
+kind/id, cursor, limit, and any application partition scope.

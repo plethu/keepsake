@@ -4,8 +4,8 @@ description: Model timed sanctions.
 ---
 
 Sanctions usually need three properties: a durable active state, a predictable
-expiry time, and an audit trail. Keepsake stores the lifecycle state and leaves
-the product decision to the application.
+expiry time, and an audit trail. Keepsake stores the lifecycle state. The
+application handles product policy.
 
 Timed sanctions should derive their expiry from the operation timestamp passed
 into Keepsake. Do not read the clock inside the policy definition.
@@ -44,5 +44,5 @@ Run a worker that calls `due_timed_expiry` and `expire_due_timed` in small
 batches. Batch order is stable: due time, relation id, subject id, keepsake id.
 
 Use application code for authorization, moderator tools, appeal workflows, and
-display text. Keepsake only answers whether the subject currently has the
-sanction relation and records lifecycle transitions for audit.
+display text. Keepsake records current sanction membership and lifecycle
+transitions for audit.
