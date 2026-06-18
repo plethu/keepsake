@@ -1,0 +1,40 @@
+---
+title: Audit Sinks
+description: Keep durable audit separate from operational state.
+---
+
+Audit is durable history. Logging is diagnostic. Metrics are aggregate health
+signals. Keepsake keeps these concerns separate through provider traits.
+
+Use audit for questions such as "who applied this relation", "which command
+expired it", and "what application context was attached to the transition". Use
+logs for debugging a failing request. Use metrics for aggregate health.
+
+The core crate includes the audit event model, `AuditSink`, and a no-op sink.
+`InMemoryAuditSink` is behind the `test` feature because it is a test double,
+not production guidance.
+
+`AuditSink` has an associated `Error` type. Production adapters should expose a
+small concrete error enum, usually derived with `thiserror`, rather than folding
+durable-write failures into `KeepsakeError`.
+
+`AuditEvent` includes `AuditContext` for application-owned operational
+attributes. Good context keys are stable product facts such as operator id,
+ticket id, reason code, tenant id, or request id. The core model keeps those
+attributes generic and deterministic; it does not assume any product vocabulary
+or tracing stack.
+
+The SQL schema stores context as one row per `(audit_event_id, key)`, with an
+index on `(key, value, audit_event_id)`. That is more explicit than one JSONB
+blob and easier for downstream export/indexing tools to reason about. If a
+field becomes part of a strict application reporting contract, promote it in the
+application's audit sink or warehouse schema rather than asking Keepsake to own
+that product vocabulary.
+
+Avoid putting high-cardinality context into metrics labels. Audit rows and trace
+spans are better homes for values such as subject id, ticket id, and request id.
+
+SQL append-only audit, Kafka, object storage, and event-store integrations
+should be adapters. Those adapters should preserve Keepsake's durable audit
+fields and append application context attributes alongside them, while keeping
+logging and metrics separate.

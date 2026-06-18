@@ -1,0 +1,119 @@
+---
+title: SQLx Adapter
+description: Postgres repository surface and tables.
+---
+
+The SQLx adapter stores lifecycle state in Postgres. It provides migrations,
+relation upsert, idempotent apply and revoke, active subject lookups, membership
+scans, timed expiry scans, and simple fulfillment counter projections.
+
+The schema stores opaque subject identifiers and does not join application
+entity tables.
+
+## Relation Definitions
+
+| API | Use |
+| --- | --- |
+| `upsert_relation` | Runtime relation definitions from configuration or external data. |
+| `upsert_relation_spec::<Spec>` | Code-owned relation catalogues. |
+| `relation_by_id` | Cacheable lookup by stable id. |
+| `relation_by_key` | Cacheable lookup by kind/name. |
+
+`upsert_relation` returns the stored relation definition. If a relation already
+exists for the same kind/name, the existing stable id is preserved and returned.
+Use the returned id for follow-up commands.
+
+Prefer `upsert_relation_spec::<Spec>` for application-owned relation catalogues.
+`RelationSpec` keeps the stable id, natural key, and expiry policy together.
+Spec upsert rejects an existing natural key with a different stored id instead
+of applying a typed marker to the wrong relation.
+
+Use `keepsake::relation_spec!` for static catalogues when you only need to
+declare the marker type, stable id, key, enabled state, and expiry policy. Write
+the `RelationSpec` implementation manually when a catalogue entry needs custom
+comments, conditional compilation, or unusual organization.
+
+## Mutation Helpers
+
+`apply` is idempotent for active duplicates. Duplicate commands return the
+existing active keepsake with `duplicate_prevented = true`. Disabled relations
+reject new non-duplicate applies, but duplicate applies still return the
+existing active keepsake so retry loops do not turn a committed apply into an
+error.
+
+Use `apply_without_metadata` or `apply_spec_without_metadata::<Spec>` for the
+common no-metadata command path. Use lower-level command APIs when the
+application needs actor metadata, idempotency keys, or custom audit context.
+
+Mutation methods take explicit timestamps instead of reading database time.
+Pass the same timestamp through related relation and keepsake writes when they
+belong to one deterministic application operation. For request or job scopes,
+use `repo.at(now)` to bind one explicit timestamp and call forwarding helpers
+without repeating the timestamp argument:
+
+```rust
+let now = chrono::Utc::now();
+let repo = repo.at(now);
+
+repo.upsert_relation_spec::<TrustedTag>().await?;
+repo.apply_spec_without_metadata::<TrustedTag>(&subject).await?;
+repo.expire_due_timed(500).await?;
+```
+
+## Read Helpers
+
+`active_relations_for_subject` returns active keepsakes with their stored
+relation definitions in one query. Use it when the caller needs relation keys or
+policies immediately after the subject lookup, instead of calling
+`active_for_subject` and then resolving each relation separately.
+
+`active_relations_for_subject_by_keys` is the bounded variant for request paths
+that only care about a small known set of relation keys:
+
+```rust
+let keys = [
+    TrustedTag::KEY.to_relation_key()?,
+    BetaFeature::KEY.to_relation_key()?,
+];
+
+let active = repo
+    .active_relations_for_subject_by_keys(&subject, &keys)
+    .await?;
+```
+
+The result includes only requested keys that currently have active keepsakes for
+the subject. Missing relation keys, revoked rows, and expired rows are omitted.
+Disabled relation definitions are still returned when the keepsake itself is
+active, matching `active_for_subject` semantics.
+
+For large relation memberships, prefer `active_membership_scan_after` with a
+`MembershipCursor` over repeat calls to the first-page scan. The cursor is based
+on `(subject_kind, subject_id, keepsake_id)`, matching the default membership
+index order.
+
+## Caching
+
+With the default `cache` feature, callers may enable a local TTL cache for
+relation definitions:
+
+```rust
+use std::time::Duration;
+
+use keepsake_sqlx::{KeepsakeRepository, LocalRelationCacheConfig};
+
+let repo = KeepsakeRepository::new(pool)
+    .with_local_relation_cache(LocalRelationCacheConfig::new(Duration::from_secs(60)));
+```
+
+The cache only affects relation read helpers. Lifecycle mutations still read
+authoritative state from Postgres.
+
+`KeepsakeRepository` is generic over the `RelationCache` trait and defaults to
+`NoopRelationCache`, so callers do not pay for a cache they did not configure.
+Applications that need cross-pod invalidation should provide their own cache
+adapter.
+
+Active subject lookups and membership scans stay application-owned cache
+decisions. Put those policies in an application wrapper keyed by bounded values
+such as relation id, relation kind/name, subject kind/id, cursor, limit, and any
+application partition scope.

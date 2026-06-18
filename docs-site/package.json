@@ -1,0 +1,19 @@
+{
+  "name": "keepsake-docs-site",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.8.0",
+  "scripts": {
+    "build": "astro check && astro build",
+    "dev": "astro dev",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/check": "0.9.9",
+    "@astrojs/starlight": "0.40.0",
+    "astro": "6.4.8",
+    "typescript": "6.0.3"
+  },
+  "devDependencies": {}
+}

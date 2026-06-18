@@ -1,0 +1,19 @@
+---
+title: Cron And Workers
+description: Run expiry outside request paths.
+---
+
+Run expiry workers from cron, a queue worker, or a service loop. Keep expiry
+outside request paths so user-facing requests do not pay for background cleanup.
+
+Each worker should:
+
+- bind one `now` timestamp for the batch;
+- claim a bounded number of due rows;
+- process rows in stable order;
+- commit each batch transactionally;
+- treat already-expired or revoked rows as no-ops;
+- record audit after committed transitions.
+
+Start with a small batch size and raise it only after observing transaction
+duration, lock waits, and oldest due timed expiry age.

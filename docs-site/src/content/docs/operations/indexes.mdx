@@ -1,0 +1,28 @@
+---
+title: Indexes
+description: Query paths supported by the v0 schema.
+---
+
+The initial migration includes indexes for active lookup by subject, active
+membership by relation, due timed expiry, simple fulfillment counters, and
+partial uniqueness to prevent duplicate active relations per subject.
+
+## Default Query Shapes
+
+| Query shape | Index purpose |
+| --- | --- |
+| `active_for_subject` | active lookup by `(subject_kind, subject_id)` |
+| `active_relations_for_subject_by_keys` | bounded subject lookup joined through relation keys |
+| `active_membership_scan` | stable keyset pagination by `(relation_id, subject_kind, subject_id, id)` |
+| `due_timed_expiry` | stable expiry batches by `(expires_at, relation_id, subject_kind, subject_id, id)` |
+| fulfillment counter scans | counter lookup by `(key, value, keepsake_id)` |
+| duplicate prevention | one active row per `(subject_kind, subject_id, relation_id)` |
+
+Applications may need additional indexes for tenancy, partitioning, retention,
+or audit export. Add those outside the crate migration unless the query shape is
+generic enough to belong to Keepsake itself.
+
+Keep application-specific filters out of Keepsake's default schema. A service
+with tenant partitions, regional retention, or warehouse export jobs should add
+those indexes in its own migration layer where rollout cost and lock budgets can
+be reviewed with the rest of the application schema.

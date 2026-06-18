@@ -1,0 +1,23 @@
+---
+title: Command API
+description: Typed commands for relation lifecycle changes.
+---
+
+Commands describe lifecycle changes and carry audit metadata. The core crate
+stays synchronous; async appears at persistence boundaries such as SQLx.
+
+Use `CommandContext::new(actor)` for the common case, then add an idempotency
+key or deterministic application metadata with the chainable builder helpers
+when the command needs them.
+
+| Command concern | Guidance |
+| --- | --- |
+| Actor | Use the application identity that caused the lifecycle change. |
+| Idempotency key | Add one when a caller may retry the same command after an uncertain result. |
+| Metadata | Add deterministic application context needed for audit, not request-local noise. |
+| Timestamp | Pass the operation timestamp explicitly, or bind it once with `repo.at(now)`. |
+
+Repository helpers such as `apply_spec_without_metadata` cover the common path
+where the relation is a typed `RelationSpec` and the command does not need extra
+metadata. Use the lower-level command surface when the application needs custom
+actor, context, or idempotency data.

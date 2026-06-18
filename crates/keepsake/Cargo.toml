@@ -1,0 +1,29 @@
+[package]
+name = "keepsake"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+description = "Deterministic lifecycle model for auditable relation assignments"
+readme = "../../README.md"
+categories = ["data-structures"]
+keywords = ["lifecycle", "audit", "policy", "relations"]
+
+[features]
+default = []
+test = []
+
+[dependencies]
+chrono.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

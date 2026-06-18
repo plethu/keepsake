@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_DB: keepsake
+      POSTGRES_USER: keepsake
+      POSTGRES_PASSWORD: keepsake
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keepsake -d keepsake"]
+      interval: 2s
+      timeout: 2s
+      retries: 20

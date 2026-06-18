@@ -1,0 +1,72 @@
+---
+title: Quickstart
+description: Apply a relation and scan active memberships.
+---
+
+This example defines a manual `tag:trusted` relation, applies it to an account,
+then reads the active relations for that account.
+
+Start with a migrated repository:
+
+```rust
+use keepsake_sqlx::KeepsakeRepository;
+
+let repo = KeepsakeRepository::new(pool);
+repo.migrate().await?;
+```
+
+Define the relation in code. The `relation_spec!` macro creates a typed
+`RelationSpec` that keeps the stable id, natural key, and expiry policy together
+so normal call sites do not repeat strings.
+
+```rust
+use keepsake::{ExpiryPolicy, SubjectRef};
+
+keepsake::relation_spec! {
+    struct TrustedTag {
+        id: 0x018f_0000_0000_7000_8000_0000_0000_0001;
+        key: ("tag", "trusted");
+        expiry(_at) => ExpiryPolicy::ManualOnly;
+    }
+}
+```
+
+Apply the relation using one explicit timestamp for the operation:
+
+```rust
+let now = chrono::Utc::now();
+let repo = repo.at(now);
+
+repo.upsert_relation_spec::<TrustedTag>().await?;
+
+let subject = SubjectRef::new("account", "acct_123")?;
+let applied = repo
+    .apply_spec_without_metadata::<TrustedTag>(&subject)
+    .await?;
+```
+
+If the same apply command runs again while the tag is active, Keepsake returns
+the existing active row and marks the duplicate as prevented. That makes retry
+loops safe after a committed write.
+
+Read the subject's active relations when a request needs current state:
+
+```rust
+let active = repo.active_relations_for_subject(&subject).await?;
+```
+
+Use `active_relations_for_subject_by_keys` when the request only needs a small
+known set of relation keys. Use membership scans when a worker needs all active
+subjects for one relation.
+
+Run the repository checks with:
+
+```sh
+make check
+```
+
+Run Postgres integration tests with Docker available:
+
+```sh
+make test-db
+```

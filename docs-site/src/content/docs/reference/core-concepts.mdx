@@ -1,0 +1,36 @@
+---
+title: Core Concepts
+description: Keepsake domain terms.
+---
+
+Keepsake has a small vocabulary. The same terms appear in commands, repository
+methods, audit events, and database rows.
+
+| Term | Meaning |
+| --- | --- |
+| `SubjectRef` | Opaque application subject type and id, such as `account:acct_123`. |
+| `RelationKind` and `RelationName` | Validated relation key components, such as `tag` and `trusted`. |
+| `RelationKey` | Runtime relation identity built from a kind and name. |
+| `StaticRelationKey` | Compile-time relation key used by typed relation specs. |
+| `RelationSpec` | Application-owned typed catalogue entry that keeps id, key, and expiry policy together. |
+| `relation_spec!` | Convenience macro for defining static `RelationSpec` marker types. |
+| `RelationDefinition` | Stored relation identity, enabled state, and expiry policy. |
+| `Keepsake` | The assignment from one subject to one relation. |
+| `ExpiryPolicy` | Manual, timed, or fulfillment-based lifecycle policy. |
+| `FulfillmentSnapshot` | App-owned progress state evaluated by Keepsake. |
+| `AuditContext` | Deterministic application attributes carried with audit records. |
+
+For a trusted tag, the subject might be `account:acct_123`, the relation key
+might be `tag:trusted`, and the keepsake is the active row connecting them. The
+application decides what "trusted" means. Keepsake stores whether that subject
+currently has that relation and records lifecycle transitions.
+
+Use `relation_spec!` or a manual `RelationSpec` implementation when relation
+definitions are part of the application's code catalogue. Use dynamic
+`RelationKey` values when relation definitions come from configuration, an
+admin surface, or another service.
+
+Application modules with many Keepsake calls may import `keepsake::prelude::*`
+for the common domain types and traits. SQLx-backed modules may also import
+`keepsake_sqlx::prelude::*` for the repository and adapter error/result types.
+The guide examples keep imports explicit so the model vocabulary stays visible.

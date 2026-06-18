@@ -1,0 +1,40 @@
+---
+title: Tags
+description: Model durable tags with manual expiry.
+---
+
+Tags are the smallest Keepsake integration. They represent durable membership:
+an account is trusted, a user has beta access, or an organization belongs to a
+review cohort until an application command removes that relation.
+
+Use `ExpiryPolicy::ManualOnly` for tags:
+
+```rust
+use keepsake::ExpiryPolicy;
+
+keepsake::relation_spec! {
+    struct TrustedTag {
+        id: 0x018f_0000_0000_7000_8000_0000_0000_0001;
+        key: ("tag", "trusted");
+        expiry(_at) => ExpiryPolicy::ManualOnly;
+    }
+}
+```
+
+Apply the tag through a timestamp-bound repository:
+
+```rust
+let repo = repo.at(chrono::Utc::now());
+
+repo.upsert_relation_spec::<TrustedTag>().await?;
+repo.apply_spec_without_metadata::<TrustedTag>(&subject).await?;
+```
+
+After the apply succeeds, request paths can read active tags by subject. Batch
+jobs can scan active members by relation id when they need every subject with
+that tag.
+
+Tags are a good first integration because they do not require background expiry
+workers or fulfillment projections. The application still owns the meaning of
+the tag, who may apply or revoke it, and any joins back to user or account
+tables.

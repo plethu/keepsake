@@ -1,0 +1,38 @@
+---
+title: Migrations
+description: Applying the Postgres schema.
+---
+
+`keepsake-sqlx` embeds SQLx migrations. Call `KeepsakeRepository::migrate()` at
+application startup or from a migration job that has the same database URL.
+The embedded migrator is behind the default `migrations` feature.
+
+```rust
+let repo = KeepsakeRepository::new(pool);
+repo.migrate().await?;
+```
+
+For production systems, prefer a dedicated migration job if startup migrations
+would race across many replicas or violate your release process. Keepsake owns
+the schema it needs, but applications still own rollout order, backups, lock
+budgets, deploy sequencing, and rollback policy.
+
+The v0 migration creates:
+
+- relation definitions keyed by `(kind, key)`;
+- current lifecycle rows for keepsakes;
+- simple fulfillment counter projections;
+- append-only audit rows with deterministic context attribute rows.
+
+Keep application entity tables outside the Keepsake migration. Store opaque
+subject identifiers in Keepsake and join them in application-owned queries when
+you need display data or authorization context.
+
+If your organization requires all DDL to live in one migration system, disable
+`keepsake-sqlx` default features and copy the migration SQL into that system.
+That keeps review, rollout windows, and lock budgets in the application release
+process while preserving the same schema contract.
+
+Before deploying a migration, check the release notes for added files, changed
+indexes, and required ordering. The embedded migration defines the schema
+Keepsake expects; it does not replace your normal production review.
