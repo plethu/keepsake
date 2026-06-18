@@ -6,6 +6,9 @@ on:
       - main
     paths:
       - docs-site/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
       - .forgejo/workflows/docs.yml
 
 jobs:
@@ -22,10 +25,10 @@ jobs:
           corepack prepare pnpm@11.8.0 --activate
 
       - name: Install dependencies
-        run: pnpm --dir docs-site install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Build docs
-        run: pnpm --dir docs-site build
+        run: pnpm docs:build
 
       - name: Deploy to Cloudflare Pages
         env:

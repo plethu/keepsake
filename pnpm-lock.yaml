@@ -6,7 +6,9 @@ settings:
 
 importers:
 
-  .:
+  .: {}
+
+  docs-site:
     dependencies:
       '@astrojs/check':
         specifier: 0.9.9
