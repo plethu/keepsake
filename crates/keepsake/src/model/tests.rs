@@ -41,7 +41,7 @@ fn record(expiry: ExpiryPolicy, state: LifecycleState) -> TestResult<KeepsakeRec
 }
 
 #[test]
-fn relation_definition_enabled_and_disabled_helpers_set_state() -> Result<()> {
+fn relation_definition_enabled_and_disabled_helpers_set_state() -> TestResult<()> {
     let key = RelationKey::new("tag", "trusted")?;
     let enabled = RelationDefinition::enabled(Uuid::nil(), key.clone(), ExpiryPolicy::ManualOnly)?;
     let disabled = RelationDefinition::disabled(Uuid::nil(), key, ExpiryPolicy::ManualOnly)?;
@@ -64,7 +64,7 @@ fn relation_key_components_validate_independently() {
 }
 
 #[test]
-fn relation_key_components_format_for_logs_and_labels() -> Result<()> {
+fn relation_key_components_format_for_logs_and_labels() -> TestResult<()> {
     let kind = RelationKind::new("sanction")?;
     let name = RelationName::new("mute_24h")?;
 

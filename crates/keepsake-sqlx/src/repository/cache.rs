@@ -2,6 +2,7 @@ use keepsake::{RelationDefinition, RelationId, RelationKey};
 
 #[cfg(feature = "cache")]
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 #[cfg(feature = "cache")]
 use std::sync::{Arc, RwLock};
 #[cfg(feature = "cache")]
@@ -9,7 +10,7 @@ use std::time::{Duration, Instant};
 
 /// Adapter for relation definition caching.
 #[async_trait::async_trait]
-pub trait RelationCache: Send + Sync + std::fmt::Debug {
+pub trait RelationCache: Send + Sync + Debug {
     /// Gets a cached relation by stable id.
     async fn get_by_id(&self, relation_id: RelationId) -> Option<RelationDefinition>;
 
