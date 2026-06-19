@@ -70,29 +70,29 @@ pub fn evaluate(
     fulfillment: Option<&FulfillmentSnapshot>,
 ) -> EvaluationDecision {
     if !relation.enabled {
-        return noop(NoopReason::RelationDisabled, keepsake.state);
+        return noop(NoopReason::RelationDisabled, keepsake.state());
     }
 
     if !keepsake.is_active() {
-        return noop(NoopReason::AlreadyTerminal, keepsake.state);
+        return noop(NoopReason::AlreadyTerminal, keepsake.state());
     }
 
-    match &keepsake.expiry {
-        ExpiryPolicy::ManualOnly => noop(NoopReason::ManualOnly, keepsake.state),
+    match keepsake.expiry() {
+        ExpiryPolicy::ManualOnly => noop(NoopReason::ManualOnly, keepsake.state()),
         ExpiryPolicy::At { timestamp } if now >= *timestamp => transition(
             TransitionReason::TimedExpiryDue,
             *timestamp,
             LifecycleState::Expired,
         ),
-        ExpiryPolicy::At { .. } => noop(NoopReason::NotDue, keepsake.state),
+        ExpiryPolicy::At { .. } => noop(NoopReason::NotDue, keepsake.state()),
         ExpiryPolicy::WhenFulfilled { policy } => match fulfillment {
-            None => noop(NoopReason::FulfillmentMissing, keepsake.state),
+            None => noop(NoopReason::FulfillmentMissing, keepsake.state()),
             Some(snapshot) if policy.is_fulfilled(snapshot) => transition(
                 TransitionReason::FulfillmentSatisfied,
                 now,
                 LifecycleState::Expired,
             ),
-            Some(_) => noop(NoopReason::FulfillmentIncomplete, keepsake.state),
+            Some(_) => noop(NoopReason::FulfillmentIncomplete, keepsake.state()),
         },
     }
 }
@@ -157,7 +157,7 @@ mod tests {
             relation,
             ts("2026-01-01T00:00:00Z")?,
             BTreeMap::new(),
-        ))
+        )?)
     }
 
     #[test]

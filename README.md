@@ -1,30 +1,30 @@
 # keepsake
 
-`keepsake` is a Rust crate for relation lifecycles: tags, sanctions,
-entitlements, holds, risk flags, feature gates, and other "subject has relation
-until policy changes" workflows. It keeps those rows queryable, idempotent, and
-auditable. The docs define the same behavior for implementations in other
-stacks.
+> Let it be forgotten, as a flower is forgotten,
+> Forgotten as a fire that once was singing gold.
+>
+> — Sara Teasdale, "Let It Be Forgotten" (1920)
 
-Keepsake covers one pattern: relation state that survives retries, expires on a
-known schedule, and remains queryable. It handles idempotent mutations,
-deterministic expiry, stable batch ordering, opaque application subjects,
-explicit indexes, audit records, and cacheable read shapes.
+`keepsake` stores relations that a subject holds until policy ends them: a
+trusted tag, a 24-hour mute, an entitlement, a hold, a risk flag, a feature gate.
+It keeps those writes idempotent, expires them on a schedule you set, makes them
+queryable, and records an audit trail.
 
-The core crate is persistence-agnostic and synchronous. The SQLx adapter adds
-Postgres access, migrations, and query helpers.
+The core crate is persistence-agnostic and synchronous. The SQLx adapter stores
+the state in Postgres, with migrations and query helpers. The same contract is
+documented for services on other stacks.
 
-## Dependency Boundary
+## Where it fits
 
-Use the crate when a Rust/Postgres service can use its schema and repository
-API. Use the docs as a reference when another language, migration framework,
-database topology, tenancy model, cache layer, or audit sink needs the same
-behavior.
+Use the crate directly if a Rust and Postgres service fits how it works. When it
+doesn't, the docs and structure carry the pattern itself, written so the same
+contract, indexes, and lifecycle rules adapt to another language, framework,
+database, or stack that needs deterministic lifecycle modeling.
 
-Keepsake does not join application entity tables, handle authorization,
-invalidate distributed caches, consume domain events, or replace application
-migration review. Authorization can use these relations later, but this crate
-only stores relation state and expiry.
+Some responsibilities stay with your application. Keepsake does not join your
+entity tables, make authorization decisions, invalidate distributed caches,
+consume domain events, or stand in for migration review. Authorization can read
+these relations later; this crate stores relation state and expiry.
 
 ## Install
 
@@ -55,25 +55,33 @@ repo.migrate().await?;
   active relation scans, timed expiry jobs, fulfillment scans, and duplicate
   active prevention. Treat additional tenancy or partitioning indexes as
   application-specific.
-- Large databases: use bounded query shapes and keyset pagination for hot
+- Large databases: use bounded queries and keyset pagination for hot
   reads. Cache relation definitions and request-scoped active lookups in
   application code when needed; keep mutation paths authoritative and
   idempotent.
 
-## Feature Direction
+## Defaults and feature flags
 
 The default SQLx adapter includes migrations, indexed query helpers, idempotent
-writes, timed expiry scans, and simple fulfillment counters. Extra integration
-points use feature flags when they add schema, dependencies, or runtime cost.
+writes, timed expiry scans, and simple fulfillment counters. Anything that adds
+schema, dependencies, or runtime cost goes behind a feature flag instead.
 
-Core lifecycle semantics are not feature flags. Idempotency, duplicate active
-prevention, deterministic ordering, opaque subjects, and indexed read shapes are
-part of the contract.
+The lifecycle semantics are always on. Idempotency, duplicate active prevention,
+deterministic ordering, opaque subjects, and indexed reads are part of the
+contract, not switches to flip.
 
 Indexes ship with the schema because the default query helpers rely on them.
-Keepsake includes an optional relation-definition cache for the SQLx adapter.
-Applications decide how to cache active lifecycle state because they know the
-right staleness, partitioning, invalidation, and memory limits.
+There is an optional relation-definition cache for the SQLx adapter. Caching
+active lifecycle state is left to the application, which knows the right
+staleness, partitioning, invalidation, and memory limits.
+
+## Why it exists
+
+I'd been writing this pattern ad-hoc across production services for
+compliance-heavy domains, where auditability and determinism are hard
+requirements. It worked, so keepsake is the consolidated version, one robust
+implementation to pull in instead of re-deriving the same lifecycle rules in
+every project.
 
 ## License
 

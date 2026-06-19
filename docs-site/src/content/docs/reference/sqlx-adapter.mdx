@@ -10,6 +10,10 @@ scans, timed expiry scans, and simple fulfillment counter projections.
 The schema stores opaque subject identifiers and does not join application
 entity tables.
 
+Keepsake rows use the same flat lifecycle record shape as `KeepsakeRecord`.
+Postgres constraints reject state/timestamp combinations that the core model
+would reject during record conversion.
+
 ## Relation Definitions
 
 | API | Use |
@@ -40,6 +44,9 @@ existing active keepsake with `duplicate_prevented = true`. Disabled relations
 reject new non-duplicate applies, but duplicate applies still return the
 existing active keepsake so retry loops do not turn a committed apply into an
 error.
+
+Apply validates `SubjectRef` before writing. Empty subject kinds or ids fail
+without inserting a keepsake row.
 
 Use `apply_without_metadata` or `apply_spec_without_metadata::<Spec>` for the
 common no-metadata command path. Use lower-level command APIs when the

@@ -18,12 +18,14 @@ Tool versions are pinned in `.mise.toml`:
 mise install
 ```
 
-Keep public-facing changes grounded in maintainability, reliability, adoption,
-interoperability, and clear contributor workflows.
+When a change touches the public surface, lean on what keeps the project healthy
+over time: maintainability, reliability, interoperability, and a workflow other
+contributors can follow.
 
-Issues for bugs, documentation gaps, feature gaps, and operational problems are
-welcome.
+Issues are welcome for bugs, gaps in the docs, missing features, and anything
+that bites you in operation.
 
-I am not currently able to commit time to reviewing pull requests from
-maintainers I do not already know. Please open an issue before spending time on
-a patch.
+A heads-up on pull requests: I can't promise timely review on unsolicited
+patches right now, so please open an issue before you put real work into one.
+That way we can agree on the shape of a change before you spend an evening on
+it.

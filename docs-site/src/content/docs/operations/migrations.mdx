@@ -16,12 +16,23 @@ let repo = KeepsakeRepository::new(pool);
 repo.migrate().await?;
 ```
 
-The v0 migration creates:
+The initial v0 migration creates:
 
 - relation definitions keyed by `(kind, key)`;
 - current lifecycle rows for keepsakes;
 - simple fulfillment counter projections;
 - append-only audit rows with deterministic context attribute rows.
+
+The v0.2 lifecycle migration adds check constraints that keep the SQL record
+shape aligned with the core `KeepsakeRecord` conversion rules:
+
+- `expires_at` must match timed expiry policies and stay null for manual or
+  fulfillment policies;
+- applied rows cannot have terminal timestamps;
+- revoked rows require `revoked_at` and cannot have `fulfilled_at`;
+- expired rows must be either timed expiry with `expires_at` or fulfillment
+  expiry with `fulfilled_at`;
+- manual-only rows cannot be expired.
 
 Keep application entity tables outside the Keepsake migration. Store opaque
 subject identifiers in Keepsake and join them in application-owned queries when

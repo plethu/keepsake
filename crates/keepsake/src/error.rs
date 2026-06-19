@@ -23,4 +23,11 @@ pub enum KeepsakeError {
         /// Disabled relation id.
         relation_id: uuid::Uuid,
     },
+
+    /// A flat keepsake record did not satisfy lifecycle invariants.
+    #[error("invalid keepsake lifecycle: {reason}")]
+    InvalidKeepsakeLifecycle {
+        /// Validation failure reason.
+        reason: &'static str,
+    },
 }

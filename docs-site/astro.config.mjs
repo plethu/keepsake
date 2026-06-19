@@ -32,6 +32,7 @@ export default defineConfig({
           label: 'Reference',
           items: [
             { label: 'Core Concepts', slug: 'reference/core-concepts' },
+            { label: 'Lifecycle Model', slug: 'reference/lifecycle-model' },
             { label: 'Command API', slug: 'reference/command-api' },
             { label: 'SQLx Adapter', slug: 'reference/sqlx-adapter' },
             { label: 'Feature Flags', slug: 'reference/feature-flags' },

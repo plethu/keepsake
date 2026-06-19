@@ -46,6 +46,6 @@ async fn main() -> Result<(), ExampleError> {
         .apply_spec_without_metadata::<Mute24hSanction>(&subject)
         .await?;
 
-    println!("{}", applied.keepsake.id);
+    println!("{}", applied.keepsake.id());
     Ok(())
 }

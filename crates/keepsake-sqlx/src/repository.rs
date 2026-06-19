@@ -2,24 +2,26 @@
 
 use std::collections::BTreeMap;
 
-#[cfg(feature = "cache")]
-use std::sync::Arc;
-#[cfg(feature = "cache")]
-use std::sync::RwLock;
-#[cfg(feature = "cache")]
-use std::time::{Duration, Instant};
-
 use chrono::{DateTime, Utc};
-use keepsake::{
-    ExpiryPolicy, Keepsake, LifecycleState, RelationDefinition, RelationId, RelationKey,
-    RelationSpec, SubjectRef,
-};
-use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, PgPool, Postgres, Transaction};
+use keepsake::{Keepsake, RelationDefinition, RelationId, RelationKey, RelationSpec, SubjectRef};
+use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 #[cfg(feature = "migrations")]
 use sqlx::migrate::Migrator;
+
+mod cache;
+mod rows;
+mod timed;
+mod types;
+
+#[cfg(feature = "cache")]
+pub use cache::{LocalRelationCache, LocalRelationCacheConfig};
+pub use cache::{NoopRelationCache, RelationCache};
+pub use timed::TimedKeepsakeRepository;
+pub use types::{ActiveRelation, AppliedKeepsake, MembershipCursor, TimedExpiryCandidate};
+
+use rows::{ActiveRelationRow, AppliedKeepsakeRow, AppliedKeepsakeWriteRow, RelationRow};
 
 #[cfg(feature = "migrations")]
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
@@ -351,6 +353,7 @@ where
         at: DateTime<Utc>,
         metadata: &BTreeMap<String, String>,
     ) -> RepositoryResult<AppliedKeepsake> {
+        subject.validate()?;
         let mut tx = self.pool.begin().await?;
         let relation = relation_for_share_tx(&mut tx, relation_id).await?;
 
@@ -398,8 +401,8 @@ where
             return Err(RepositoryError::RelationDisabled { relation_id });
         }
 
-        tx.commit().await?;
         let (keepsake, duplicate_prevented) = applied.try_into_parts()?;
+        tx.commit().await?;
         Ok(AppliedKeepsake {
             keepsake,
             duplicate_prevented,
@@ -736,142 +739,6 @@ where
     }
 }
 
-/// Timestamp-scoped repository view.
-///
-/// This wrapper does not read the system clock. Callers choose the timestamp once
-/// at an operation boundary, then use the forwarding methods to keep related
-/// writes and expiry scans on the same deterministic instant.
-#[derive(Debug, Clone, Copy)]
-pub struct TimedKeepsakeRepository<'repo, C = NoopRelationCache> {
-    repository: &'repo KeepsakeRepository<C>,
-    at: DateTime<Utc>,
-}
-
-impl<'repo, C> TimedKeepsakeRepository<'repo, C>
-where
-    C: RelationCache,
-{
-    /// Returns the repository backing this timestamp-scoped view.
-    #[must_use]
-    pub const fn repository(&self) -> &'repo KeepsakeRepository<C> {
-        self.repository
-    }
-
-    /// Returns the timestamp applied by forwarding methods.
-    #[must_use]
-    pub const fn timestamp(&self) -> DateTime<Utc> {
-        self.at
-    }
-
-    /// Inserts or updates a relation definition using this view's timestamp.
-    pub async fn upsert_relation(
-        &self,
-        relation: &RelationDefinition,
-    ) -> RepositoryResult<RelationDefinition> {
-        self.repository.upsert_relation(relation, self.at).await
-    }
-
-    /// Inserts or updates a typed relation spec using this view's timestamp.
-    pub async fn upsert_relation_spec<Spec>(&self) -> RepositoryResult<RelationDefinition>
-    where
-        Spec: RelationSpec,
-    {
-        self.repository.upsert_relation_spec::<Spec>(self.at).await
-    }
-
-    /// Enables or disables a relation using this view's timestamp.
-    pub async fn set_relation_enabled(
-        &self,
-        relation_id: RelationId,
-        enabled: bool,
-    ) -> RepositoryResult<bool> {
-        self.repository
-            .set_relation_enabled(relation_id, enabled, self.at)
-            .await
-    }
-
-    /// Applies a keepsake relation idempotently using this view's timestamp.
-    pub async fn apply(
-        &self,
-        subject: &SubjectRef,
-        relation_id: RelationId,
-        metadata: &BTreeMap<String, String>,
-    ) -> RepositoryResult<AppliedKeepsake> {
-        self.repository
-            .apply(subject, relation_id, self.at, metadata)
-            .await
-    }
-
-    /// Applies a typed keepsake relation idempotently using this view's timestamp.
-    pub async fn apply_spec<Spec>(
-        &self,
-        subject: &SubjectRef,
-        metadata: &BTreeMap<String, String>,
-    ) -> RepositoryResult<AppliedKeepsake>
-    where
-        Spec: RelationSpec,
-    {
-        self.repository
-            .apply_spec::<Spec>(subject, self.at, metadata)
-            .await
-    }
-
-    /// Applies a keepsake relation with empty metadata using this view's timestamp.
-    pub async fn apply_without_metadata(
-        &self,
-        subject: &SubjectRef,
-        relation_id: RelationId,
-    ) -> RepositoryResult<AppliedKeepsake> {
-        self.repository
-            .apply_without_metadata(subject, relation_id, self.at)
-            .await
-    }
-
-    /// Applies a typed keepsake relation with empty metadata using this view's timestamp.
-    pub async fn apply_spec_without_metadata<Spec>(
-        &self,
-        subject: &SubjectRef,
-    ) -> RepositoryResult<AppliedKeepsake>
-    where
-        Spec: RelationSpec,
-    {
-        self.repository
-            .apply_spec_without_metadata::<Spec>(subject, self.at)
-            .await
-    }
-
-    /// Revokes an active keepsake using this view's timestamp.
-    pub async fn revoke(&self, keepsake_id: Uuid) -> RepositoryResult<bool> {
-        self.repository.revoke(keepsake_id, self.at).await
-    }
-
-    /// Lists due timed expiry candidates using this view's timestamp.
-    pub async fn due_timed_expiry(
-        &self,
-        limit: i64,
-    ) -> RepositoryResult<Vec<TimedExpiryCandidate>> {
-        self.repository.due_timed_expiry(self.at, limit).await
-    }
-
-    /// Expires a stable batch of due timed keepsakes using this view's timestamp.
-    pub async fn expire_due_timed(&self, limit: i64) -> RepositoryResult<u64> {
-        self.repository.expire_due_timed(self.at, limit).await
-    }
-
-    /// Upserts a simple fulfillment counter projection using this view's timestamp.
-    #[cfg(feature = "fulfillment-counters")]
-    pub async fn upsert_counter_projection(
-        &self,
-        keepsake_id: Uuid,
-        key: &str,
-        value: i64,
-    ) -> RepositoryResult<()> {
-        self.repository
-            .upsert_counter_projection(keepsake_id, key, value, self.at)
-            .await
-    }
-}
-
 async fn due_timed_expiry_tx(
     tx: &mut Transaction<'_, Postgres>,
     now: DateTime<Utc>,
@@ -928,359 +795,12 @@ async fn relation_for_share_tx(
     row.try_into_relation()
 }
 
-/// Adapter for relation definition caching.
-#[async_trait::async_trait]
-pub trait RelationCache: Send + Sync + std::fmt::Debug {
-    /// Gets a cached relation by stable id.
-    async fn get_by_id(&self, relation_id: RelationId) -> Option<RelationDefinition>;
-
-    /// Gets a cached relation by natural relation key.
-    async fn get_by_key(&self, key: &RelationKey) -> Option<RelationDefinition>;
-
-    /// Stores or refreshes a relation definition.
-    async fn store(&self, relation: &RelationDefinition);
-
-    /// Removes cached entries for a relation id.
-    async fn remove_by_id(&self, relation_id: RelationId);
-}
-
-/// Relation cache implementation that never stores entries.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NoopRelationCache;
-
-#[async_trait::async_trait]
-impl RelationCache for NoopRelationCache {
-    async fn get_by_id(&self, _relation_id: RelationId) -> Option<RelationDefinition> {
-        None
-    }
-
-    async fn get_by_key(&self, _key: &RelationKey) -> Option<RelationDefinition> {
-        None
-    }
-
-    async fn store(&self, _relation: &RelationDefinition) {}
-
-    async fn remove_by_id(&self, _relation_id: RelationId) {}
-}
-
-/// Configuration for local in-process relation definition caching.
-#[cfg(feature = "cache")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LocalRelationCacheConfig {
-    /// Time before a cached relation definition must be refreshed from Postgres.
-    pub ttl: Duration,
-}
-
-#[cfg(feature = "cache")]
-impl LocalRelationCacheConfig {
-    /// Creates a local relation cache configuration.
-    #[must_use]
-    pub const fn new(ttl: Duration) -> Self {
-        Self { ttl }
-    }
-}
-
-/// Local in-process relation definition cache.
-#[cfg(feature = "cache")]
-#[derive(Debug, Clone)]
-pub struct LocalRelationCache {
-    config: LocalRelationCacheConfig,
-    // Local cache handles may be cloned or shared across repository clones.
-    // Locks protect a small in-process map and are never held across `.await`.
-    // Cross-pod invalidation belongs in another `RelationCache` adapter.
-    state: Arc<RwLock<LocalRelationCacheState>>,
-}
-
-#[cfg(feature = "cache")]
-impl LocalRelationCache {
-    /// Creates a local in-process relation definition cache.
-    #[must_use]
-    pub fn new(config: LocalRelationCacheConfig) -> Self {
-        Self {
-            config,
-            state: Arc::new(RwLock::new(LocalRelationCacheState::default())),
-        }
-    }
-}
-
-#[cfg(feature = "cache")]
-#[async_trait::async_trait]
-impl RelationCache for LocalRelationCache {
-    async fn get_by_id(&self, relation_id: RelationId) -> Option<RelationDefinition> {
-        self.state
-            .read()
-            .ok()
-            .and_then(|state| state.by_id.get(&relation_id).cloned())
-            .and_then(CacheEntry::fresh_relation)
-    }
-
-    async fn get_by_key(&self, key: &RelationKey) -> Option<RelationDefinition> {
-        self.state
-            .read()
-            .ok()
-            .and_then(|state| state.by_key.get(key).cloned())
-            .and_then(CacheEntry::fresh_relation)
-    }
-
-    async fn store(&self, relation: &RelationDefinition) {
-        let entry = CacheEntry {
-            relation: relation.clone(),
-            expires_at: Instant::now() + self.config.ttl,
-        };
-        if let Ok(mut state) = self.state.write() {
-            state.by_id.insert(relation.id, entry.clone());
-            state.by_key.insert(relation.key.clone(), entry);
-        }
-    }
-
-    async fn remove_by_id(&self, relation_id: RelationId) {
-        if let Ok(mut state) = self.state.write()
-            && let Some(entry) = state.by_id.remove(&relation_id)
-        {
-            state.by_key.remove(&entry.relation.key);
-        }
-    }
-}
-
-#[cfg(feature = "cache")]
-#[derive(Debug, Default)]
-struct LocalRelationCacheState {
-    by_id: BTreeMap<RelationId, CacheEntry>,
-    by_key: BTreeMap<RelationKey, CacheEntry>,
-}
-
-#[cfg(feature = "cache")]
-#[derive(Debug, Clone)]
-struct CacheEntry {
-    relation: RelationDefinition,
-    expires_at: Instant,
-}
-
-#[cfg(feature = "cache")]
-impl CacheEntry {
-    fn fresh_relation(self) -> Option<RelationDefinition> {
-        (Instant::now() <= self.expires_at).then_some(self.relation)
-    }
-}
-
-/// Keyset cursor for active relation membership scans.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MembershipCursor {
-    /// Last seen subject kind.
-    pub subject_kind: String,
-    /// Last seen subject id.
-    pub subject_id: String,
-    /// Last seen keepsake id.
-    pub keepsake_id: Uuid,
-}
-
-impl MembershipCursor {
-    /// Creates a cursor positioned after a returned keepsake.
-    #[must_use]
-    pub fn after(keepsake: &Keepsake) -> Self {
-        Self {
-            subject_kind: keepsake.subject.kind.clone(),
-            subject_id: keepsake.subject.id.clone(),
-            keepsake_id: keepsake.id,
-        }
-    }
-}
-
-/// Result of an apply operation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AppliedKeepsake {
-    /// Created keepsake, or the existing active keepsake for duplicate applies.
-    pub keepsake: Keepsake,
-    /// Whether a duplicate active keepsake was prevented.
-    pub duplicate_prevented: bool,
-}
-
-/// Active keepsake with its relation definition.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ActiveRelation {
-    /// Active keepsake.
-    pub keepsake: Keepsake,
-    /// Stored relation definition for the keepsake.
-    pub relation: RelationDefinition,
-}
-
-/// Due timed expiry candidate.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromRow)]
-pub struct TimedExpiryCandidate {
-    /// Keepsake id.
-    pub keepsake_id: Uuid,
-    /// Relation id.
-    pub relation_id: Uuid,
-    /// Subject kind.
-    pub subject_kind: String,
-    /// Subject id.
-    pub subject_id: String,
-    /// Due timestamp.
-    pub due_at: DateTime<Utc>,
-}
-
-#[derive(Debug, FromRow)]
-struct RelationRow {
-    id: Uuid,
-    kind: String,
-    key: String,
-    enabled: bool,
-    expiry_policy: serde_json::Value,
-}
-
-impl RelationRow {
-    fn try_into_relation(self) -> RepositoryResult<RelationDefinition> {
-        let expiry = serde_json::from_value::<ExpiryPolicy>(self.expiry_policy)?;
-        Ok(RelationDefinition::new(
-            self.id,
-            RelationKey::new(self.kind, self.key)?,
-            self.enabled,
-            expiry,
-        )?)
-    }
-}
-
-#[derive(Debug, FromRow)]
-struct AppliedKeepsakeRow {
-    id: Uuid,
-    subject_kind: String,
-    subject_id: String,
-    relation_id: Uuid,
-    state: String,
-    expiry_policy: serde_json::Value,
-    applied_at: DateTime<Utc>,
-    expires_at: Option<DateTime<Utc>>,
-    fulfilled_at: Option<DateTime<Utc>>,
-    revoked_at: Option<DateTime<Utc>>,
-    metadata: serde_json::Value,
-}
-
-impl AppliedKeepsakeRow {
-    fn try_into_keepsake(self) -> RepositoryResult<Keepsake> {
-        let expiry = serde_json::from_value::<ExpiryPolicy>(self.expiry_policy)?;
-        let metadata = serde_json::from_value::<BTreeMap<String, String>>(self.metadata)?;
-        Ok(Keepsake {
-            id: self.id,
-            subject: SubjectRef {
-                kind: self.subject_kind,
-                id: self.subject_id,
-            },
-            relation_id: self.relation_id,
-            state: parse_state(self.state)?,
-            expiry,
-            applied_at: self.applied_at,
-            expires_at: self.expires_at,
-            fulfilled_at: self.fulfilled_at,
-            revoked_at: self.revoked_at,
-            metadata,
-        })
-    }
-}
-
-#[derive(Debug, FromRow)]
-struct AppliedKeepsakeWriteRow {
-    id: Uuid,
-    subject_kind: String,
-    subject_id: String,
-    relation_id: Uuid,
-    state: String,
-    expiry_policy: serde_json::Value,
-    applied_at: DateTime<Utc>,
-    expires_at: Option<DateTime<Utc>>,
-    fulfilled_at: Option<DateTime<Utc>>,
-    revoked_at: Option<DateTime<Utc>>,
-    metadata: serde_json::Value,
-    duplicate_prevented: bool,
-}
-
-impl AppliedKeepsakeWriteRow {
-    fn try_into_parts(self) -> RepositoryResult<(Keepsake, bool)> {
-        let expiry = serde_json::from_value::<ExpiryPolicy>(self.expiry_policy)?;
-        let metadata = serde_json::from_value::<BTreeMap<String, String>>(self.metadata)?;
-        let keepsake = Keepsake {
-            id: self.id,
-            subject: SubjectRef {
-                kind: self.subject_kind,
-                id: self.subject_id,
-            },
-            relation_id: self.relation_id,
-            state: parse_state(self.state)?,
-            expiry,
-            applied_at: self.applied_at,
-            expires_at: self.expires_at,
-            fulfilled_at: self.fulfilled_at,
-            revoked_at: self.revoked_at,
-            metadata,
-        };
-        Ok((keepsake, self.duplicate_prevented))
-    }
-}
-
-#[derive(Debug, FromRow)]
-struct ActiveRelationRow {
-    id: Uuid,
-    subject_kind: String,
-    subject_id: String,
-    relation_id: Uuid,
-    state: String,
-    expiry_policy: serde_json::Value,
-    applied_at: DateTime<Utc>,
-    expires_at: Option<DateTime<Utc>>,
-    fulfilled_at: Option<DateTime<Utc>>,
-    revoked_at: Option<DateTime<Utc>>,
-    metadata: serde_json::Value,
-    relation_definition_id: Uuid,
-    relation_kind: String,
-    relation_key: String,
-    relation_enabled: bool,
-    relation_expiry_policy: serde_json::Value,
-}
-
-impl ActiveRelationRow {
-    fn try_into_active_relation(self) -> RepositoryResult<ActiveRelation> {
-        let expiry = serde_json::from_value::<ExpiryPolicy>(self.expiry_policy)?;
-        let relation_expiry = serde_json::from_value::<ExpiryPolicy>(self.relation_expiry_policy)?;
-        let metadata = serde_json::from_value::<BTreeMap<String, String>>(self.metadata)?;
-        Ok(ActiveRelation {
-            keepsake: Keepsake {
-                id: self.id,
-                subject: SubjectRef {
-                    kind: self.subject_kind,
-                    id: self.subject_id,
-                },
-                relation_id: self.relation_id,
-                state: parse_state(self.state)?,
-                expiry,
-                applied_at: self.applied_at,
-                expires_at: self.expires_at,
-                fulfilled_at: self.fulfilled_at,
-                revoked_at: self.revoked_at,
-                metadata,
-            },
-            relation: RelationDefinition::new(
-                self.relation_definition_id,
-                RelationKey::new(self.relation_kind, self.relation_key)?,
-                self.relation_enabled,
-                relation_expiry,
-            )?,
-        })
-    }
-}
-
-fn parse_state(value: String) -> RepositoryResult<LifecycleState> {
-    match value.as_str() {
-        "applied" => Ok(LifecycleState::Applied),
-        "revoked" => Ok(LifecycleState::Revoked),
-        "expired" => Ok(LifecycleState::Expired),
-        _ => Err(RepositoryError::InvalidLifecycleState { state: value }),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use chrono::DateTime;
     use sqlx::postgres::PgPoolOptions;
 
+    use super::rows::parse_state;
     use super::*;
 
     fn ts(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {

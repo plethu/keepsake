@@ -44,6 +44,6 @@ async fn main() -> Result<(), ExampleError> {
         .apply_spec_without_metadata::<TrustedTag>(&subject)
         .await?;
 
-    println!("{}", applied.keepsake.id);
+    println!("{}", applied.keepsake.id());
     Ok(())
 }
