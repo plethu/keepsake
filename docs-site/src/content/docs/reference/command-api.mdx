@@ -17,7 +17,15 @@ when the command needs them.
 | Metadata | Add deterministic application context needed for audit, not request-local noise. |
 | Timestamp | Pass the operation timestamp explicitly, or bind it once with `repo.at(now)`. |
 
-Repository helpers such as `apply_spec_without_metadata` cover the common path
-where the relation is a typed `RelationSpec` and the command does not need extra
-metadata. Use the lower-level command surface when the application needs custom
-actor, context, or idempotency data.
+Use `ApplyKeepsake::for_spec::<Spec>` when the relation is a typed
+`RelationSpec`; use `ApplyKeepsake::new` when the relation id is dynamic. Pass
+the command to `keepsake_sqlx::KeepsakeRepository::apply` so the lifecycle row
+and SQL audit row commit together. Use `RevokeKeepsake::new` with
+`KeepsakeRepository::revoke` for explicit revocation.
+
+The SQLx adapter copies `CommandContext::metadata` into audit context
+attributes. When `idempotency_key` is present, it is also stored as an
+`idempotency_key` audit attribute unless metadata already supplied that key.
+Repository duplicate prevention remains based on the active subject/relation
+row, so use the command idempotency key as audit context rather than a separate
+deduplication mechanism.

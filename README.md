@@ -8,7 +8,7 @@
 `keepsake` stores relations that a subject holds until policy ends them: a
 trusted tag, a 24-hour mute, an entitlement, a hold, a risk flag, a feature gate.
 It keeps those writes idempotent, expires them on a schedule you set, makes them
-queryable, and records an audit trail.
+queryable, and gives you typed audit records for apply and revoke commands.
 
 The core crate is persistence-agnostic and synchronous. The SQLx adapter stores
 the state in Postgres, with migrations and query helpers. The same contract is
@@ -49,6 +49,9 @@ repo.migrate().await?;
 - Migrations: `keepsake-sqlx` embeds SQLx migrations. Call them from startup or
   your normal migration runner. Disable the `migrations` feature if your
   service vendors the SQL into another migration framework.
+- Audit: `apply` and `revoke` take command objects and write actor/context
+  metadata with the lifecycle change. Treat those command helpers as the
+  canonical mutation path.
 - Versioning: crate releases follow semver. Check the changelog for schema
   impact before upgrading.
 - Indexing: the initial schema includes indexes for active subject lookups,

@@ -130,7 +130,7 @@ mod tests {
         DateTime::parse_from_rfc3339(value).map(|timestamp| timestamp.with_timezone(&Utc))
     }
 
-    type TestResult<T> = std::result::Result<T, TestError>;
+    type TestResult<T> = core::result::Result<T, TestError>;
 
     #[derive(Debug, thiserror::Error)]
     enum TestError {

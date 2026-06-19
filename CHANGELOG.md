@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0 - 2026-06-19
+
+- Added typed audit event categories and audit-specific decisions.
+- Added audited SQLx apply/revoke command helpers that write lifecycle and audit
+  rows atomically.
+- Added `append_audit_event` as an explicit SQLx escape hatch for audit events
+  that do not have a built-in repository command.
+- Made the SQLx mutation API command-first by replacing unaudited convenience
+  mutation helpers with `apply(&ApplyKeepsake)` and `revoke(&RevokeKeepsake)`.
+- Split large repository, model, and integration-test modules into smaller
+  responsibility-focused files.
+- Clarified audit and command documentation around the command-first SQLx API.
+
 ## 0.2.0 - 2026-06-19
 
 - Added typed keepsake lifecycle invariants with flat serde/storage records,

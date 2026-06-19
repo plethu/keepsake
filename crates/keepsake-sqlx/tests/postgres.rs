@@ -4,6 +4,8 @@
 
 #[path = "postgres/apply.rs"]
 mod apply;
+#[path = "postgres/audit.rs"]
+mod audit;
 #[path = "postgres/expiry.rs"]
 mod expiry;
 #[path = "postgres/queries.rs"]

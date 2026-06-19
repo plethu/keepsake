@@ -12,7 +12,8 @@ logs for debugging a failing request. Use metrics for aggregate health.
 
 The core crate includes the audit event model, `AuditSink`, and a no-op sink.
 `InMemoryAuditSink` is behind the `test` feature because it is a test double,
-not production guidance.
+not production guidance. The SQLx adapter writes audit rows through `apply` and
+`revoke`; treat those command helpers as the canonical SQL mutation path.
 
 `AuditSink` has an associated `Error` type. Production adapters should expose a
 small concrete error enum, usually derived with `thiserror`, rather than folding
@@ -26,14 +27,16 @@ or tracing stack.
 
 The SQL schema stores context as one row per `(audit_event_id, key)`, with an
 index on `(key, value, audit_event_id)`. That is more explicit than one JSONB
-blob and easier for downstream export/indexing tools to process. If a
-field becomes part of a strict application reporting contract, promote it in the
-application's audit sink or warehouse schema.
+blob and easier for downstream export/indexing tools to process. The SQLx
+command helpers copy command metadata into these rows and preserve
+`idempotency_key` as an audit attribute when present. If a field becomes part of
+a strict application reporting contract, promote it in the application's audit
+sink or warehouse schema.
 
 Avoid putting high-cardinality context into metrics labels. Audit rows and trace
 spans are better homes for values such as subject id, ticket id, and request id.
 
 SQL append-only audit, Kafka, object storage, and event-store integrations fit
-behind adapters. Preserve Keepsake's durable audit fields and append
+behind application adapters. Preserve Keepsake's durable audit fields and append
 application context attributes alongside them, while keeping logging and metrics
 separate.

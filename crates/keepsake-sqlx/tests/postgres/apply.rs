@@ -6,22 +6,8 @@ async fn duplicate_active_apply_returns_existing_keepsake() -> TestResult<()> {
     let repo = repo().await?;
     let relation = timed_relation(&repo, "duplicate", "2026-01-02T00:00:00Z").await?;
     let subject = SubjectRef::new("user", format!("dup_{}", Uuid::now_v7()))?;
-    let applied = repo
-        .apply(
-            &subject,
-            relation.id,
-            ts("2026-01-01T00:00:00Z")?,
-            &BTreeMap::new(),
-        )
-        .await?;
-    let duplicate = repo
-        .apply(
-            &subject,
-            relation.id,
-            ts("2026-01-01T00:00:00Z")?,
-            &BTreeMap::new(),
-        )
-        .await?;
+    let applied = apply_at(&repo, &subject, relation.id, "2026-01-01T00:00:00Z").await?;
+    let duplicate = apply_at(&repo, &subject, relation.id, "2026-01-01T00:00:00Z").await?;
 
     assert!(!applied.duplicate_prevented);
     assert!(duplicate.duplicate_prevented);
@@ -30,18 +16,8 @@ async fn duplicate_active_apply_returns_existing_keepsake() -> TestResult<()> {
     let active = repo.active_for_subject(&subject).await?;
     assert_eq!(active.len(), 1);
 
-    assert!(
-        repo.revoke(applied.keepsake.id(), ts("2026-01-01T00:05:00Z")?)
-            .await?
-    );
-    let reapplied = repo
-        .apply(
-            &subject,
-            relation.id,
-            ts("2026-01-01T00:10:00Z")?,
-            &BTreeMap::new(),
-        )
-        .await?;
+    assert!(revoke_at(&repo, applied.keepsake.id(), "2026-01-01T00:05:00Z").await?);
+    let reapplied = apply_at(&repo, &subject, relation.id, "2026-01-01T00:10:00Z").await?;
     assert!(!reapplied.duplicate_prevented);
     assert_ne!(reapplied.keepsake.id(), applied.keepsake.id());
 
@@ -61,19 +37,88 @@ async fn invalid_subject_apply_fails_without_persisting_row() -> TestResult<()> 
         id: String::new(),
     };
 
-    let result = repo
-        .apply(
-            &subject,
-            relation.id,
-            ts("2026-01-01T00:00:00Z")?,
-            &BTreeMap::new(),
-        )
-        .await;
+    let command = ApplyKeepsake::new(
+        subject.clone(),
+        relation.id,
+        ts("2026-01-01T00:00:00Z")?,
+        test_context("worker")?,
+    );
+    let result = repo.apply(&command).await;
 
     assert!(
         matches!(result, Err(RepositoryError::Keepsake(keepsake::KeepsakeError::EmptyIdentifier { field })) if field == "subject.kind")
     );
     assert!(repo.active_for_subject(&subject).await?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires docker postgres; run `make test-db`"]
+async fn invalid_actor_apply_fails_without_persisting_row() -> TestResult<()> {
+    let repo = repo().await?;
+    let relation = timed_relation(&repo, "invalid-apply-actor", "2026-01-02T00:00:00Z").await?;
+    let subject = SubjectRef::new("user", format!("invalid_actor_{}", Uuid::now_v7()))?;
+    let context = CommandContext {
+        actor: ActorRef {
+            kind: "system".to_owned(),
+            id: String::new(),
+        },
+        idempotency_key: None,
+        metadata: BTreeMap::new(),
+    };
+
+    let command = ApplyKeepsake::new(
+        subject.clone(),
+        relation.id,
+        ts("2026-01-01T00:00:00Z")?,
+        context,
+    );
+    let result = repo.apply(&command).await;
+
+    assert!(
+        matches!(result, Err(RepositoryError::Keepsake(keepsake::KeepsakeError::EmptyIdentifier { field })) if field == "actor.id")
+    );
+    assert!(repo.active_for_subject(&subject).await?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires docker postgres; run `make test-db`"]
+async fn invalid_actor_revoke_fails_without_transition_or_audit() -> TestResult<()> {
+    let database_url = std::env::var("DATABASE_URL")?;
+    let pool = PgPool::connect(&database_url).await?;
+    let repo = KeepsakeRepository::new(pool.clone());
+    repo.migrate().await?;
+    reset_database(&pool).await?;
+
+    let relation = timed_relation(&repo, "invalid-revoke-actor", "2026-01-02T00:00:00Z").await?;
+    let subject = SubjectRef::new("user", format!("invalid_revoke_{}", Uuid::now_v7()))?;
+    let applied = apply_at(&repo, &subject, relation.id, "2026-01-01T00:00:00Z").await?;
+    let context = CommandContext {
+        actor: ActorRef {
+            kind: "system".to_owned(),
+            id: String::new(),
+        },
+        idempotency_key: None,
+        metadata: BTreeMap::new(),
+    };
+    let command = RevokeKeepsake::new(applied.keepsake.id(), ts("2026-01-01T00:05:00Z")?, context);
+    let result = repo.revoke(&command).await;
+
+    assert!(
+        matches!(result, Err(RepositoryError::Keepsake(keepsake::KeepsakeError::EmptyIdentifier { field })) if field == "actor.id")
+    );
+    let active = repo.active_for_subject(&subject).await?;
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].id(), applied.keepsake.id());
+    assert_eq!(
+        audit_rows_for_keepsake(&pool, applied.keepsake.id())
+            .await?
+            .iter()
+            .map(|row| row.event_type.as_str())
+            .collect::<Vec<&str>>(),
+        vec!["apply"]
+    );
     Ok(())
 }
 
@@ -87,14 +132,7 @@ async fn duplicate_apply_after_disable_returns_existing_keepsake() -> TestResult
 
     assert!(set_relation_enabled(&repo, relation.id, false).await?);
 
-    let duplicate = repo
-        .apply(
-            &subject,
-            relation.id,
-            ts("2026-01-01T00:10:00Z")?,
-            &BTreeMap::new(),
-        )
-        .await?;
+    let duplicate = apply_at(&repo, &subject, relation.id, "2026-01-01T00:10:00Z").await?;
 
     assert!(duplicate.duplicate_prevented);
     assert_eq!(duplicate.keepsake.id(), applied.keepsake.id());
@@ -138,14 +176,13 @@ async fn disabled_relation_rejects_apply() -> TestResult<()> {
     let relation = upsert_relation(&repo, &relation).await?;
     let subject = SubjectRef::new("user", format!("disabled_{}", Uuid::now_v7()))?;
 
-    let result = repo
-        .apply(
-            &subject,
-            relation.id,
-            ts("2026-01-01T00:00:00Z")?,
-            &BTreeMap::new(),
-        )
-        .await;
+    let command = ApplyKeepsake::new(
+        subject,
+        relation.id,
+        ts("2026-01-01T00:00:00Z")?,
+        test_context("worker")?,
+    );
+    let result = repo.apply(&command).await;
 
     assert!(matches!(
         result,

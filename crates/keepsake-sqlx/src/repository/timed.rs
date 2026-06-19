@@ -1,12 +1,9 @@
-use std::collections::BTreeMap;
-
 use chrono::{DateTime, Utc};
-use keepsake::{RelationDefinition, RelationId, RelationSpec, SubjectRef};
+use keepsake::{RelationDefinition, RelationId, RelationSpec};
 use uuid::Uuid;
 
 use super::{
-    AppliedKeepsake, KeepsakeRepository, NoopRelationCache, RelationCache, RepositoryResult,
-    TimedExpiryCandidate,
+    KeepsakeRepository, NoopRelationCache, RelationCache, RepositoryResult, TimedExpiryCandidate,
 };
 
 /// Timestamp-scoped repository view.
@@ -61,61 +58,6 @@ where
         self.repository
             .set_relation_enabled(relation_id, enabled, self.at)
             .await
-    }
-
-    /// Applies a keepsake relation idempotently using this view's timestamp.
-    pub async fn apply(
-        &self,
-        subject: &SubjectRef,
-        relation_id: RelationId,
-        metadata: &BTreeMap<String, String>,
-    ) -> RepositoryResult<AppliedKeepsake> {
-        self.repository
-            .apply(subject, relation_id, self.at, metadata)
-            .await
-    }
-
-    /// Applies a typed keepsake relation idempotently using this view's timestamp.
-    pub async fn apply_spec<Spec>(
-        &self,
-        subject: &SubjectRef,
-        metadata: &BTreeMap<String, String>,
-    ) -> RepositoryResult<AppliedKeepsake>
-    where
-        Spec: RelationSpec,
-    {
-        self.repository
-            .apply_spec::<Spec>(subject, self.at, metadata)
-            .await
-    }
-
-    /// Applies a keepsake relation with empty metadata using this view's timestamp.
-    pub async fn apply_without_metadata(
-        &self,
-        subject: &SubjectRef,
-        relation_id: RelationId,
-    ) -> RepositoryResult<AppliedKeepsake> {
-        self.repository
-            .apply_without_metadata(subject, relation_id, self.at)
-            .await
-    }
-
-    /// Applies a typed keepsake relation with empty metadata using this view's timestamp.
-    pub async fn apply_spec_without_metadata<Spec>(
-        &self,
-        subject: &SubjectRef,
-    ) -> RepositoryResult<AppliedKeepsake>
-    where
-        Spec: RelationSpec,
-    {
-        self.repository
-            .apply_spec_without_metadata::<Spec>(subject, self.at)
-            .await
-    }
-
-    /// Revokes an active keepsake using this view's timestamp.
-    pub async fn revoke(&self, keepsake_id: Uuid) -> RepositoryResult<bool> {
-        self.repository.revoke(keepsake_id, self.at).await
     }
 
     /// Lists due timed expiry candidates using this view's timestamp.

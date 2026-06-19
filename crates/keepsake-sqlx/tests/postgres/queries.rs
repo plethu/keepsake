@@ -49,12 +49,8 @@ async fn active_relations_for_subject_returns_joined_relation_definitions() -> T
     let relation_b = timed_relation(&repo, "joined-b", "2026-01-03T00:00:00Z").await?;
     let subject = SubjectRef::new("user", format!("joined_{}", Uuid::now_v7()))?;
 
-    let applied_a = repo
-        .apply_without_metadata(&subject, relation_a.id, ts("2026-01-01T00:00:00Z")?)
-        .await?;
-    let applied_b = repo
-        .apply_without_metadata(&subject, relation_b.id, ts("2026-01-01T00:00:00Z")?)
-        .await?;
+    let applied_a = apply_at(&repo, &subject, relation_a.id, "2026-01-01T00:00:00Z").await?;
+    let applied_b = apply_at(&repo, &subject, relation_b.id, "2026-01-01T00:00:00Z").await?;
 
     let active = repo.active_relations_for_subject(&subject).await?;
 
@@ -84,26 +80,14 @@ async fn active_relations_for_subject_by_keys_returns_requested_active_relations
     let expired = timed_relation(&repo, "keyed-expired", "2026-01-02T00:00:00Z").await?;
     let subject = SubjectRef::new("user", format!("keyed_{}", Uuid::now_v7()))?;
 
-    let applied_a = repo
-        .apply_without_metadata(&subject, relation_a.id, ts("2026-01-01T00:00:00Z")?)
-        .await?;
-    repo.apply_without_metadata(&subject, relation_b.id, ts("2026-01-01T00:00:00Z")?)
-        .await?;
-    let applied_disabled = repo
-        .apply_without_metadata(&subject, disabled.id, ts("2026-01-01T00:00:00Z")?)
-        .await?;
-    let applied_revoked = repo
-        .apply_without_metadata(&subject, revoked.id, ts("2026-01-01T00:00:00Z")?)
-        .await?;
-    let applied_expired = repo
-        .apply_without_metadata(&subject, expired.id, ts("2026-01-01T00:00:00Z")?)
-        .await?;
+    let applied_a = apply_at(&repo, &subject, relation_a.id, "2026-01-01T00:00:00Z").await?;
+    apply_at(&repo, &subject, relation_b.id, "2026-01-01T00:00:00Z").await?;
+    let applied_disabled = apply_at(&repo, &subject, disabled.id, "2026-01-01T00:00:00Z").await?;
+    let applied_revoked = apply_at(&repo, &subject, revoked.id, "2026-01-01T00:00:00Z").await?;
+    let applied_expired = apply_at(&repo, &subject, expired.id, "2026-01-01T00:00:00Z").await?;
 
     assert!(set_relation_enabled(&repo, disabled.id, false).await?);
-    assert!(
-        repo.revoke(applied_revoked.keepsake.id(), ts("2026-01-01T00:05:00Z")?)
-            .await?
-    );
+    assert!(revoke_at(&repo, applied_revoked.keepsake.id(), "2026-01-01T00:05:00Z").await?);
     assert_eq!(
         repo.expire_due_timed(ts("2026-01-03T00:00:00Z")?, 10)
             .await?,

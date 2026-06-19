@@ -7,7 +7,8 @@ use crate::ExpiryPolicy;
 
 use super::*;
 
-type TestResult<T> = std::result::Result<T, TestError>;
+type TestResult<T> = core::result::Result<T, TestError>;
+type TimestampResult<T> = core::result::Result<T, chrono::ParseError>;
 
 #[derive(Debug, thiserror::Error)]
 enum TestError {
@@ -21,7 +22,7 @@ enum TestError {
     SerdeJson(#[from] serde_json::Error),
 }
 
-fn ts(value: &str) -> std::result::Result<DateTime<Utc>, chrono::ParseError> {
+fn ts(value: &str) -> TimestampResult<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value).map(|timestamp| timestamp.with_timezone(&Utc))
 }
 

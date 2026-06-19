@@ -4,8 +4,9 @@ description: Postgres repository surface and tables.
 ---
 
 The SQLx adapter stores lifecycle state in Postgres. It provides migrations,
-relation upsert, idempotent apply and revoke, active subject lookups, membership
-scans, timed expiry scans, and simple fulfillment counter projections.
+relation upsert, idempotent apply and revoke, audited command helpers, active
+subject lookups, membership scans, timed expiry scans, and simple fulfillment
+counter projections.
 
 The schema stores opaque subject identifiers and does not join application
 entity tables.
@@ -39,18 +40,20 @@ comments, conditional compilation, or unusual organization.
 
 ## Mutation Helpers
 
-`apply` is idempotent for active duplicates. Duplicate commands return the
-existing active keepsake with `duplicate_prevented = true`. Disabled relations
-reject new non-duplicate applies, but duplicate applies still return the
-existing active keepsake so retry loops do not turn a committed apply into an
-error.
+`apply(&ApplyKeepsake)` is idempotent for active duplicates and writes an audit
+event in the same transaction. Duplicate commands return the existing active
+keepsake with `duplicate_prevented = true`. Disabled relations reject new
+non-duplicate applies, but duplicate applies still return the existing active
+keepsake so retry loops do not turn a committed apply into an error.
 
 Apply validates `SubjectRef` before writing. Empty subject kinds or ids fail
 without inserting a keepsake row.
 
-Use `apply_without_metadata` or `apply_spec_without_metadata::<Spec>` for the
-common no-metadata command path. Use lower-level command APIs when the
-application needs actor metadata, idempotency keys, or custom audit context.
+Use `ApplyKeepsake::for_spec::<Spec>` for typed relation catalogues and
+`ApplyKeepsake::new` when the relation id is dynamic. `revoke(&RevokeKeepsake)`
+records explicit revocation audit. `CommandContext::idempotency_key` is copied
+into audit context attributes; duplicate active prevention is still based on the
+active `(subject_kind, subject_id, relation_id)` relation, not on that key.
 
 Mutation methods take explicit timestamps instead of reading database time.
 Pass the same timestamp through related relation and keepsake writes when they
@@ -59,13 +62,28 @@ use `repo.at(now)` to bind one explicit timestamp and call forwarding helpers
 without repeating the timestamp argument:
 
 ```rust
-let now = chrono::Utc::now();
-let repo = repo.at(now);
+use keepsake::{ActorRef, ApplyKeepsake, CommandContext};
 
-repo.upsert_relation_spec::<TrustedTag>().await?;
-repo.apply_spec_without_metadata::<TrustedTag>(&subject).await?;
-repo.expire_due_timed(500).await?;
+let now = chrono::Utc::now();
+let timed_repo = repo.at(now);
+
+timed_repo.upsert_relation_spec::<TrustedTag>().await?;
+
+let command = ApplyKeepsake::for_spec::<TrustedTag>(
+    subject,
+    now,
+    CommandContext::new(ActorRef::new("system", "worker")?),
+);
+repo.apply(&command).await?;
+timed_repo.expire_due_timed(500).await?;
 ```
+
+## Advanced Audit Appends
+
+Use `append_audit_event(&AuditEvent)` only for application-owned audit events
+that do not have a built-in repository command. It appends audit rows without
+mutating lifecycle state. For apply and revoke flows, prefer the command
+helpers so lifecycle and audit rows commit together.
 
 ## Read Helpers
 

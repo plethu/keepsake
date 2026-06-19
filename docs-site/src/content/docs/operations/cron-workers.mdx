@@ -12,8 +12,7 @@ Each worker should:
 - claim a bounded number of due rows;
 - process rows in stable order;
 - commit each batch transactionally;
-- treat already-expired or revoked rows as no-ops;
-- record audit after committed transitions.
+- treat already-expired or revoked rows as no-ops.
 
 Start with a small batch size and raise it only after observing transaction
 duration, lock waits, and oldest due timed expiry age.

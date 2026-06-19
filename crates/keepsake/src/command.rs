@@ -6,7 +6,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::model::{ActorRef, KeepsakeId, RelationId, SubjectRef};
+use crate::error::Result;
+use crate::model::{ActorRef, KeepsakeId, RelationId, RelationSpec, SubjectRef};
 
 /// Metadata attached to a command for audit and observation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,6 +43,11 @@ impl CommandContext {
     pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.metadata.insert(key.into(), value.into());
         self
+    }
+
+    /// Validates the command context.
+    pub fn validate(&self) -> Result<()> {
+        self.actor.validate()
     }
 }
 
@@ -81,6 +87,15 @@ impl ApplyKeepsake {
         }
     }
 
+    /// Creates an apply command for a typed relation spec.
+    #[must_use]
+    pub fn for_spec<Spec>(subject: SubjectRef, at: DateTime<Utc>, context: CommandContext) -> Self
+    where
+        Spec: RelationSpec,
+    {
+        Self::new(subject, Spec::ID, at, context)
+    }
+
     /// Adds opaque application metadata.
     #[must_use]
     pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
@@ -100,13 +115,37 @@ pub struct RevokeKeepsake {
     pub context: CommandContext,
 }
 
+impl RevokeKeepsake {
+    /// Creates a revoke command.
+    #[must_use]
+    pub const fn new(keepsake_id: KeepsakeId, at: DateTime<Utc>, context: CommandContext) -> Self {
+        Self {
+            keepsake_id,
+            at,
+            context,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
     use uuid::Uuid;
 
     use super::*;
-    use crate::model::{ActorRef, SubjectRef};
+    use crate::model::{ActorRef, StaticRelationKey, SubjectRef};
+    use crate::{ExpiryPolicy, RelationSpec};
+
+    struct TrustedTag;
+
+    impl RelationSpec for TrustedTag {
+        const ID: Uuid = Uuid::from_u128(1);
+        const KEY: StaticRelationKey = StaticRelationKey::new("tag", "trusted");
+
+        fn expiry(_at: chrono::DateTime<chrono::Utc>) -> ExpiryPolicy {
+            ExpiryPolicy::ManualOnly
+        }
+    }
 
     #[test]
     fn command_context_builder_sets_idempotency_and_metadata() -> crate::Result<()> {
@@ -137,6 +176,27 @@ mod tests {
             command.metadata.get("source").map(String::as_str),
             Some("support")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn typed_apply_and_revoke_constructors_set_command_fields() -> crate::Result<()> {
+        let at = Utc::now();
+        let context = CommandContext::new(ActorRef::new("system", "worker")?);
+        let apply = ApplyKeepsake::for_spec::<TrustedTag>(
+            SubjectRef::new("account", "acct_123")?,
+            at,
+            context.clone(),
+        );
+
+        assert_eq!(apply.relation_id, TrustedTag::ID);
+        assert_eq!(apply.at, at);
+        assert_eq!(apply.context, context);
+
+        let revoke = RevokeKeepsake::new(apply.id, at, apply.context.clone());
+        assert_eq!(revoke.keepsake_id, apply.id);
+        assert_eq!(revoke.at, at);
+        assert_eq!(revoke.context, apply.context);
         Ok(())
     }
 }

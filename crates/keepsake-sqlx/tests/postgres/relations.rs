@@ -59,9 +59,9 @@ async fn typed_relation_specs_upsert_and_apply_by_marker_type() -> TestResult<()
     let relation = repo.upsert_relation_spec::<TrustedAccountTag>(now).await?;
     let subject = SubjectRef::new("account", format!("typed_{}", Uuid::now_v7()))?;
 
-    let applied = repo
-        .apply_spec_without_metadata::<TrustedAccountTag>(&subject, now)
-        .await?;
+    let command =
+        ApplyKeepsake::for_spec::<TrustedAccountTag>(subject.clone(), now, test_context("worker")?);
+    let applied = repo.apply(&command).await?;
 
     assert_eq!(relation.id, TrustedAccountTag::ID);
     assert_eq!(relation.key.kind(), "tag");

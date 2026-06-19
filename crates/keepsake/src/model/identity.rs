@@ -54,8 +54,13 @@ impl ActorRef {
             kind: kind.into(),
             id: id.into(),
         };
-        validate_not_empty("actor.kind", &actor.kind)?;
-        validate_not_empty("actor.id", &actor.id)?;
+        actor.validate()?;
         Ok(actor)
+    }
+
+    /// Validates the actor reference.
+    pub fn validate(&self) -> Result<()> {
+        validate_not_empty("actor.kind", &self.kind)?;
+        validate_not_empty("actor.id", &self.id)
     }
 }

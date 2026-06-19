@@ -21,12 +21,14 @@ methods, audit events, and database rows.
 | `LifecycleState` | Cheap lifecycle discriminant used by records and SQL rows. |
 | `ExpiryPolicy` | Manual, timed, or fulfillment-based lifecycle policy. |
 | `FulfillmentSnapshot` | App-owned progress state evaluated by Keepsake. |
+| `AuditEventType` and `AuditDecision` | Stable audit category and decision payload for append-only audit rows. |
 | `AuditContext` | Deterministic application attributes carried with audit records. |
 
 For a trusted tag, the subject might be `account:acct_123`, the relation key
 might be `tag:trusted`, and the keepsake is the active row connecting them. The
 application decides what "trusted" means. Keepsake stores whether that subject
-currently has that relation and records lifecycle transitions.
+currently has that relation and provides audit records for apply and revoke
+commands.
 
 See the lifecycle model reference for the exact `KeepsakeRecord` shape,
 timestamp rules, and serde behavior.

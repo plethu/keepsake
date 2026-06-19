@@ -21,7 +21,7 @@ Define the relation in code. The `relation_spec!` macro creates a typed
 so normal call sites do not repeat strings.
 
 ```rust
-use keepsake::{ExpiryPolicy, SubjectRef};
+use keepsake::{ActorRef, ApplyKeepsake, CommandContext, ExpiryPolicy, SubjectRef};
 
 keepsake::relation_spec! {
     struct TrustedTag {
@@ -36,14 +36,17 @@ Apply the relation using one explicit timestamp for the operation:
 
 ```rust
 let now = chrono::Utc::now();
-let repo = repo.at(now);
+let timed_repo = repo.at(now);
 
-repo.upsert_relation_spec::<TrustedTag>().await?;
+timed_repo.upsert_relation_spec::<TrustedTag>().await?;
 
 let subject = SubjectRef::new("account", "acct_123")?;
-let applied = repo
-    .apply_spec_without_metadata::<TrustedTag>(&subject)
-    .await?;
+let command = ApplyKeepsake::for_spec::<TrustedTag>(
+    subject,
+    now,
+    CommandContext::new(ActorRef::new("system", "worker")?),
+);
+let applied = repo.apply(&command).await?;
 ```
 
 If the same apply command runs again while the tag is active, Keepsake returns

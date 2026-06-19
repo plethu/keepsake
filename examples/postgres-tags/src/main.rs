@@ -1,7 +1,7 @@
 //! Minimal tag assignment example.
 
 use chrono::Utc;
-use keepsake::{ExpiryPolicy, SubjectRef};
+use keepsake::{ActorRef, ApplyKeepsake, CommandContext, ExpiryPolicy, SubjectRef};
 use keepsake_sqlx::{KeepsakeRepository, RepositoryError};
 use sqlx::PgPool;
 
@@ -35,14 +35,17 @@ async fn main() -> Result<(), ExampleError> {
     let repo = KeepsakeRepository::new(pool);
     repo.migrate().await?;
     let now = Utc::now();
-    let repo = repo.at(now);
+    let timed_repo = repo.at(now);
 
-    repo.upsert_relation_spec::<TrustedTag>().await?;
+    timed_repo.upsert_relation_spec::<TrustedTag>().await?;
 
     let subject = SubjectRef::new("account", "acct_123")?;
-    let applied = repo
-        .apply_spec_without_metadata::<TrustedTag>(&subject)
-        .await?;
+    let command = ApplyKeepsake::for_spec::<TrustedTag>(
+        subject,
+        now,
+        CommandContext::new(ActorRef::new("system", "example")?),
+    );
+    let applied = repo.apply(&command).await?;
 
     println!("{}", applied.keepsake.id());
     Ok(())

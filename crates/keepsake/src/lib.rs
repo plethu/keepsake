@@ -11,11 +11,12 @@ pub mod prelude {
     //! Common imports for application modules using Keepsake.
 
     pub use crate::{
-        ActorRef, ApplyKeepsake, AuditContext, AuditEvent, AuditSink, CommandContext, ExpiryCause,
-        ExpiryPolicy, FulfillmentPolicy, FulfillmentProvider, FulfillmentSnapshot, Keepsake,
-        KeepsakeError, KeepsakeId, KeepsakeLifecycle, KeepsakeRecord, KeepsakeStore,
-        LifecycleState, RelationDefinition, RelationId, RelationKey, RelationKind, RelationName,
-        RelationSpec, StaticRelationKey, SubjectRef,
+        ActorRef, ApplyKeepsake, AuditContext, AuditDecision, AuditEvent, AuditEventType,
+        AuditSink, CommandContext, ExpiryCause, ExpiryPolicy, FulfillmentPolicy,
+        FulfillmentProvider, FulfillmentSnapshot, Keepsake, KeepsakeError, KeepsakeId,
+        KeepsakeLifecycle, KeepsakeRecord, KeepsakeStore, LifecycleState, RelationDefinition,
+        RelationId, RelationKey, RelationKind, RelationName, RelationSpec, StaticRelationKey,
+        SubjectRef,
     };
 }
 pub mod provider;
@@ -66,7 +67,9 @@ macro_rules! relation_spec {
     };
 }
 
-pub use audit::{AuditContext, AuditEvent, AuditSink, NoopAuditSink};
+pub use audit::{
+    AuditContext, AuditDecision, AuditEvent, AuditEventType, AuditSink, NoopAuditSink,
+};
 #[cfg(any(test, feature = "test"))]
 pub use audit::{InMemoryAuditError, InMemoryAuditSink};
 pub use command::{ApplyKeepsake, CommandContext, RevokeKeepsake};

@@ -4,14 +4,30 @@ pub use std::time::Duration;
 
 pub use chrono::{DateTime, Utc};
 pub use keepsake::{
-    ExpiryPolicy, LifecycleState, RelationDefinition, RelationId, RelationKey, RelationSpec,
-    StaticRelationKey, SubjectRef,
+    ActorRef, ApplyKeepsake, AuditContext, AuditDecision, AuditEvent, AuditEventType,
+    CommandContext, ExpiryCause, ExpiryPolicy, LifecycleState, RelationDefinition, RelationId,
+    RelationKey, RelationSpec, RevokeKeepsake, StaticRelationKey, SubjectRef,
 };
 #[cfg(feature = "cache")]
 pub use keepsake_sqlx::LocalRelationCacheConfig;
 pub use keepsake_sqlx::{KeepsakeRepository, MembershipCursor, RelationCache, RepositoryError};
 pub use sqlx::{PgPool, Postgres, Transaction, postgres::PgPoolOptions};
 pub use uuid::Uuid;
+
+#[path = "support/db.rs"]
+mod db;
+
+pub use db::*;
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct AuditRow {
+    pub id: i64,
+    pub event_type: String,
+    pub actor_kind: String,
+    pub actor_id: String,
+    pub decision: serde_json::Value,
+    pub occurred_at: DateTime<Utc>,
+}
 
 pub struct TrustedAccountTag;
 
@@ -39,7 +55,7 @@ pub fn ts(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
     DateTime::parse_from_rfc3339(value).map(|timestamp| timestamp.with_timezone(&Utc))
 }
 
-pub type TestResult<T> = std::result::Result<T, TestError>;
+pub type TestResult<T> = core::result::Result<T, TestError>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TestError {
@@ -72,30 +88,6 @@ pub async fn repo() -> TestResult<KeepsakeRepository> {
     repo.migrate().await?;
     reset_database(&pool).await?;
     Ok(repo)
-}
-
-pub async fn single_connection_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {
-    PgPoolOptions::new()
-        .max_connections(1)
-        .connect(database_url)
-        .await
-}
-
-pub async fn reset_database(pool: &PgPool) -> TestResult<()> {
-    sqlx::query(
-        r"
-        truncate table
-            keepsake_audit_context_attributes,
-            keepsake_audit_events,
-            keepsake_fulfillment_counters,
-            keepsakes,
-            keepsake_relation_definitions
-        restart identity cascade
-        ",
-    )
-    .execute(pool)
-    .await?;
-    Ok(())
 }
 
 pub async fn timed_relation(
@@ -145,61 +137,22 @@ pub async fn apply_at(
     relation_id: Uuid,
     applied_at: &str,
 ) -> TestResult<keepsake_sqlx::AppliedKeepsake> {
-    Ok(repo
-        .apply(subject, relation_id, ts(applied_at)?, &BTreeMap::new())
-        .await?)
-}
-
-pub async fn insert_raw_keepsake(
-    pool: &PgPool,
-    relation_id: Uuid,
-    expiry: &ExpiryPolicy,
-    state: &str,
-    expires_at: Option<DateTime<Utc>>,
-    fulfilled_at: Option<DateTime<Utc>>,
-    revoked_at: Option<DateTime<Utc>>,
-) -> TestResult<()> {
-    insert_raw_keepsake_value(
-        pool,
+    let command = ApplyKeepsake::new(
+        subject.clone(),
         relation_id,
-        serde_json::to_value(expiry)?,
-        state,
-        expires_at,
-        fulfilled_at,
-        revoked_at,
-    )
-    .await
+        ts(applied_at)?,
+        test_context("worker")?,
+    );
+    Ok(repo.apply(&command).await?)
 }
 
-pub async fn insert_raw_keepsake_value(
-    pool: &PgPool,
-    relation_id: Uuid,
-    expiry_policy: serde_json::Value,
-    state: &str,
-    expires_at: Option<DateTime<Utc>>,
-    fulfilled_at: Option<DateTime<Utc>>,
-    revoked_at: Option<DateTime<Utc>>,
-) -> TestResult<()> {
-    sqlx::query(
-        r"
-        insert into keepsakes
-          (id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
-           expires_at, fulfilled_at, revoked_at, metadata, created_at, updated_at)
-        values ($1, 'user', $2, $3, $4, $5, $6, $7, $8, $9, '{}'::jsonb, $6, $6)
-        ",
-    )
-    .bind(Uuid::now_v7())
-    .bind(format!("invalid_{}", Uuid::now_v7()))
-    .bind(relation_id)
-    .bind(state)
-    .bind(expiry_policy)
-    .bind(ts("2026-01-01T00:00:00Z")?)
-    .bind(expires_at)
-    .bind(fulfilled_at)
-    .bind(revoked_at)
-    .execute(pool)
-    .await?;
-    Ok(())
+pub async fn revoke_at(
+    repo: &KeepsakeRepository,
+    keepsake_id: Uuid,
+    revoked_at: &str,
+) -> TestResult<bool> {
+    let command = RevokeKeepsake::new(keepsake_id, ts(revoked_at)?, test_context("worker")?);
+    Ok(repo.revoke(&command).await?)
 }
 
 pub fn assert_check_violation(result: TestResult<()>) {
@@ -220,8 +173,13 @@ pub fn spawn_apply(
 ) -> tokio::task::JoinHandle<Result<keepsake_sqlx::AppliedKeepsake, keepsake_sqlx::RepositoryError>>
 {
     tokio::spawn(async move {
-        repo.apply(&subject, relation_id, applied_at, &BTreeMap::new())
-            .await
+        let command = ApplyKeepsake::new(
+            subject,
+            relation_id,
+            applied_at,
+            CommandContext::new(ActorRef::new("test", "worker")?),
+        );
+        repo.apply(&command).await
     })
 }
 
@@ -232,53 +190,6 @@ pub fn spawn_expire_due(
     tokio::spawn(async move { repo.expire_due_timed(due_at, 2).await })
 }
 
-pub async fn set_lock_timeout(pool: &PgPool, timeout: &str) -> TestResult<()> {
-    sqlx::query("select set_config('lock_timeout', $1, false)")
-        .bind(timeout)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
-pub async fn lock_relation_for_share(
-    tx: &mut Transaction<'_, Postgres>,
-    relation_id: Uuid,
-) -> TestResult<()> {
-    sqlx::query(
-        r"
-        select id
-        from keepsake_relation_definitions
-        where id = $1
-        for share
-        ",
-    )
-    .bind(relation_id)
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
-pub async fn lock_due_keepsake_and_relation_for_expiry(
-    tx: &mut Transaction<'_, Postgres>,
-    relation_id: Uuid,
-) -> TestResult<()> {
-    sqlx::query(
-        r"
-        select k.id
-        from keepsakes k
-        join keepsake_relation_definitions r on r.id = k.relation_id
-        where k.relation_id = $1
-          and k.state = 'applied'
-          and r.enabled
-          and k.expires_at is not null
-        order by k.expires_at, k.relation_id, k.subject_kind, k.subject_id, k.id
-        limit 1
-        for update of k skip locked
-        for share of r
-        ",
-    )
-    .bind(relation_id)
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
+pub fn test_context(actor_id: &str) -> TestResult<CommandContext> {
+    Ok(CommandContext::new(ActorRef::new("test", actor_id)?))
 }
