@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1 - 2026-06-20
+
+- Fixed MySQL lifecycle check constraints so the SQLx migration applies on
+  MySQL 8.4.
+- Added Docker-backed MySQL integration coverage to `make test-db`.
+
 ## 0.4.1 - 2026-06-20
 
 - Added `ActiveRelationSeed` and `insert_active_for_spec` behind the `test`
