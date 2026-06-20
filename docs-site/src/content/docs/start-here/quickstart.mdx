@@ -60,5 +60,6 @@ let active = repo.active_relations_for_subject(&subject).await?;
 ```
 
 Use `active_relations_for_subject_by_keys` when the request only needs a small
-known set of relation keys. Use membership scans when a worker needs all active
-subjects for one relation.
+known set of dynamic relation keys. Use `active_relations_for_subject_by_ids`
+when the request already has typed `RelationSpec` ids. Use membership scans when
+a worker needs all active subjects for one relation.

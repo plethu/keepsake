@@ -163,6 +163,45 @@ fn applied_keepsake_exposes_common_accessors() -> TestResult<()> {
 }
 
 #[test]
+fn active_relation_validates_relation_match_and_active_state() -> TestResult<()> {
+    let relation = RelationDefinition::enabled(
+        Uuid::from_u128(1),
+        RelationKey::new("tag", "trusted")?,
+        ExpiryPolicy::ManualOnly,
+    )?;
+    let keepsake = Keepsake::applied(
+        Uuid::from_u128(2),
+        SubjectRef::new("user", "u_1")?,
+        &relation,
+        ts("2026-01-01T00:00:00Z")?,
+        BTreeMap::new(),
+    )?;
+
+    let active = ActiveRelation::new(keepsake.clone(), relation.clone())?;
+    assert_eq!(active.keepsake().id(), keepsake.id());
+    assert_eq!(active.relation(), &relation);
+
+    let wrong_relation = RelationDefinition::enabled(
+        Uuid::from_u128(3),
+        RelationKey::new("tag", "admin")?,
+        ExpiryPolicy::ManualOnly,
+    )?;
+    assert!(matches!(
+        ActiveRelation::new(keepsake, wrong_relation),
+        Err(KeepsakeError::ActiveRelationMismatch { .. })
+    ));
+
+    let mut revoked = record(ExpiryPolicy::ManualOnly, LifecycleState::Revoked)?;
+    revoked.revoked_at = Some(ts("2026-01-02T00:00:00Z")?);
+    let revoked = Keepsake::try_from(revoked)?;
+    assert!(matches!(
+        ActiveRelation::new(revoked, relation),
+        Err(KeepsakeError::InactiveActiveRelation { .. })
+    ));
+    Ok(())
+}
+
+#[test]
 fn valid_flat_records_convert_to_typed_lifecycles() -> TestResult<()> {
     let mut revoked = record(ExpiryPolicy::ManualOnly, LifecycleState::Revoked)?;
     revoked.revoked_at = Some(ts("2026-01-03T00:00:00Z")?);

@@ -2,13 +2,13 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use keepsake::{
-    ExpiryPolicy, Keepsake, KeepsakeRecord, LifecycleState, RelationDefinition, RelationKey,
-    SubjectRef,
+    ActiveRelation, ExpiryPolicy, Keepsake, KeepsakeRecord, LifecycleState, RelationDefinition,
+    RelationKey, SubjectRef,
 };
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use super::{ActiveRelation, RepositoryError, RepositoryResult};
+use super::{RepositoryError, RepositoryResult};
 
 #[derive(Debug, FromRow)]
 pub(super) struct RelationRow {
@@ -136,15 +136,13 @@ impl ActiveRelationRow {
             revoked_at: self.revoked_at,
             metadata: self.metadata,
         })?;
-        Ok(ActiveRelation {
-            keepsake,
-            relation: RelationDefinition::new(
-                self.relation_definition_id,
-                RelationKey::new(self.relation_kind, self.relation_key)?,
-                self.relation_enabled,
-                relation_expiry,
-            )?,
-        })
+        let relation = RelationDefinition::new(
+            self.relation_definition_id,
+            RelationKey::new(self.relation_kind, self.relation_key)?,
+            self.relation_enabled,
+            relation_expiry,
+        )?;
+        Ok(ActiveRelation::new(keepsake, relation)?)
     }
 }
 

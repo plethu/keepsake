@@ -12,6 +12,7 @@ partial uniqueness to prevent duplicate active relations per subject.
 | Query shape | Index purpose |
 | --- | --- |
 | `active_for_subject` | active lookup by `(subject_kind, subject_id)` |
+| `active_relations_for_subject_by_ids` | bounded subject lookup joined through relation ids |
 | `active_relations_for_subject_by_keys` | bounded subject lookup joined through relation keys |
 | `active_membership_scan` | stable keyset pagination by `(relation_id, subject_kind, subject_id, id)` |
 | `due_timed_expiry` | stable expiry batches by `(expires_at, relation_id, subject_kind, subject_id, id)` |

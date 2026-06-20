@@ -13,9 +13,11 @@ The SQLx adapter includes common read paths: active subject lookup, active
 relation membership, due timed expiry, and fulfillment projection scans when the
 `fulfillment-counters` feature is enabled.
 
-Use `active_relations_for_subject_by_keys` when a request only needs a small
-known set of relation keys for one subject. That keeps the query bounded without
-making callers fetch all active subject relations and filter locally.
+Use `active_relations_for_subject_by_ids` when typed relation specs or another
+stable catalogue gives the request a small known set of relation ids. Use
+`active_relations_for_subject_by_keys` when the same bounded read starts from
+dynamic relation keys. Both paths keep the query bounded without making callers
+fetch all active subject relations and filter locally.
 
 Indexes are part of that contract. Making them optional would reduce the
 install-time diff while making production-scale query failures more likely. If

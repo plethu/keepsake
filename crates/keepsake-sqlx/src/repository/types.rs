@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use keepsake::{Keepsake, RelationDefinition};
+use keepsake::Keepsake;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
@@ -34,15 +34,6 @@ pub struct AppliedKeepsake {
     pub keepsake: Keepsake,
     /// Whether a duplicate active keepsake was prevented.
     pub duplicate_prevented: bool,
-}
-
-/// Active keepsake with its relation definition.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ActiveRelation {
-    /// Active keepsake.
-    pub keepsake: Keepsake,
-    /// Stored relation definition for the keepsake.
-    pub relation: RelationDefinition,
 }
 
 /// Due timed expiry candidate.

@@ -11,12 +11,12 @@ pub mod prelude {
     //! Common imports for application modules using Keepsake.
 
     pub use crate::{
-        ActorRef, ApplyKeepsake, AuditContext, AuditDecision, AuditEvent, AuditEventType,
-        AuditSink, CommandContext, ExpiryCause, ExpiryPolicy, FulfillmentPolicy,
-        FulfillmentProvider, FulfillmentSnapshot, Keepsake, KeepsakeError, KeepsakeId,
-        KeepsakeLifecycle, KeepsakeRecord, KeepsakeStore, LifecycleState, RelationDefinition,
-        RelationId, RelationKey, RelationKind, RelationName, RelationSpec, StaticRelationKey,
-        SubjectRef,
+        ActiveRelation, ActiveRelationSource, ActorRef, ApplyKeepsake, AuditContext, AuditDecision,
+        AuditEvent, AuditEventType, AuditSink, CommandContext, DynActiveRelationSource,
+        ExpiryCause, ExpiryPolicy, FulfillmentPolicy, FulfillmentProvider, FulfillmentSnapshot,
+        Keepsake, KeepsakeError, KeepsakeId, KeepsakeLifecycle, KeepsakeRecord, KeepsakeStore,
+        LifecycleState, RelationDefinition, RelationId, RelationKey, RelationKind, RelationName,
+        RelationSpec, StaticRelationKey, SubjectRef,
     };
 }
 pub mod provider;
@@ -76,12 +76,16 @@ pub use command::{ApplyKeepsake, CommandContext, RevokeKeepsake};
 pub use error::{KeepsakeError, Result};
 pub use evaluation::{DecisionKind, EvaluationDecision, NoopReason, TransitionReason, evaluate};
 pub use model::{
-    ActorRef, ExpiryCause, FulfillmentSnapshot, Keepsake, KeepsakeId, KeepsakeLifecycle,
-    KeepsakeRecord, LifecycleState, RelationDefinition, RelationId, RelationKey, RelationKind,
-    RelationName, RelationSpec, StaticRelationKey, SubjectRef,
+    ActiveRelation, ActorRef, ExpiryCause, FulfillmentSnapshot, Keepsake, KeepsakeId,
+    KeepsakeLifecycle, KeepsakeRecord, LifecycleState, RelationDefinition, RelationId, RelationKey,
+    RelationKind, RelationName, RelationSpec, StaticRelationKey, SubjectRef,
 };
 pub use observe::{
     MetricsRecorder, NoopMetricsRecorder, NoopTransitionObserver, TransitionObserver,
 };
 pub use policy::{ExpiryPolicy, FulfillmentPolicy};
-pub use provider::{FulfillmentProvider, KeepsakeStore};
+pub use provider::{
+    ActiveRelationSource, DynActiveRelationSource, FulfillmentProvider, KeepsakeStore,
+};
+#[cfg(any(test, feature = "test"))]
+pub use provider::{InMemoryActiveRelations, InMemoryActiveRelationsError};

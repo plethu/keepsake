@@ -1,12 +1,12 @@
 use std::fmt;
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::error::Result;
+use crate::error::{KeepsakeError, Result};
 use crate::policy::ExpiryPolicy;
 
-use super::{RelationId, validate_not_empty};
+use super::{Keepsake, RelationId, validate_not_empty};
 
 /// Human-meaningful relation identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -193,6 +193,67 @@ impl RelationDefinition {
             Spec::ENABLED,
             Spec::expiry(at),
         )
+    }
+}
+
+/// Active keepsake membership with its stored relation definition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ActiveRelation {
+    /// Active keepsake.
+    keepsake: Keepsake,
+    /// Stored relation definition for the keepsake.
+    relation: RelationDefinition,
+}
+
+impl ActiveRelation {
+    /// Builds an active relation and validates the membership relation id.
+    pub fn new(keepsake: Keepsake, relation: RelationDefinition) -> Result<Self> {
+        if keepsake.relation_id() != relation.id {
+            return Err(KeepsakeError::ActiveRelationMismatch {
+                keepsake_relation_id: keepsake.relation_id(),
+                relation_id: relation.id,
+            });
+        }
+        if !keepsake.is_active() {
+            return Err(KeepsakeError::InactiveActiveRelation {
+                keepsake_id: keepsake.id(),
+            });
+        }
+        Ok(Self { keepsake, relation })
+    }
+
+    /// Returns the active keepsake.
+    #[must_use]
+    pub const fn keepsake(&self) -> &Keepsake {
+        &self.keepsake
+    }
+
+    /// Returns the stored relation definition.
+    #[must_use]
+    pub const fn relation(&self) -> &RelationDefinition {
+        &self.relation
+    }
+
+    /// Decomposes the active relation into its owned parts.
+    #[must_use]
+    pub fn into_parts(self) -> (Keepsake, RelationDefinition) {
+        (self.keepsake, self.relation)
+    }
+}
+
+impl<'de> Deserialize<'de> for ActiveRelation {
+    fn deserialize<D>(deserializer: D) -> core::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct ActiveRelationRecord {
+            keepsake: Keepsake,
+            relation: RelationDefinition,
+        }
+
+        let record = ActiveRelationRecord::deserialize(deserializer)?;
+        Self::new(record.keepsake, record.relation).map_err(serde::de::Error::custom)
     }
 }
 

@@ -20,8 +20,9 @@ mod types;
 #[cfg(feature = "cache")]
 pub use cache::{LocalRelationCache, LocalRelationCacheConfig};
 pub use cache::{NoopRelationCache, RelationCache};
+pub use keepsake::ActiveRelation;
 pub use timed::TimedKeepsakeRepository;
-pub use types::{ActiveRelation, AppliedKeepsake, MembershipCursor, TimedExpiryCandidate};
+pub use types::{AppliedKeepsake, MembershipCursor, TimedExpiryCandidate};
 
 use rows::{ActiveRelationRow, AppliedKeepsakeRow, AppliedKeepsakeWriteRow, RelationRow};
 

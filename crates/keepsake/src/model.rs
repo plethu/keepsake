@@ -12,7 +12,8 @@ pub use fulfillment::FulfillmentSnapshot;
 pub use identity::{ActorRef, KeepsakeId, RelationId, SubjectRef};
 pub use keepsake::{ExpiryCause, Keepsake, KeepsakeLifecycle, KeepsakeRecord, LifecycleState};
 pub use relation::{
-    RelationDefinition, RelationKey, RelationKind, RelationName, RelationSpec, StaticRelationKey,
+    ActiveRelation, RelationDefinition, RelationKey, RelationKind, RelationName, RelationSpec,
+    StaticRelationKey,
 };
 
 use crate::error::{KeepsakeError, Result};

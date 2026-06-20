@@ -4,9 +4,10 @@ pub use std::time::Duration;
 
 pub use chrono::{DateTime, Utc};
 pub use keepsake::{
-    ActorRef, ApplyKeepsake, AuditContext, AuditDecision, AuditEvent, AuditEventType,
-    CommandContext, ExpiryCause, ExpiryPolicy, LifecycleState, RelationDefinition, RelationId,
-    RelationKey, RelationSpec, RevokeKeepsake, StaticRelationKey, SubjectRef,
+    ActiveRelationSource, ActorRef, ApplyKeepsake, AuditContext, AuditDecision, AuditEvent,
+    AuditEventType, CommandContext, DynActiveRelationSource, ExpiryCause, ExpiryPolicy,
+    LifecycleState, RelationDefinition, RelationId, RelationKey, RelationSpec, RevokeKeepsake,
+    StaticRelationKey, SubjectRef,
 };
 #[cfg(feature = "cache")]
 pub use keepsake_sqlx::LocalRelationCacheConfig;

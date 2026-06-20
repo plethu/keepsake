@@ -30,4 +30,22 @@ pub enum KeepsakeError {
         /// Validation failure reason.
         reason: &'static str,
     },
+
+    /// An active relation paired a keepsake with the wrong relation definition.
+    #[error(
+        "active relation keepsake uses relation {keepsake_relation_id}, but definition uses {relation_id}"
+    )]
+    ActiveRelationMismatch {
+        /// Relation id stored on the keepsake.
+        keepsake_relation_id: uuid::Uuid,
+        /// Relation id stored on the relation definition.
+        relation_id: uuid::Uuid,
+    },
+
+    /// An active relation was built from a non-active keepsake.
+    #[error("active relation keepsake {keepsake_id} is not active")]
+    InactiveActiveRelation {
+        /// Keepsake id.
+        keepsake_id: uuid::Uuid,
+    },
 }

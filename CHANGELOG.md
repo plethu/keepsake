@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.0 - 2026-06-20
+
+- Added `ActiveRelationSource` as the canonical async read-side adapter seam for
+  active relation lookups.
+- Added `DynActiveRelationSource` as an explicit erased boundary for application
+  composition, while keeping generic `S: ActiveRelationSource` as the primary
+  integration shape.
+- Moved `ActiveRelation` into the core crate with constructor-enforced
+  keepsake/relation invariants and re-exported it from `keepsake-sqlx`.
+- Added SQLx bounded active relation lookup by relation ids for typed
+  `RelationSpec` integrations.
+- Added `InMemoryActiveRelations` behind the core `test` feature for downstream
+  adapter tests.
+- Documented multi-tenant `SubjectRef` conventions and bounded active relation
+  read paths.
+
 ## 0.3.0 - 2026-06-19
 
 - Added typed audit event categories and audit-specific decisions.

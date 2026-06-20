@@ -92,8 +92,19 @@ relation definitions in one query. Use it when the caller needs relation keys or
 policies immediately after the subject lookup, instead of calling
 `active_for_subject` and then resolving each relation separately.
 
+`active_relations_for_subject_by_ids` is the bounded variant for typed relation
+catalogues and other callers that already know stable relation ids:
+
+```rust
+let ids = [TrustedTag::ID, BetaFeature::ID];
+
+let active = repo
+    .active_relations_for_subject_by_ids(&subject, &ids)
+    .await?;
+```
+
 `active_relations_for_subject_by_keys` is the bounded variant for request paths
-that only care about a small known set of relation keys:
+that only care about a small known set of dynamic relation keys:
 
 ```rust
 let keys = [
@@ -106,10 +117,16 @@ let active = repo
     .await?;
 ```
 
-The result includes only requested keys that currently have active keepsakes for
-the subject. Missing relation keys, revoked rows, and expired rows are omitted.
-Disabled relation definitions are still returned when the keepsake itself is
-active, matching `active_for_subject` semantics.
+The bounded reads deduplicate requested ids or keys before joining. Results
+include only requested relations that currently have active keepsakes for the
+subject. Missing relations, revoked rows, and expired rows are omitted. Disabled
+relation definitions are still returned when the keepsake itself is active,
+matching `active_for_subject` semantics.
+
+`KeepsakeRepository` implements `keepsake::ActiveRelationSource`. Prefer generic
+adapter code such as `S: ActiveRelationSource` over storing the repository
+behind `Arc<dyn ...>`. Use the erased `DynActiveRelationSource` only at
+application composition boundaries that need heterogeneous runtime storage.
 
 For large relation memberships, prefer `active_membership_scan_after` with a
 `MembershipCursor` over repeat calls to the first-page scan. The cursor is based

@@ -1,5 +1,24 @@
 use super::support::*;
 
+use std::sync::Arc;
+
+#[tokio::test]
+async fn active_relation_source_accepts_generic_and_erased_sqlx_repository() -> TestResult<()> {
+    fn assert_generic<S>(_: &S)
+    where
+        S: ActiveRelationSource<Error = RepositoryError>,
+    {
+    }
+
+    let pool = PgPoolOptions::new().connect_lazy("postgres://keepsake@example.invalid/keepsake")?;
+    let repo = KeepsakeRepository::new(pool);
+
+    assert_generic(&repo);
+    let erased: Arc<dyn DynActiveRelationSource<Error = RepositoryError>> = Arc::new(repo);
+    drop(erased);
+    Ok(())
+}
+
 #[tokio::test]
 #[ignore = "requires docker postgres; run `make test-db`"]
 async fn active_membership_scan_uses_keyset_pagination() -> TestResult<()> {
@@ -58,13 +77,73 @@ async fn active_relations_for_subject_returns_joined_relation_definitions() -> T
     assert_eq!(
         active
             .iter()
-            .map(|row| row.keepsake.id())
+            .map(|row| row.keepsake().id())
             .collect::<Vec<Uuid>>(),
         vec![applied_a.keepsake.id(), applied_b.keepsake.id()]
     );
-    assert_eq!(active[0].relation, relation_a);
-    assert_eq!(active[1].relation, relation_b);
-    assert!(active.iter().all(|row| row.keepsake.metadata().is_empty()));
+    assert_eq!(active[0].relation(), &relation_a);
+    assert_eq!(active[1].relation(), &relation_b);
+    assert!(
+        active
+            .iter()
+            .all(|row| row.keepsake().metadata().is_empty())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires docker postgres; run `make test-db`"]
+async fn active_relations_for_subject_by_ids_returns_requested_active_relations() -> TestResult<()>
+{
+    let repo = repo().await?;
+    let relation_a = timed_relation(&repo, "ids-a", "2026-01-04T00:00:00Z").await?;
+    let relation_b = timed_relation(&repo, "ids-b", "2026-01-05T00:00:00Z").await?;
+    let disabled = timed_relation(&repo, "ids-disabled", "2026-01-06T00:00:00Z").await?;
+    let revoked = timed_relation(&repo, "ids-revoked", "2026-01-07T00:00:00Z").await?;
+    let expired = timed_relation(&repo, "ids-expired", "2026-01-02T00:00:00Z").await?;
+    let subject = SubjectRef::new("user", format!("ids_{}", Uuid::now_v7()))?;
+
+    let applied_a = apply_at(&repo, &subject, relation_a.id, "2026-01-01T00:00:00Z").await?;
+    apply_at(&repo, &subject, relation_b.id, "2026-01-01T00:00:00Z").await?;
+    let applied_disabled = apply_at(&repo, &subject, disabled.id, "2026-01-01T00:00:00Z").await?;
+    let applied_revoked = apply_at(&repo, &subject, revoked.id, "2026-01-01T00:00:00Z").await?;
+    let applied_expired = apply_at(&repo, &subject, expired.id, "2026-01-01T00:00:00Z").await?;
+
+    assert!(set_relation_enabled(&repo, disabled.id, false).await?);
+    assert!(revoke_at(&repo, applied_revoked.keepsake.id(), "2026-01-01T00:05:00Z").await?);
+    assert_eq!(
+        repo.expire_due_timed(ts("2026-01-03T00:00:00Z")?, 10)
+            .await?,
+        1
+    );
+
+    let requested = vec![
+        relation_a.id,
+        relation_a.id,
+        disabled.id,
+        revoked.id,
+        expired.id,
+        Uuid::now_v7(),
+    ];
+    let active = repo
+        .active_relations_for_subject_by_ids(&subject, &requested)
+        .await?;
+
+    assert_eq!(
+        active
+            .iter()
+            .map(|row| row.keepsake().id())
+            .collect::<Vec<Uuid>>(),
+        vec![applied_a.keepsake.id(), applied_disabled.keepsake.id()]
+    );
+    assert_eq!(active[0].relation(), &relation_a);
+    assert!(!active[1].relation().enabled);
+    assert_eq!(active[1].keepsake().id(), applied_disabled.keepsake.id());
+    assert!(
+        active
+            .iter()
+            .all(|row| row.keepsake().id() != applied_expired.keepsake.id())
+    );
     Ok(())
 }
 
@@ -109,17 +188,17 @@ async fn active_relations_for_subject_by_keys_returns_requested_active_relations
     assert_eq!(
         active
             .iter()
-            .map(|row| row.keepsake.id())
+            .map(|row| row.keepsake().id())
             .collect::<Vec<Uuid>>(),
         vec![applied_a.keepsake.id(), applied_disabled.keepsake.id()]
     );
-    assert_eq!(active[0].relation, relation_a);
-    assert!(!active[1].relation.enabled);
-    assert_eq!(active[1].keepsake.id(), applied_disabled.keepsake.id());
+    assert_eq!(active[0].relation(), &relation_a);
+    assert!(!active[1].relation().enabled);
+    assert_eq!(active[1].keepsake().id(), applied_disabled.keepsake.id());
     assert!(
         active
             .iter()
-            .all(|row| row.keepsake.id() != applied_expired.keepsake.id())
+            .all(|row| row.keepsake().id() != applied_expired.keepsake.id())
     );
     Ok(())
 }

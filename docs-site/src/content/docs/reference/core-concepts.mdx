@@ -16,6 +16,7 @@ methods, audit events, and database rows.
 | `relation_spec!` | Convenience macro for defining static `RelationSpec` marker types. |
 | `RelationDefinition` | Stored relation identity, enabled state, and expiry policy. |
 | `Keepsake` | Validated assignment from one subject to one relation. |
+| `ActiveRelation` | Active keepsake membership paired with its stored relation definition. |
 | `KeepsakeRecord` | Flat serde and storage boundary record for a keepsake. |
 | `KeepsakeLifecycle` | Typed lifecycle payload for applied, revoked, or expired rows. |
 | `LifecycleState` | Cheap lifecycle discriminant used by records and SQL rows. |
@@ -23,6 +24,7 @@ methods, audit events, and database rows.
 | `FulfillmentSnapshot` | App-owned progress state evaluated by Keepsake. |
 | `AuditEventType` and `AuditDecision` | Stable audit category and decision payload for append-only audit rows. |
 | `AuditContext` | Deterministic application attributes carried with audit records. |
+| `ActiveRelationSource` | Async read-side contract for active relation state. |
 
 For a trusted tag, the subject might be `account:acct_123`, the relation key
 might be `tag:trusted`, and the keepsake is the active row connecting them. The
@@ -33,10 +35,22 @@ commands.
 See the lifecycle model reference for the exact `KeepsakeRecord` shape,
 timestamp rules, and serde behavior.
 
+`SubjectRef` is application-global from Keepsake's point of view. In a
+multi-tenant service, encode tenancy before building the subject, such as
+`account:tenant_a/acct_123`, or use tenant-specific subject kinds when that is
+the application's stable convention. Keepsake does not interpret tenant
+boundaries or join tenant tables.
+
 Use `relation_spec!` or a manual `RelationSpec` implementation when relation
 definitions are part of the application's code catalogue. Use dynamic
 `RelationKey` values when relation definitions come from configuration, an
 admin surface, or another service.
+
+Use `ActiveRelationSource` as the integration seam for async authorization,
+policy, or adapter code that only needs active relation reads. Keep those APIs
+generic over `S: ActiveRelationSource` when possible. `DynActiveRelationSource`
+exists for application composition boundaries that genuinely need runtime
+erasure, such as storing a source behind `Arc<dyn ...>`.
 
 Application modules with many Keepsake calls may import `keepsake::prelude::*`
 for the common domain types and traits. SQLx-backed modules may also import
