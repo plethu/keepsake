@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.1 - 2026-06-20
+
+- Added `ActiveRelationSeed` and `insert_active_for_spec` behind the `test`
+  feature for deterministic typed relation seeding in adapter tests and
+  examples.
+- Documented in-memory relation seeding with explicit timestamps, relation
+  instance ids, and optional metadata.
+
 ## 0.4.0 - 2026-06-20
 
 - Added `ActiveRelationSource` as the canonical async read-side adapter seam for
