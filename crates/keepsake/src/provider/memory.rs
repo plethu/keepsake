@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::{Future, ready};
+use std::marker::PhantomData;
 use std::sync::{Arc, RwLock};
 
 use chrono::{DateTime, Utc};
@@ -30,6 +31,73 @@ pub struct InMemoryActiveRelations {
     active: Arc<RwLock<Vec<ActiveRelation>>>,
 }
 
+/// Builder for seeding one active typed relation into [`InMemoryActiveRelations`].
+#[derive(Debug, Clone)]
+pub struct ActiveRelationSeed<Spec> {
+    keepsake_id: KeepsakeId,
+    subject: SubjectRef,
+    active_at: DateTime<Utc>,
+    metadata: BTreeMap<String, String>,
+    _spec: PhantomData<fn() -> Spec>,
+}
+
+impl<Spec> ActiveRelationSeed<Spec>
+where
+    Spec: RelationSpec,
+{
+    /// Starts an active relation seed with an explicit keepsake instance id.
+    #[must_use]
+    pub fn new(keepsake_id: KeepsakeId, subject: SubjectRef, active_at: DateTime<Utc>) -> Self {
+        Self {
+            keepsake_id,
+            subject,
+            active_at,
+            metadata: BTreeMap::new(),
+            _spec: PhantomData,
+        }
+    }
+
+    /// Starts an active relation seed from a deterministic UUID integer.
+    #[must_use]
+    pub fn from_u128(instance_id: u128, subject: SubjectRef, active_at: DateTime<Utc>) -> Self {
+        Self::new(uuid::Uuid::from_u128(instance_id), subject, active_at)
+    }
+
+    /// Adds one opaque application metadata attribute.
+    #[must_use]
+    pub fn with_attribute(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.metadata.insert(key.into(), value.into());
+        self
+    }
+
+    /// Adds opaque application metadata attributes.
+    #[must_use]
+    pub fn with_attributes<K, V>(mut self, attributes: impl IntoIterator<Item = (K, V)>) -> Self
+    where
+        K: Into<String>,
+        V: Into<String>,
+    {
+        self.metadata.extend(
+            attributes
+                .into_iter()
+                .map(|(key, value)| (key.into(), value.into())),
+        );
+        self
+    }
+
+    fn into_active_relation(self) -> Result<ActiveRelation, KeepsakeError> {
+        let relation = RelationDefinition::from_spec::<Spec>(self.active_at)?;
+        let keepsake = Keepsake::applied(
+            self.keepsake_id,
+            self.subject,
+            &relation,
+            self.active_at,
+            self.metadata,
+        )?;
+        ActiveRelation::new(keepsake, relation)
+    }
+}
+
 impl InMemoryActiveRelations {
     /// Creates an empty in-memory active relation source.
     #[must_use]
@@ -57,6 +125,34 @@ impl InMemoryActiveRelations {
         Ok(())
     }
 
+    /// Inserts an active keepsake for a typed relation spec with empty metadata.
+    pub fn insert_active_for_spec<Spec>(
+        &self,
+        instance_id: u128,
+        subject: SubjectRef,
+        active_at: DateTime<Utc>,
+    ) -> ProviderResult<(), InMemoryActiveRelationsError>
+    where
+        Spec: RelationSpec,
+    {
+        self.insert_active_relation(ActiveRelationSeed::<Spec>::from_u128(
+            instance_id,
+            subject,
+            active_at,
+        ))
+    }
+
+    /// Inserts an active relation seed built from a typed relation spec.
+    pub fn insert_active_relation<Spec>(
+        &self,
+        seed: ActiveRelationSeed<Spec>,
+    ) -> ProviderResult<(), InMemoryActiveRelationsError>
+    where
+        Spec: RelationSpec,
+    {
+        self.insert(seed.into_active_relation()?)
+    }
+
     /// Adds an active keepsake for a typed relation spec.
     pub fn insert_for_spec<Spec>(
         &self,
@@ -68,9 +164,10 @@ impl InMemoryActiveRelations {
     where
         Spec: RelationSpec,
     {
-        let relation = RelationDefinition::from_spec::<Spec>(applied_at)?;
-        let keepsake = Keepsake::applied(keepsake_id, subject, &relation, applied_at, metadata)?;
-        self.insert(ActiveRelation::new(keepsake, relation)?)
+        self.insert_active_relation(
+            ActiveRelationSeed::<Spec>::new(keepsake_id, subject, applied_at)
+                .with_attributes(metadata),
+        )
     }
 
     fn active_for_subject(
@@ -267,6 +364,69 @@ mod tests {
 
         assert!(source.active_for_subject_by_ids(&subject, &[])?.is_empty());
         assert!(source.active_for_subject_by_keys(&subject, &[])?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn inserts_active_for_spec_with_explicit_id_time_and_empty_metadata() -> TestResult<()> {
+        let source = InMemoryActiveRelations::empty();
+        let subject = SubjectRef::new("account", "acct_123")?;
+        let at = ts("2026-01-01T00:00:00Z")?;
+
+        source.insert_active_for_spec::<TrustedTag>(
+            0xaaaa_aaaa_aaaa_aaaa_aaaa_aaaa_aaaa_aaaa,
+            subject.clone(),
+            at,
+        )?;
+
+        let active = source.active_for_subject(&subject)?;
+        assert_eq!(active.len(), 1);
+        assert_eq!(
+            active[0].keepsake().id(),
+            Uuid::from_u128(0xaaaa_aaaa_aaaa_aaaa_aaaa_aaaa_aaaa_aaaa)
+        );
+        assert_eq!(active[0].keepsake().applied_at(), at);
+        assert_eq!(active[0].relation().id, TrustedTag::ID);
+        assert!(active[0].keepsake().metadata().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn active_relation_seed_preserves_attributes() -> TestResult<()> {
+        let source = InMemoryActiveRelations::empty();
+        let subject = SubjectRef::new("account", "acct_123")?;
+        let at = ts("2026-01-01T00:00:00Z")?;
+
+        source.insert_active_relation(
+            ActiveRelationSeed::<AdminTag>::new(
+                Uuid::from_u128(0xbbbb_bbbb_bbbb_bbbb_bbbb_bbbb_bbbb_bbbb),
+                subject.clone(),
+                at,
+            )
+            .with_attribute("ticket", "case-1")
+            .with_attributes([("source", "fixture")]),
+        )?;
+
+        let active = source.active_for_subject(&subject)?;
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].keepsake().applied_at(), at);
+        assert_eq!(active[0].relation().id, AdminTag::ID);
+        assert_eq!(
+            active[0]
+                .keepsake()
+                .metadata()
+                .get("ticket")
+                .map(String::as_str),
+            Some("case-1")
+        );
+        assert_eq!(
+            active[0]
+                .keepsake()
+                .metadata()
+                .get("source")
+                .map(String::as_str),
+            Some("fixture")
+        );
         Ok(())
     }
 }

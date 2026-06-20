@@ -10,10 +10,56 @@ synchronous, and persistence-agnostic.
 
 | Feature | Default | Use |
 | --- | --- | --- |
-| `test` | No | Exposes in-memory test doubles such as `InMemoryAuditSink`. |
+| `test` | No | Exposes in-memory test helpers such as `InMemoryActiveRelations`, `ActiveRelationSeed`, and `InMemoryAuditSink`. |
 
 In production, implement provider traits with durable sinks instead of using
-test doubles.
+test helpers.
+
+`InMemoryActiveRelations` is the same active-relation read contract used by
+adapters that depend on `ActiveRelationSource`. Test and example code can seed
+typed relation specs directly without building `ActiveRelation` fixtures by
+hand. The helper still takes caller-owned time and a caller-owned instance id:
+
+```rust
+use keepsake::{
+    ExpiryPolicy, InMemoryActiveRelations, SubjectRef, relation_spec,
+};
+
+relation_spec! {
+    struct TrustedTag {
+        id: 0x1111_1111_1111_1111_1111_1111_1111_1111;
+        key: ("tag", "trusted");
+        expiry(_at) => ExpiryPolicy::ManualOnly;
+    }
+}
+
+let source = InMemoryActiveRelations::empty();
+let subject = SubjectRef::new("account", "acct_123")?;
+let at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")?
+    .with_timezone(&chrono::Utc);
+
+source.insert_active_for_spec::<TrustedTag>(
+    0xaaaa_aaaa_aaaa_aaaa_aaaa_aaaa_aaaa_aaaa,
+    subject,
+    at,
+)?;
+```
+
+Use `ActiveRelationSeed` when the fixture needs metadata:
+
+```rust
+use keepsake::ActiveRelationSeed;
+
+source.insert_active_relation(
+    ActiveRelationSeed::<TrustedTag>::from_u128(
+        0xbbbb_bbbb_bbbb_bbbb_bbbb_bbbb_bbbb_bbbb,
+        subject,
+        at,
+    )
+    .with_attribute("fixture", "trusted-account")
+    .with_attribute("reason", "integration-test"),
+)?;
+```
 
 ## SQLx Adapter
 

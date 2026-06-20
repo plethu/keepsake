@@ -13,7 +13,7 @@ use crate::model::{
 mod memory;
 
 #[cfg(any(test, feature = "test"))]
-pub use memory::{InMemoryActiveRelations, InMemoryActiveRelationsError};
+pub use memory::{ActiveRelationSeed, InMemoryActiveRelations, InMemoryActiveRelationsError};
 
 /// Result alias for provider operations.
 pub type ProviderResult<T, E> = core::result::Result<T, E>;

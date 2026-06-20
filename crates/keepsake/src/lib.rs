@@ -18,6 +18,9 @@ pub mod prelude {
         LifecycleState, RelationDefinition, RelationId, RelationKey, RelationKind, RelationName,
         RelationSpec, StaticRelationKey, SubjectRef,
     };
+
+    #[cfg(any(test, feature = "test"))]
+    pub use crate::{ActiveRelationSeed, InMemoryActiveRelations, InMemoryActiveRelationsError};
 }
 pub mod provider;
 
@@ -84,8 +87,8 @@ pub use observe::{
     MetricsRecorder, NoopMetricsRecorder, NoopTransitionObserver, TransitionObserver,
 };
 pub use policy::{ExpiryPolicy, FulfillmentPolicy};
+#[cfg(any(test, feature = "test"))]
+pub use provider::{ActiveRelationSeed, InMemoryActiveRelations, InMemoryActiveRelationsError};
 pub use provider::{
     ActiveRelationSource, DynActiveRelationSource, FulfillmentProvider, KeepsakeStore,
 };
-#[cfg(any(test, feature = "test"))]
-pub use provider::{InMemoryActiveRelations, InMemoryActiveRelationsError};
