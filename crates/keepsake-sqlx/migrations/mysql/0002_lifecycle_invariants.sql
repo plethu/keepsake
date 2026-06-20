@@ -1,7 +1,7 @@
 alter table keepsakes
   add constraint keepsakes_expiry_policy_projection
   check (
-    coalesce(
+    (
       json_unquote(json_extract(expiry_policy, '$.type')) in ('manual_only', 'at', 'when_fulfilled')
       and (
         (
@@ -14,14 +14,13 @@ alter table keepsakes
           and expires_at is null
         )
       )
-      , false
-    )
+    ) is true
   );
 
 alter table keepsakes
   add constraint keepsakes_lifecycle_timestamps
   check (
-    coalesce(
+    (
       json_unquote(json_extract(expiry_policy, '$.type')) in ('manual_only', 'at', 'when_fulfilled')
       and (
         (
@@ -51,6 +50,5 @@ alter table keepsakes
           )
         )
       )
-      , false
-    )
+    ) is true
   );
