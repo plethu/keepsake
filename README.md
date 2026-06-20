@@ -6,25 +6,23 @@
 > — Sara Teasdale, "Let It Be Forgotten" (1920)
 
 `keepsake` stores relations that a subject holds until policy ends them: a
-trusted tag, a 24-hour mute, an entitlement, a hold, a risk flag, a feature gate.
-It keeps those writes idempotent, expires them on a schedule you set, makes them
-queryable, and gives you typed audit records for apply and revoke commands.
+trusted tag, a 24-hour mute, an entitlement, a hold, a risk flag, a feature
+gate. Writes are idempotent, expiry runs on a schedule you set, state is
+queryable, and `apply`/`revoke` produce typed audit records.
 
-The core crate is persistence-agnostic and synchronous. The SQLx adapter stores
-the state in Postgres, with migrations and query helpers. The same contract is
-documented for services on other stacks.
+The core crate is persistence-agnostic and synchronous. The `keepsake-sqlx`
+adapter stores state in Postgres with migrations and query helpers.
 
 ## Where it fits
 
-Use the crate directly if a Rust and Postgres service fits how it works. When it
-doesn't, the docs and structure carry the pattern itself, written so the same
-contract, indexes, and lifecycle rules adapt to another language, framework,
-database, or stack that needs deterministic lifecycle modeling.
+Use the crate directly for a Rust and Postgres service. For other stacks, the
+schema, indexes, and lifecycle rules are documented so you can port them to
+another language, framework, or database.
 
 Some responsibilities stay with your application. Keepsake does not join your
-entity tables, make authorization decisions, invalidate distributed caches,
-consume domain events, or stand in for migration review. Authorization can read
-these relations later; this crate stores relation state and expiry.
+entity tables, make authorization decisions, invalidate distributed caches, or
+consume domain events. It stores relation state and expiry; authorization reads
+those relations later.
 
 ## Install
 
@@ -46,45 +44,23 @@ repo.migrate().await?;
 
 ## Operations
 
-- Migrations: `keepsake-sqlx` embeds SQLx migrations. Call them from startup or
-  your normal migration runner. Disable the `migrations` feature if your
-  service vendors the SQL into another migration framework.
-- Audit: `apply` and `revoke` take command objects and write actor/context
-  metadata with the lifecycle change. Treat those command helpers as the
-  canonical mutation path.
-- Versioning: crate releases follow semver. Check the changelog for schema
-  impact before upgrading.
-- Indexing: the initial schema includes indexes for active subject lookups,
-  active relation scans, timed expiry jobs, fulfillment scans, and duplicate
-  active prevention. Treat additional tenancy or partitioning indexes as
-  application-specific.
-- Large databases: use bounded queries and keyset pagination for hot
-  reads. Cache relation definitions and request-scoped active lookups in
-  application code when needed; keep mutation paths authoritative and
-  idempotent.
+- Migrations: `keepsake-sqlx` embeds SQLx migrations. Run them at startup or
+  from your migration runner. Disable the `migrations` feature to vendor the SQL
+  into another framework.
+- Audit: `apply` and `revoke` take command objects and record actor/context
+  metadata with each lifecycle change. They are the canonical mutation path.
 
-## Defaults and feature flags
-
-The default SQLx adapter includes migrations, indexed query helpers, idempotent
-writes, timed expiry scans, and simple fulfillment counters. Anything that adds
-schema, dependencies, or runtime cost goes behind a feature flag instead.
-
-The lifecycle semantics are always on. Idempotency, duplicate active prevention,
-deterministic ordering, opaque subjects, and indexed reads are part of the
-contract, not switches to flip.
-
-Indexes ship with the schema because the default query helpers rely on them.
-There is an optional relation-definition cache for the SQLx adapter. Caching
-active lifecycle state is left to the application, which knows the right
-staleness, partitioning, invalidation, and memory limits.
+Lifecycle semantics are always on. Idempotency, duplicate-active prevention,
+deterministic ordering, opaque subjects, and indexed read paths are part of the
+contract. An optional relation-definition cache is available; caching active
+state is left to the application.
 
 ## Why it exists
 
-I'd been writing this pattern ad-hoc across production services for
-compliance-heavy domains, where auditability and determinism are hard
-requirements. It worked, so keepsake is the consolidated version, one robust
-implementation to pull in instead of re-deriving the same lifecycle rules in
-every project.
+I'd written this pattern ad-hoc across production services in compliance-heavy
+domains, where auditability and determinism are requirements. keepsake is the
+consolidated version, so you pull in one implementation instead of re-deriving
+the same rules in every project.
 
 ## License
 
