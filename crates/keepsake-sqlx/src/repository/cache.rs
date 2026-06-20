@@ -142,3 +142,29 @@ impl CacheEntry {
         (Instant::now() <= self.expires_at).then_some(self.relation)
     }
 }
+
+#[cfg(all(test, feature = "cache"))]
+mod tests {
+    use super::*;
+    use keepsake::ExpiryPolicy;
+    use std::thread;
+    use uuid::Uuid;
+
+    #[test]
+    fn cache_entry_expires_after_ttl() -> keepsake::Result<()> {
+        let relation = RelationDefinition::enabled(
+            Uuid::nil(),
+            RelationKey::new("tag", "trusted")?,
+            ExpiryPolicy::ManualOnly,
+        )?;
+        let entry = CacheEntry {
+            relation,
+            expires_at: Instant::now() + Duration::from_millis(1),
+        };
+
+        thread::sleep(Duration::from_millis(5));
+
+        assert_eq!(entry.fresh_relation(), None);
+        Ok(())
+    }
+}

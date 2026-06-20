@@ -5,13 +5,16 @@ use std::sync::{Arc, RwLock};
 
 use chrono::{DateTime, Utc};
 
+use crate::command::{ApplyKeepsake, RevokeKeepsake};
 use crate::error::KeepsakeError;
+use crate::model::KeepsakeRecord;
 use crate::model::{
-    ActiveRelation, Keepsake, KeepsakeId, RelationDefinition, RelationId, RelationKey,
-    RelationSpec, SubjectRef,
+    ActiveRelation, FulfillmentSnapshot, Keepsake, KeepsakeId, LifecycleState, RelationDefinition,
+    RelationId, RelationKey, RelationSpec, SubjectRef,
 };
+use crate::policy::ExpiryPolicy;
 
-use super::{ActiveRelationSource, ProviderResult};
+use super::{ActiveRelationSource, FulfillmentProvider, KeepsakeStore, ProviderResult};
 
 /// Error returned by the in-memory active relation source.
 #[derive(Debug, thiserror::Error)]
@@ -29,6 +32,70 @@ pub enum InMemoryActiveRelationsError {
 #[derive(Debug, Clone, Default)]
 pub struct InMemoryActiveRelations {
     active: Arc<RwLock<Vec<ActiveRelation>>>,
+}
+
+/// Error returned by the in-memory keepsake store.
+#[derive(Debug, thiserror::Error)]
+pub enum InMemoryKeepsakeStoreError {
+    /// The in-memory keepsake state lock was poisoned.
+    #[error("in-memory keepsake store lock poisoned")]
+    Poisoned,
+
+    /// A keepsake id was not present in the store.
+    #[error("keepsake {keepsake_id} was not found")]
+    KeepsakeNotFound {
+        /// Missing keepsake id.
+        keepsake_id: KeepsakeId,
+    },
+
+    /// A keepsake id is already present in the store.
+    #[error("keepsake {keepsake_id} already exists")]
+    DuplicateKeepsakeId {
+        /// Duplicate keepsake id.
+        keepsake_id: KeepsakeId,
+    },
+
+    /// An apply command targeted a different relation than the provided definition.
+    #[error(
+        "apply command targets relation {command_relation_id}, but definition uses {relation_id}"
+    )]
+    RelationMismatch {
+        /// Relation id carried by the apply command.
+        command_relation_id: RelationId,
+        /// Relation id carried by the relation definition.
+        relation_id: RelationId,
+    },
+
+    /// A revoke targeted a terminal keepsake.
+    #[error("keepsake {keepsake_id} is already terminal")]
+    AlreadyTerminal {
+        /// Terminal keepsake id.
+        keepsake_id: KeepsakeId,
+    },
+
+    /// A core model invariant failed.
+    #[error(transparent)]
+    Keepsake(#[from] KeepsakeError),
+}
+
+/// In-memory keepsake store for adapter and application tests.
+#[derive(Debug, Clone, Default)]
+pub struct InMemoryKeepsakeStore {
+    keepsakes: Arc<RwLock<BTreeMap<KeepsakeId, Keepsake>>>,
+}
+
+/// Error returned by the in-memory fulfillment provider.
+#[derive(Debug, thiserror::Error)]
+pub enum InMemoryFulfillmentProviderError {
+    /// The in-memory fulfillment state lock was poisoned.
+    #[error("in-memory fulfillment provider lock poisoned")]
+    Poisoned,
+}
+
+/// In-memory fulfillment snapshot provider for adapter and application tests.
+#[derive(Debug, Clone, Default)]
+pub struct InMemoryFulfillmentProvider {
+    snapshots: Arc<RwLock<BTreeMap<KeepsakeId, FulfillmentSnapshot>>>,
 }
 
 /// Builder for seeding one active typed relation into [`InMemoryActiveRelations`].
@@ -234,6 +301,178 @@ impl InMemoryActiveRelations {
     }
 }
 
+impl InMemoryKeepsakeStore {
+    /// Creates an empty in-memory keepsake store.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    /// Applies a keepsake using a full relation definition.
+    ///
+    /// This helper is useful when tests need the stored keepsake to carry a
+    /// non-manual expiry policy. The trait method only receives a relation id.
+    pub fn apply_with_relation(
+        &self,
+        command: &ApplyKeepsake,
+        relation: &RelationDefinition,
+    ) -> ProviderResult<Keepsake, InMemoryKeepsakeStoreError> {
+        command.subject.validate()?;
+        command.context.validate()?;
+        if command.relation_id != relation.id {
+            return Err(InMemoryKeepsakeStoreError::RelationMismatch {
+                command_relation_id: command.relation_id,
+                relation_id: relation.id,
+            });
+        }
+        let mut keepsakes = self
+            .keepsakes
+            .write()
+            .map_err(|_| InMemoryKeepsakeStoreError::Poisoned)?;
+        if keepsakes.contains_key(&command.id) {
+            return Err(InMemoryKeepsakeStoreError::DuplicateKeepsakeId {
+                keepsake_id: command.id,
+            });
+        }
+        if keepsakes.values().any(|keepsake| {
+            keepsake.is_active()
+                && keepsake.subject() == &command.subject
+                && keepsake.relation_id() == command.relation_id
+        }) {
+            return Err(KeepsakeError::DuplicateActiveKeepsake {
+                subject_kind: command.subject.kind.clone(),
+                subject_id: command.subject.id.clone(),
+                relation_id: command.relation_id,
+            }
+            .into());
+        }
+        let keepsake = Keepsake::applied(
+            command.id,
+            command.subject.clone(),
+            relation,
+            command.at,
+            command.metadata.clone(),
+        )?;
+        keepsakes.insert(keepsake.id(), keepsake.clone());
+        drop(keepsakes);
+        Ok(keepsake)
+    }
+
+    fn synthetic_relation(command: &ApplyKeepsake) -> Result<RelationDefinition, KeepsakeError> {
+        RelationDefinition::enabled(
+            command.relation_id,
+            RelationKey::new("relation", command.relation_id.to_string())?,
+            ExpiryPolicy::ManualOnly,
+        )
+    }
+}
+
+impl KeepsakeStore for InMemoryKeepsakeStore {
+    type Error = InMemoryKeepsakeStoreError;
+
+    fn apply(&self, command: &ApplyKeepsake) -> ProviderResult<Keepsake, Self::Error> {
+        let relation = Self::synthetic_relation(command)?;
+        self.apply_with_relation(command, &relation)
+    }
+
+    fn revoke(&self, command: &RevokeKeepsake) -> ProviderResult<Keepsake, Self::Error> {
+        command.context.validate()?;
+        let mut keepsakes = self
+            .keepsakes
+            .write()
+            .map_err(|_| InMemoryKeepsakeStoreError::Poisoned)?;
+        let keepsake = keepsakes.get(&command.keepsake_id).cloned().ok_or(
+            InMemoryKeepsakeStoreError::KeepsakeNotFound {
+                keepsake_id: command.keepsake_id,
+            },
+        )?;
+        if !keepsake.is_active() {
+            return Err(InMemoryKeepsakeStoreError::AlreadyTerminal {
+                keepsake_id: command.keepsake_id,
+            });
+        }
+
+        let revoked: Keepsake = KeepsakeRecord {
+            id: keepsake.id(),
+            subject: keepsake.subject().clone(),
+            relation_id: keepsake.relation_id(),
+            state: LifecycleState::Revoked,
+            expiry: keepsake.expiry().clone(),
+            applied_at: keepsake.applied_at(),
+            expires_at: keepsake.expires_at(),
+            fulfilled_at: None,
+            revoked_at: Some(command.at),
+            metadata: keepsake.metadata().clone(),
+        }
+        .try_into()?;
+        keepsakes.insert(command.keepsake_id, revoked.clone());
+        drop(keepsakes);
+        Ok(revoked)
+    }
+
+    fn active_for_subject(
+        &self,
+        subject: &SubjectRef,
+    ) -> ProviderResult<Vec<Keepsake>, Self::Error> {
+        let mut active = self
+            .keepsakes
+            .read()
+            .map_err(|_| InMemoryKeepsakeStoreError::Poisoned)?
+            .values()
+            .filter(|keepsake| keepsake.is_active() && keepsake.subject() == subject)
+            .cloned()
+            .collect::<Vec<_>>();
+        active.sort_by_key(|keepsake| (keepsake.relation_id(), keepsake.id()));
+        Ok(active)
+    }
+
+    fn get(&self, id: KeepsakeId) -> ProviderResult<Option<Keepsake>, Self::Error> {
+        Ok(self
+            .keepsakes
+            .read()
+            .map_err(|_| InMemoryKeepsakeStoreError::Poisoned)?
+            .get(&id)
+            .cloned())
+    }
+}
+
+impl InMemoryFulfillmentProvider {
+    /// Creates an empty in-memory fulfillment provider.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    /// Inserts or replaces a test fulfillment snapshot.
+    pub fn insert_snapshot(
+        &self,
+        keepsake_id: KeepsakeId,
+        snapshot: FulfillmentSnapshot,
+    ) -> ProviderResult<(), InMemoryFulfillmentProviderError> {
+        self.snapshots
+            .write()
+            .map_err(|_| InMemoryFulfillmentProviderError::Poisoned)?
+            .insert(keepsake_id, snapshot);
+        Ok(())
+    }
+}
+
+impl FulfillmentProvider for InMemoryFulfillmentProvider {
+    type Error = InMemoryFulfillmentProviderError;
+
+    fn snapshot(
+        &self,
+        keepsake: &Keepsake,
+    ) -> ProviderResult<Option<FulfillmentSnapshot>, Self::Error> {
+        Ok(self
+            .snapshots
+            .read()
+            .map_err(|_| InMemoryFulfillmentProviderError::Poisoned)?
+            .get(&keepsake.id())
+            .cloned())
+    }
+}
+
 impl ActiveRelationSource for InMemoryActiveRelations {
     type Error = InMemoryActiveRelationsError;
 
@@ -270,7 +509,10 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::{ExpiryPolicy, StaticRelationKey};
+    use crate::{
+        DecisionKind, ExpiryPolicy, FulfillmentPolicy, StaticRelationKey, TransitionReason,
+        evaluate,
+    };
 
     type TestResult<T> = core::result::Result<T, TestError>;
 
@@ -281,6 +523,12 @@ mod tests {
 
         #[error(transparent)]
         InMemory(#[from] InMemoryActiveRelationsError),
+
+        #[error(transparent)]
+        InMemoryFulfillment(#[from] InMemoryFulfillmentProviderError),
+
+        #[error(transparent)]
+        InMemoryStore(#[from] InMemoryKeepsakeStoreError),
 
         #[error(transparent)]
         Keepsake(#[from] KeepsakeError),
@@ -310,6 +558,23 @@ mod tests {
 
     fn ts(value: &str) -> core::result::Result<DateTime<Utc>, chrono::ParseError> {
         DateTime::parse_from_rfc3339(value).map(|timestamp| timestamp.with_timezone(&Utc))
+    }
+
+    fn context() -> crate::Result<crate::CommandContext> {
+        Ok(crate::CommandContext::new(crate::ActorRef::new(
+            "test", "worker",
+        )?))
+    }
+
+    fn apply_command(
+        id: KeepsakeId,
+        subject: SubjectRef,
+        relation_id: RelationId,
+        at: DateTime<Utc>,
+    ) -> crate::Result<ApplyKeepsake> {
+        let mut command = ApplyKeepsake::new(subject, relation_id, at, context()?);
+        command.id = id;
+        Ok(command)
     }
 
     #[test]
@@ -427,6 +692,202 @@ mod tests {
                 .map(String::as_str),
             Some("fixture")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn keepsake_store_apply_then_active_for_subject_returns_keepsake() -> TestResult<()> {
+        let store = InMemoryKeepsakeStore::empty();
+        let subject = SubjectRef::new("account", "acct_123")?;
+        let at = ts("2026-01-01T00:00:00Z")?;
+        let command = apply_command(Uuid::from_u128(100), subject.clone(), TrustedTag::ID, at)?;
+
+        let keepsake = store.apply(&command)?;
+
+        assert_eq!(store.active_for_subject(&subject)?, vec![keepsake]);
+        Ok(())
+    }
+
+    #[test]
+    fn keepsake_store_rejects_duplicate_active_subject_relation() -> TestResult<()> {
+        let store = InMemoryKeepsakeStore::empty();
+        let subject = SubjectRef::new("account", "acct_123")?;
+        let at = ts("2026-01-01T00:00:00Z")?;
+        let first = apply_command(Uuid::from_u128(100), subject.clone(), TrustedTag::ID, at)?;
+        let second = apply_command(Uuid::from_u128(101), subject, TrustedTag::ID, at)?;
+
+        store.apply(&first)?;
+        let error = store
+            .apply(&second)
+            .map(|_| ())
+            .map_err(|error| error.to_string());
+
+        assert_eq!(
+            error,
+            Err(format!(
+                "subject account/acct_123 already has active relation {}",
+                TrustedTag::ID
+            ))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn keepsake_store_rejects_duplicate_keepsake_id() -> TestResult<()> {
+        let store = InMemoryKeepsakeStore::empty();
+        let at = ts("2026-01-01T00:00:00Z")?;
+        let id = Uuid::from_u128(100);
+        let first = apply_command(
+            id,
+            SubjectRef::new("account", "acct_123")?,
+            TrustedTag::ID,
+            at,
+        )?;
+        let second = apply_command(
+            id,
+            SubjectRef::new("account", "acct_456")?,
+            AdminTag::ID,
+            at,
+        )?;
+
+        store.apply(&first)?;
+        let error = store
+            .apply(&second)
+            .map(|_| ())
+            .map_err(|error| error.to_string());
+
+        assert_eq!(error, Err(format!("keepsake {id} already exists")));
+        Ok(())
+    }
+
+    #[test]
+    fn keepsake_store_rejects_apply_relation_mismatch() -> TestResult<()> {
+        let store = InMemoryKeepsakeStore::empty();
+        let subject = SubjectRef::new("account", "acct_123")?;
+        let at = ts("2026-01-01T00:00:00Z")?;
+        let relation = RelationDefinition::from_spec::<TrustedTag>(at)?;
+        let command = apply_command(Uuid::from_u128(100), subject, AdminTag::ID, at)?;
+
+        let error = store
+            .apply_with_relation(&command, &relation)
+            .map(|_| ())
+            .map_err(|error| error.to_string());
+
+        assert_eq!(
+            error,
+            Err(format!(
+                "apply command targets relation {}, but definition uses {}",
+                AdminTag::ID,
+                TrustedTag::ID
+            ))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn keepsake_store_revoke_removes_from_active_subject_results() -> TestResult<()> {
+        let store = InMemoryKeepsakeStore::empty();
+        let subject = SubjectRef::new("account", "acct_123")?;
+        let at = ts("2026-01-01T00:00:00Z")?;
+        let command = apply_command(Uuid::from_u128(100), subject.clone(), TrustedTag::ID, at)?;
+        let keepsake = store.apply(&command)?;
+        let revoke = RevokeKeepsake::new(keepsake.id(), ts("2026-01-02T00:00:00Z")?, context()?);
+
+        let revoked = store.revoke(&revoke)?;
+
+        assert!(revoked.is_revoked());
+        assert!(store.active_for_subject(&subject)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn keepsake_store_rejects_revoking_already_terminal_keepsake() -> TestResult<()> {
+        let store = InMemoryKeepsakeStore::empty();
+        let subject = SubjectRef::new("account", "acct_123")?;
+        let at = ts("2026-01-01T00:00:00Z")?;
+        let command = apply_command(Uuid::from_u128(100), subject, TrustedTag::ID, at)?;
+        let keepsake = store.apply(&command)?;
+        let revoke = RevokeKeepsake::new(keepsake.id(), ts("2026-01-02T00:00:00Z")?, context()?);
+
+        store.revoke(&revoke)?;
+        let error = store
+            .revoke(&revoke)
+            .map(|_| ())
+            .map_err(|error| error.to_string());
+
+        assert_eq!(
+            error,
+            Err(format!("keepsake {} is already terminal", keepsake.id()))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn keepsake_store_get_returns_none_then_some_after_apply() -> TestResult<()> {
+        let store = InMemoryKeepsakeStore::empty();
+        let id = Uuid::from_u128(100);
+        let subject = SubjectRef::new("account", "acct_123")?;
+        let at = ts("2026-01-01T00:00:00Z")?;
+        let command = apply_command(id, subject, TrustedTag::ID, at)?;
+
+        assert_eq!(store.get(id)?, None);
+        let keepsake = store.apply(&command)?;
+        assert_eq!(store.get(id)?, Some(keepsake));
+        Ok(())
+    }
+
+    #[test]
+    fn fulfillment_provider_snapshot_returns_inserted_snapshot() -> TestResult<()> {
+        let store = InMemoryKeepsakeStore::empty();
+        let provider = InMemoryFulfillmentProvider::empty();
+        let subject = SubjectRef::new("account", "acct_123")?;
+        let at = ts("2026-01-01T00:00:00Z")?;
+        let command = apply_command(Uuid::from_u128(100), subject, TrustedTag::ID, at)?;
+        let keepsake = store.apply(&command)?;
+        let snapshot = FulfillmentSnapshot::empty().with_counter("steps", 3);
+
+        assert_eq!(provider.snapshot(&keepsake)?, None);
+        provider.insert_snapshot(keepsake.id(), snapshot.clone())?;
+
+        assert_eq!(provider.snapshot(&keepsake)?, Some(snapshot));
+        Ok(())
+    }
+
+    #[test]
+    fn in_memory_store_and_fulfillment_provider_drive_fulfilled_evaluation() -> TestResult<()> {
+        let store = InMemoryKeepsakeStore::empty();
+        let provider = InMemoryFulfillmentProvider::empty();
+        let subject = SubjectRef::new("account", "acct_123")?;
+        let at = ts("2026-01-01T00:00:00Z")?;
+        let relation = RelationDefinition::enabled(
+            Uuid::from_u128(300),
+            RelationKey::new("tag", "steps_done")?,
+            ExpiryPolicy::WhenFulfilled {
+                policy: FulfillmentPolicy::CounterAtLeast {
+                    key: "steps".to_owned(),
+                    threshold: 3,
+                },
+            },
+        )?;
+        let command = apply_command(Uuid::from_u128(100), subject, relation.id, at)?;
+        let keepsake = store.apply_with_relation(&command, &relation)?;
+        let snapshot = FulfillmentSnapshot::empty().with_counter("steps", 3);
+        provider.insert_snapshot(keepsake.id(), snapshot)?;
+
+        let decision = evaluate(
+            ts("2026-01-02T00:00:00Z")?,
+            &relation,
+            &keepsake,
+            provider.snapshot(&keepsake)?.as_ref(),
+        );
+
+        assert!(matches!(
+            decision.kind,
+            DecisionKind::Transition {
+                reason: TransitionReason::FulfillmentSatisfied,
+                ..
+            }
+        ));
         Ok(())
     }
 }

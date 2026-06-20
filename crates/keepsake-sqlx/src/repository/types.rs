@@ -1,8 +1,10 @@
 use chrono::{DateTime, Utc};
-use keepsake::Keepsake;
+use keepsake::{ExpiryPolicy, Keepsake};
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 use uuid::Uuid;
+
+#[cfg(feature = "postgres")]
+use sqlx::{Row, postgres::PgRow};
 
 /// Keyset cursor for active relation membership scans.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,7 +39,8 @@ pub struct AppliedKeepsake {
 }
 
 /// Due timed expiry candidate.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "postgres", derive(sqlx::FromRow))]
 pub struct TimedExpiryCandidate {
     /// Keepsake id.
     pub keepsake_id: Uuid,
@@ -49,4 +52,34 @@ pub struct TimedExpiryCandidate {
     pub subject_id: String,
     /// Due timestamp.
     pub due_at: DateTime<Utc>,
+}
+
+/// Due fulfillment expiry candidate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FulfilledExpiryCandidate {
+    /// Keepsake id.
+    pub keepsake_id: Uuid,
+    /// Relation id.
+    pub relation_id: Uuid,
+    /// Subject kind.
+    pub subject_kind: String,
+    /// Subject id.
+    pub subject_id: String,
+    /// Copied expiry policy.
+    pub expiry_policy: ExpiryPolicy,
+}
+
+#[cfg(feature = "postgres")]
+impl<'row> sqlx::FromRow<'row, PgRow> for FulfilledExpiryCandidate {
+    fn from_row(row: &'row PgRow) -> Result<Self, sqlx::Error> {
+        let expiry_policy = serde_json::from_value(row.try_get("expiry_policy")?)
+            .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
+        Ok(Self {
+            keepsake_id: row.try_get("keepsake_id")?,
+            relation_id: row.try_get("relation_id")?,
+            subject_kind: row.try_get("subject_kind")?,
+            subject_id: row.try_get("subject_id")?,
+            expiry_policy,
+        })
+    }
 }

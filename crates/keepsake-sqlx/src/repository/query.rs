@@ -1,5 +1,8 @@
+use std::collections::BTreeMap;
+
 use keepsake::{
-    ActiveRelation, ActiveRelationSource, Keepsake, RelationId, RelationKey, SubjectRef,
+    ActiveRelation, ActiveRelationSource, Keepsake, RelationDefinition, RelationId, RelationKey,
+    SubjectRef,
 };
 
 use super::{
@@ -95,6 +98,15 @@ where
             return Ok(Vec::new());
         }
 
+        let cached_relations = self.cached_relations_by_ids(relation_ids).await;
+        if let Some(relations_by_id) = cached_relations {
+            let requested_relation_ids = relations_by_id.keys().copied().collect::<Vec<_>>();
+            let keepsakes = self
+                .active_for_subject_keepsakes_by_ids(subject, &requested_relation_ids)
+                .await?;
+            return active_relations_from_keepsakes(keepsakes, &relations_by_id);
+        }
+
         let requested_relation_ids = relation_ids.to_vec();
         let rows = sqlx::query_as::<_, ActiveRelationRow>(
             r"
@@ -158,6 +170,15 @@ where
     ) -> RepositoryResult<Vec<ActiveRelation>> {
         if keys.is_empty() {
             return Ok(Vec::new());
+        }
+
+        let cached_relations = self.cached_relations_by_keys(keys).await;
+        if let Some(relations_by_id) = cached_relations {
+            let requested_relation_ids = relations_by_id.keys().copied().collect::<Vec<_>>();
+            let keepsakes = self
+                .active_for_subject_keepsakes_by_ids(subject, &requested_relation_ids)
+                .await?;
+            return active_relations_from_keepsakes(keepsakes, &relations_by_id);
         }
 
         let kinds = keys
@@ -264,6 +285,81 @@ where
             .map(AppliedKeepsakeRow::try_into_keepsake)
             .collect()
     }
+
+    async fn cached_relations_by_ids(
+        &self,
+        relation_ids: &[RelationId],
+    ) -> Option<BTreeMap<RelationId, RelationDefinition>> {
+        let mut relations = BTreeMap::new();
+        for relation_id in relation_ids {
+            let relation = self.relation_cache.get_by_id(*relation_id).await?;
+            relations.insert(relation.id, relation);
+        }
+        Some(relations)
+    }
+
+    async fn cached_relations_by_keys(
+        &self,
+        keys: &[RelationKey],
+    ) -> Option<BTreeMap<RelationId, RelationDefinition>> {
+        let mut relations = BTreeMap::new();
+        for key in keys {
+            let relation = self.relation_cache.get_by_key(key).await?;
+            relations.insert(relation.id, relation);
+        }
+        Some(relations)
+    }
+
+    async fn active_for_subject_keepsakes_by_ids(
+        &self,
+        subject: &SubjectRef,
+        relation_ids: &[RelationId],
+    ) -> RepositoryResult<Vec<Keepsake>> {
+        let rows = sqlx::query_as::<_, AppliedKeepsakeRow>(
+            r"
+            with requested_relation_ids(id) as (
+                select distinct id
+                from unnest($3::uuid[]) as requested(id)
+            )
+            select k.id, k.subject_kind, k.subject_id, k.relation_id, k.state, k.expiry_policy,
+                k.applied_at, k.expires_at, k.fulfilled_at, k.revoked_at, k.metadata
+            from requested_relation_ids requested
+            join keepsakes k
+              on k.relation_id = requested.id
+             and k.subject_kind = $1
+             and k.subject_id = $2
+             and k.state = 'applied'
+            order by k.relation_id, k.id
+            ",
+        )
+        .bind(&subject.kind)
+        .bind(&subject.id)
+        .bind(relation_ids)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(AppliedKeepsakeRow::try_into_keepsake)
+            .collect()
+    }
+}
+
+fn active_relations_from_keepsakes(
+    keepsakes: Vec<Keepsake>,
+    relations_by_id: &BTreeMap<RelationId, RelationDefinition>,
+) -> RepositoryResult<Vec<ActiveRelation>> {
+    keepsakes
+        .into_iter()
+        .map(|keepsake| {
+            let relation = relations_by_id
+                .get(&keepsake.relation_id())
+                .cloned()
+                .ok_or(RepositoryError::RelationDefinitionMissing {
+                    relation_id: keepsake.relation_id(),
+                })?;
+            Ok(ActiveRelation::new(keepsake, relation)?)
+        })
+        .collect()
 }
 
 impl<C> ActiveRelationSource for KeepsakeRepository<C>

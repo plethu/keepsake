@@ -1,23 +1,28 @@
 [package]
 name = "keepsake-sqlx"
-version = "0.4.0"
+version = "0.5.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
-description = "SQLx/Postgres adapter for keepsake lifecycle storage"
+description = "SQLx adapter for keepsake lifecycle storage"
 readme = "../../README.md"
 categories = ["database"]
-keywords = ["sqlx", "postgres", "lifecycle", "audit"]
+keywords = ["sqlx", "database", "lifecycle", "audit"]
 
 [features]
-default = ["cache", "fulfillment-counters", "migrations"]
+default = ["postgres", "cache", "fulfillment-counters", "migrations"]
 cache = []
-migrations = []
+postgres = ["sqlx/postgres", "sqlx/uuid", "sqlx/chrono", "sqlx/json"]
+sqlite = ["sqlx/sqlite", "sqlx/chrono", "sqlx/json"]
+mysql = ["sqlx/mysql", "sqlx/chrono", "sqlx/json"]
+migrations = ["sqlx/migrate"]
 fulfillment-counters = []
-postgres-tests = ["fulfillment-counters", "migrations"]
+postgres-tests = ["postgres", "cache", "fulfillment-counters", "migrations"]
+sqlite-tests = ["sqlite", "cache", "fulfillment-counters", "migrations"]
+mysql-tests = ["mysql", "cache", "fulfillment-counters", "migrations"]
 
 [dependencies]
 async-trait.workspace = true

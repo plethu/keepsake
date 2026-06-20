@@ -11,13 +11,14 @@ gate. Writes are idempotent, expiry runs on a schedule you set, state is
 queryable, and `apply`/`revoke` produce typed audit records.
 
 The core crate is persistence-agnostic and synchronous. The `keepsake-sqlx`
-adapter stores state in Postgres with migrations and query helpers.
+adapter stores state through SQLx with migrations and query helpers. Postgres is
+the default backend; SQLite and MySQL are available behind feature flags.
 
 ## Where it fits
 
-Use the crate directly for a Rust and Postgres service. For other stacks, the
-schema, indexes, and lifecycle rules are documented so you can port them to
-another language, framework, or database.
+Use the crate directly for a Rust service backed by Postgres, SQLite, or MySQL.
+For other stacks, the schema, indexes, and lifecycle rules are documented so you
+can port them to another language, framework, or database.
 
 Some responsibilities stay with your application. Keepsake does not join your
 entity tables, make authorization decisions, invalidate distributed caches, or
@@ -41,6 +42,12 @@ let pool = PgPool::connect(&database_url).await?;
 let repo = KeepsakeRepository::new(pool);
 repo.migrate().await?;
 ```
+
+For SQLite or MySQL, disable default features and enable the target backend,
+then construct `SqliteKeepsakeRepository` or `MySqlKeepsakeRepository` with the
+matching SQLx pool. The repository type and pool type are coupled at compile
+time, and migrations also record a backend marker so a schema initialized for
+one driver is not silently reused by another.
 
 ## Operations
 

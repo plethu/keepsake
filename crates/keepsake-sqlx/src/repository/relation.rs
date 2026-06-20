@@ -39,7 +39,7 @@ where
         .fetch_one(&self.pool)
         .await?;
         let relation = row.try_into_relation()?;
-        self.relation_cache.store(&relation).await;
+        self.relation_cache.remove_by_id(relation.id).await;
         Ok(relation)
     }
 
@@ -98,7 +98,7 @@ where
 
         tx.commit().await?;
         let relation = row.try_into_relation()?;
-        self.relation_cache.store(&relation).await;
+        self.relation_cache.remove_by_id(relation.id).await;
         Ok(relation)
     }
 

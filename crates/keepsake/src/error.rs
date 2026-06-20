@@ -24,6 +24,17 @@ pub enum KeepsakeError {
         relation_id: uuid::Uuid,
     },
 
+    /// A caller tried to apply a relation that is already active for a subject.
+    #[error("subject {subject_kind}/{subject_id} already has active relation {relation_id}")]
+    DuplicateActiveKeepsake {
+        /// Subject kind.
+        subject_kind: String,
+        /// Subject id.
+        subject_id: String,
+        /// Relation id.
+        relation_id: uuid::Uuid,
+    },
+
     /// A flat keepsake record did not satisfy lifecycle invariants.
     #[error("invalid keepsake lifecycle: {reason}")]
     InvalidKeepsakeLifecycle {

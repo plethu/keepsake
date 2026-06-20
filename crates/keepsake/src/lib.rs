@@ -20,7 +20,11 @@ pub mod prelude {
     };
 
     #[cfg(any(test, feature = "test"))]
-    pub use crate::{ActiveRelationSeed, InMemoryActiveRelations, InMemoryActiveRelationsError};
+    pub use crate::{
+        ActiveRelationSeed, InMemoryActiveRelations, InMemoryActiveRelationsError,
+        InMemoryFulfillmentProvider, InMemoryFulfillmentProviderError, InMemoryKeepsakeStore,
+        InMemoryKeepsakeStoreError,
+    };
 }
 pub mod provider;
 
@@ -88,7 +92,11 @@ pub use observe::{
 };
 pub use policy::{ExpiryPolicy, FulfillmentPolicy};
 #[cfg(any(test, feature = "test"))]
-pub use provider::{ActiveRelationSeed, InMemoryActiveRelations, InMemoryActiveRelationsError};
+pub use provider::{
+    ActiveRelationSeed, InMemoryActiveRelations, InMemoryActiveRelationsError,
+    InMemoryFulfillmentProvider, InMemoryFulfillmentProviderError, InMemoryKeepsakeStore,
+    InMemoryKeepsakeStoreError,
+};
 pub use provider::{
     ActiveRelationSource, DynActiveRelationSource, FulfillmentProvider, KeepsakeStore,
 };

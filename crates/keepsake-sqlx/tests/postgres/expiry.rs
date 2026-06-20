@@ -256,3 +256,139 @@ async fn relation_share_lock_blocks_disable_until_expiry_order_is_resolved() -> 
     );
     Ok(())
 }
+
+#[cfg(feature = "fulfillment-counters")]
+async fn fulfilled_relation(
+    repo: &KeepsakeRepository,
+    key_prefix: &str,
+) -> TestResult<RelationDefinition> {
+    let relation = RelationDefinition::new(
+        Uuid::now_v7(),
+        RelationKey::new("tag", unique_key(key_prefix))?,
+        true,
+        ExpiryPolicy::WhenFulfilled {
+            policy: FulfillmentPolicy::CounterAtLeast {
+                key: "steps".to_owned(),
+                threshold: 3,
+            },
+        },
+    )?;
+    upsert_relation(repo, &relation).await
+}
+
+#[cfg(feature = "fulfillment-counters")]
+async fn stored_state(keepsake_id: Uuid) -> TestResult<String> {
+    let database_url = std::env::var("DATABASE_URL")?;
+    let pool = PgPool::connect(&database_url).await?;
+    Ok(sqlx::query_scalar::<_, String>(
+        r"
+        select state
+        from keepsakes
+        where id = $1
+        ",
+    )
+    .bind(keepsake_id)
+    .fetch_one(&pool)
+    .await?)
+}
+
+#[cfg(feature = "fulfillment-counters")]
+#[tokio::test]
+#[ignore = "requires docker postgres; run `make test-db`"]
+async fn counter_at_least_fulfillment_expiry_runs_end_to_end() -> TestResult<()> {
+    let repo = repo().await?;
+    let relation = fulfilled_relation(&repo, "fulfilled-counter").await?;
+    let subject = SubjectRef::new("user", format!("fulfilled_counter_{}", Uuid::now_v7()))?;
+    let applied = apply_at(&repo, &subject, relation.id, "2026-01-01T00:00:00Z").await?;
+    let keepsake_id = applied.keepsake.id();
+
+    assert_eq!(
+        repo.fulfillment_snapshot(keepsake_id).await?,
+        FulfillmentSnapshot::empty()
+    );
+    assert_eq!(
+        repo.expire_due_fulfilled(ts("2026-01-02T00:00:00Z")?, 10)
+            .await?,
+        0
+    );
+
+    repo.upsert_counter_projection(keepsake_id, "steps", 2, ts("2026-01-02T00:00:00Z")?)
+        .await?;
+    assert_eq!(
+        repo.fulfillment_snapshot(keepsake_id).await?,
+        FulfillmentSnapshot::empty().with_counter("steps", 2)
+    );
+    assert_eq!(
+        repo.expire_due_fulfilled(ts("2026-01-02T00:00:00Z")?, 10)
+            .await?,
+        0
+    );
+
+    repo.upsert_counter_projection(keepsake_id, "steps", 3, ts("2026-01-02T00:01:00Z")?)
+        .await?;
+    assert_eq!(
+        repo.expire_due_fulfilled(ts("2026-01-02T00:01:00Z")?, 10)
+            .await?,
+        1
+    );
+    assert_eq!(stored_state(keepsake_id).await?, "expired");
+    Ok(())
+}
+
+#[cfg(feature = "fulfillment-counters")]
+#[tokio::test]
+#[ignore = "requires docker postgres; run `make test-db`"]
+async fn disabled_relation_is_not_expired_by_fulfillment() -> TestResult<()> {
+    let repo = repo().await?;
+    let relation = fulfilled_relation(&repo, "fulfilled-disabled").await?;
+    let subject = SubjectRef::new("user", format!("fulfilled_disabled_{}", Uuid::now_v7()))?;
+    let applied = apply_at(&repo, &subject, relation.id, "2026-01-01T00:00:00Z").await?;
+    let keepsake_id = applied.keepsake.id();
+
+    assert!(set_relation_enabled(&repo, relation.id, false).await?);
+    repo.upsert_counter_projection(keepsake_id, "steps", 3, ts("2026-01-02T00:00:00Z")?)
+        .await?;
+
+    assert_eq!(
+        repo.expire_due_fulfilled(ts("2026-01-02T00:00:00Z")?, 10)
+            .await?,
+        0
+    );
+    assert_eq!(stored_state(keepsake_id).await?, "applied");
+    Ok(())
+}
+
+#[cfg(feature = "fulfillment-counters")]
+#[tokio::test]
+#[ignore = "requires docker postgres; run `make test-db`"]
+async fn due_fulfilled_expiry_returns_only_when_fulfilled_keepsakes() -> TestResult<()> {
+    let repo = repo().await?;
+    let fulfilled = fulfilled_relation(&repo, "fulfilled-due").await?;
+    let timed = timed_relation(&repo, "fulfilled-due-timed", "2026-01-02T00:00:00Z").await?;
+    let fulfilled_subject = SubjectRef::new("user", format!("fulfilled_due_{}", Uuid::now_v7()))?;
+    let timed_subject = SubjectRef::new("user", format!("timed_due_{}", Uuid::now_v7()))?;
+    let fulfilled_applied = apply_at(
+        &repo,
+        &fulfilled_subject,
+        fulfilled.id,
+        "2026-01-01T00:00:00Z",
+    )
+    .await?;
+    let timed_applied = apply_at(&repo, &timed_subject, timed.id, "2026-01-01T00:00:00Z").await?;
+
+    let due = repo.due_fulfilled_expiry(10).await?;
+
+    assert!(
+        due.iter()
+            .any(|row| row.keepsake_id == fulfilled_applied.keepsake.id())
+    );
+    assert!(
+        !due.iter()
+            .any(|row| row.keepsake_id == timed_applied.keepsake.id())
+    );
+    assert!(
+        due.iter()
+            .all(|row| matches!(row.expiry_policy, ExpiryPolicy::WhenFulfilled { .. }))
+    );
+    Ok(())
+}
