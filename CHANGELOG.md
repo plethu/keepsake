@@ -13,6 +13,8 @@
   `RelationSpec` integrations.
 - Added `InMemoryActiveRelations` behind the core `test` feature for downstream
   adapter tests.
+- Aligned `keepsake-sqlx` with SQLx 0.9.0 and raised the workspace Rust version
+  to 1.94.
 - Documented multi-tenant `SubjectRef` conventions and bounded active relation
   read paths.
 

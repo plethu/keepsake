@@ -28,7 +28,7 @@ those relations later.
 
 ```sh
 cargo add keepsake keepsake-sqlx
-cargo add sqlx --features postgres,runtime-tokio-rustls
+cargo add sqlx --features postgres,runtime-tokio,tls-rustls
 ```
 
 Run the embedded migration with a `sqlx::PgPool`:

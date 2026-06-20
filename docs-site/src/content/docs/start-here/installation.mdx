@@ -8,7 +8,7 @@ Postgres:
 
 ```sh
 cargo add keepsake keepsake-sqlx
-cargo add sqlx --features postgres,runtime-tokio-rustls
+cargo add sqlx --features postgres,runtime-tokio,tls-rustls
 ```
 
 The core crate has no backend features. The SQLx adapter enables embedded

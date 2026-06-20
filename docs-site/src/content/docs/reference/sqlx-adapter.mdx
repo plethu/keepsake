@@ -144,7 +144,7 @@ use std::time::Duration;
 use keepsake_sqlx::{KeepsakeRepository, LocalRelationCacheConfig};
 
 let repo = KeepsakeRepository::new(pool)
-    .with_local_relation_cache(LocalRelationCacheConfig::new(Duration::from_secs(60)));
+    .with_local_relation_cache(LocalRelationCacheConfig::new(Duration::from_mins(1)));
 ```
 
 The cache only affects relation read helpers. Lifecycle mutations still read

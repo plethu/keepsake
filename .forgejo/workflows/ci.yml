@@ -3,7 +3,7 @@ name: ci
 env:
   # Keep this aligned with `rust-version` in the workspace Cargo.toml and
   # `.mise.toml` so MSRV drift fails loudly in CI and local development.
-  RUST_VERSION: "1.88.0"
+  RUST_VERSION: "1.94.0"
   PNPM_VERSION: "11.8.0"
 
 on:
