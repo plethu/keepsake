@@ -50,7 +50,11 @@ Use `ActiveRelationSource` as the integration seam for async authorization,
 policy, or adapter code that only needs active relation reads. Keep those APIs
 generic over `S: ActiveRelationSource` when possible. `DynActiveRelationSource`
 exists for application composition boundaries that genuinely need runtime
-erasure, such as storing a source behind `Arc<dyn ...>`.
+erasure, such as storing a source behind `Arc<dyn ...>`. Policy adapters such as
+`gatekeep-keepsake` use this seam to resolve typed authorization facts from
+current relation state without owning a SQL repository or lifecycle writer.
+Prefer the bounded id/key methods when the policy already knows the small set of
+relations it may consult for a request.
 
 Application modules with many Keepsake calls may import `keepsake::prelude::*`
 for the common domain types and traits. SQLx-backed modules may also import

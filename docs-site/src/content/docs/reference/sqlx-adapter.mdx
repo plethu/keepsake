@@ -127,6 +127,11 @@ matching `active_for_subject` semantics.
 adapter code such as `S: ActiveRelationSource` over storing the repository
 behind `Arc<dyn ...>`. Use the erased `DynActiveRelationSource` only at
 application composition boundaries that need heterogeneous runtime storage.
+Adapters that translate relation state into policy facts should call the bounded
+`*_by_ids` or `*_by_keys` methods when the request already determines the
+relation catalogue. That is the intended shape for integrations such as
+`gatekeep-keepsake`, where the policy supplies stable relation ids and the
+application supplies the request subject.
 
 For large relation memberships, prefer `active_membership_scan_after` with a
 `MembershipCursor` over repeat calls to the first-page scan. The cursor is based
