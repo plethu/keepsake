@@ -91,7 +91,9 @@ where
             r"
             select k.id as keepsake_id, k.relation_id, k.subject_kind, k.subject_id, k.expiry_policy
             from keepsakes k
+            join keepsake_relation_definitions r on r.id = k.relation_id
             where k.state = 'applied'
+              and r.enabled
               and k.expiry_policy->>'type' = 'when_fulfilled'
             order by k.relation_id, k.subject_kind, k.subject_id, k.id
             limit $1
@@ -366,11 +368,14 @@ async fn due_fulfilled_expiry_tx(
         r"
         select k.id as keepsake_id, k.relation_id, k.subject_kind, k.subject_id, k.expiry_policy
         from keepsakes k
+        join keepsake_relation_definitions r on r.id = k.relation_id
         where k.state = 'applied'
+          and r.enabled
           and k.expiry_policy->>'type' = 'when_fulfilled'
         order by k.relation_id, k.subject_kind, k.subject_id, k.id
         limit $1
         for update of k skip locked
+        for share of r
         ",
     )
     .bind(limit)

@@ -549,7 +549,9 @@ where
             r"
             select k.id as keepsake_id, k.relation_id, k.subject_kind, k.subject_id, k.expiry_policy
             from keepsakes k
+            join keepsake_relation_definitions r on r.id = k.relation_id
             where k.fulfillment_pending = 1
+              and r.enabled
             order by k.relation_id, k.subject_kind, k.subject_id, k.id
             limit ?
             ",

@@ -84,6 +84,15 @@ impl BackendHarness for SqliteHarness {
             .await
     }
 
+    async fn set_relation_enabled(
+        repo: &Self::Repo,
+        relation_id: Uuid,
+        enabled: bool,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, RepositoryError> {
+        repo.set_relation_enabled(relation_id, enabled, at).await
+    }
+
     async fn expire_due_fulfilled(
         repo: &Self::Repo,
         now: chrono::DateTime<chrono::Utc>,
@@ -184,6 +193,11 @@ async fn sqlite_projection_invariant_rejects_fractional_expiry_mismatch() -> Tes
 #[tokio::test]
 async fn sqlite_fulfilled_expiry_uses_counter_snapshot() -> TestResult<()> {
     backend_cases::fulfilled_expiry_uses_counter_snapshot::<SqliteHarness>().await
+}
+
+#[tokio::test]
+async fn sqlite_fulfilled_expiry_skips_disabled_relations_before_limit() -> TestResult<()> {
+    backend_cases::fulfilled_expiry_skips_disabled_relations_before_limit::<SqliteHarness>().await
 }
 
 #[tokio::test]

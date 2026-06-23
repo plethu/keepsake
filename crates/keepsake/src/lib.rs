@@ -16,7 +16,7 @@ pub mod prelude {
         ExpiryCause, ExpiryPolicy, FulfillmentPolicy, FulfillmentProvider, FulfillmentSnapshot,
         Keepsake, KeepsakeError, KeepsakeId, KeepsakeLifecycle, KeepsakeRecord, KeepsakeStore,
         LifecycleState, RelationDefinition, RelationId, RelationKey, RelationKind, RelationName,
-        RelationSpec, StaticRelationKey, SubjectRef,
+        RelationSpec, RevokeBySubject, StaticRelationKey, SubjectRef,
     };
 
     #[cfg(any(test, feature = "test"))]

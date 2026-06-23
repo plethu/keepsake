@@ -551,7 +551,9 @@ where
             r"
             select k.id as keepsake_id, k.relation_id, k.subject_kind, k.subject_id, k.expiry_policy
             from keepsakes k
+            join keepsake_relation_definitions r on r.id = k.relation_id
             where k.state = 'applied'
+              and r.enabled
               and json_extract(k.expiry_policy, '$.type') = 'when_fulfilled'
             order by k.relation_id, k.subject_kind, k.subject_id, k.id
             limit ?1

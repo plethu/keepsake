@@ -64,6 +64,12 @@ pub trait BackendHarness {
         value: i64,
         observed_at: DateTime<Utc>,
     ) -> Result<(), RepositoryError>;
+    async fn set_relation_enabled(
+        repo: &Self::Repo,
+        relation_id: Uuid,
+        enabled: bool,
+        at: DateTime<Utc>,
+    ) -> Result<bool, RepositoryError>;
     async fn expire_due_fulfilled(
         repo: &Self::Repo,
         now: DateTime<Utc>,
@@ -215,6 +221,88 @@ where
     assert_eq!(
         H::expire_due_fulfilled(&repo, ts("2026-01-01T00:04:00Z")?, 10).await?,
         1
+    );
+    Ok(())
+}
+
+pub async fn fulfilled_expiry_skips_disabled_relations_before_limit<H>() -> TestResult<()>
+where
+    H: BackendHarness,
+{
+    let (repo, _pool) = H::repo().await?;
+    let disabled_relation = RelationDefinition::enabled(
+        Uuid::from_u128(1),
+        RelationKey::new("tag", format!("{}-disabled-first", H::BACKEND))?,
+        ExpiryPolicy::WhenFulfilled {
+            policy: FulfillmentPolicy::CounterAtLeast {
+                key: "steps".to_owned(),
+                threshold: 3,
+            },
+        },
+    )?;
+    let enabled_relation = RelationDefinition::enabled(
+        Uuid::from_u128(2),
+        RelationKey::new("tag", format!("{}-enabled-second", H::BACKEND))?,
+        ExpiryPolicy::WhenFulfilled {
+            policy: FulfillmentPolicy::CounterAtLeast {
+                key: "steps".to_owned(),
+                threshold: 3,
+            },
+        },
+    )?;
+    let disabled_relation =
+        H::upsert_relation(&repo, &disabled_relation, ts("2026-01-01T00:00:00Z")?).await?;
+    let enabled_relation =
+        H::upsert_relation(&repo, &enabled_relation, ts("2026-01-01T00:00:00Z")?).await?;
+
+    let disabled_subject = SubjectRef::new("account", format!("{}_disabled_first", H::BACKEND))?;
+    let enabled_subject = SubjectRef::new("account", format!("{}_enabled_second", H::BACKEND))?;
+    let disabled = H::apply(
+        &repo,
+        &ApplyKeepsake::new(
+            disabled_subject.clone(),
+            disabled_relation.id,
+            ts("2026-01-01T00:02:00Z")?,
+            context()?,
+        ),
+    )
+    .await?;
+    let enabled = H::apply(
+        &repo,
+        &ApplyKeepsake::new(
+            enabled_subject.clone(),
+            enabled_relation.id,
+            ts("2026-01-01T00:02:00Z")?,
+            context()?,
+        ),
+    )
+    .await?;
+    assert!(
+        H::set_relation_enabled(
+            &repo,
+            disabled_relation.id,
+            false,
+            ts("2026-01-01T00:03:00Z")?,
+        )
+        .await?
+    );
+    for keepsake_id in [disabled.keepsake.id(), enabled.keepsake.id()] {
+        H::upsert_counter_projection(&repo, keepsake_id, "steps", 3, ts("2026-01-01T00:04:00Z")?)
+            .await?;
+    }
+
+    assert_eq!(
+        H::expire_due_fulfilled(&repo, ts("2026-01-01T00:05:00Z")?, 1).await?,
+        1
+    );
+    assert_eq!(
+        H::active_for_subject(&repo, &disabled_subject).await?.len(),
+        1
+    );
+    assert!(
+        H::active_for_subject(&repo, &enabled_subject)
+            .await?
+            .is_empty()
     );
     Ok(())
 }
