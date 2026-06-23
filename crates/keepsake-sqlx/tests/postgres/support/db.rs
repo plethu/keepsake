@@ -13,6 +13,7 @@ pub async fn reset_database(pool: &PgPool) -> TestResult<()> {
         truncate table
             keepsake_audit_context_attributes,
             keepsake_audit_events,
+            keepsake_fulfillment_checklist,
             keepsake_fulfillment_counters,
             keepsakes,
             keepsake_relation_definitions

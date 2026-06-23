@@ -1,9 +1,12 @@
-use keepsake::{ApplyKeepsake, Keepsake, RelationDefinition, RelationId, RevokeKeepsake};
+use keepsake::{
+    ApplyKeepsake, Keepsake, KeepsakeId, RelationDefinition, RelationId, RevokeBySubject,
+    RevokeKeepsake, SubjectRef,
+};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use super::audit::record_audit_event_tx;
-use super::support::{apply_event, revoke_event};
+use super::support::{apply_event, revoke_by_subject_event, revoke_event};
 use super::{
     AppliedKeepsake, AppliedKeepsakeRow, AppliedKeepsakeWriteRow, KeepsakeRepository,
     RelationCache, RelationRow, RepositoryError, RepositoryResult,
@@ -92,6 +95,55 @@ where
         tx.commit().await?;
         Ok(revoked.is_some())
     }
+
+    /// Revokes the active keepsake for a subject and relation pair.
+    ///
+    /// Returns the revoked keepsake id, or `None` when no active keepsake exists
+    /// for the pair. The active uniqueness invariant guarantees at most one match.
+    pub async fn revoke_by_subject(
+        &self,
+        command: &RevokeBySubject,
+    ) -> RepositoryResult<Option<KeepsakeId>> {
+        command.subject.validate()?;
+        command.context.validate()?;
+
+        let mut tx = self.pool.begin().await?;
+        let revoked =
+            revoke_by_subject_tx(&mut tx, &command.subject, command.relation_id, command.at)
+                .await?;
+        let revoked_id = revoked.as_ref().map(Keepsake::id);
+        if let Some(keepsake) = &revoked {
+            let event = revoke_by_subject_event(command, keepsake);
+            record_audit_event_tx(&mut tx, &event).await?;
+        }
+        tx.commit().await?;
+        Ok(revoked_id)
+    }
+}
+
+async fn revoke_by_subject_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    subject: &SubjectRef,
+    relation_id: RelationId,
+    at: chrono::DateTime<chrono::Utc>,
+) -> RepositoryResult<Option<Keepsake>> {
+    let row = sqlx::query_as::<_, AppliedKeepsakeRow>(
+        r"
+        update keepsakes
+        set state = 'revoked', revoked_at = $4, updated_at = $4
+        where subject_kind = $1 and subject_id = $2 and relation_id = $3 and state = 'applied'
+        returning id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
+            expires_at, fulfilled_at, revoked_at, metadata
+        ",
+    )
+    .bind(&subject.kind)
+    .bind(&subject.id)
+    .bind(relation_id)
+    .bind(at)
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    row.map(AppliedKeepsakeRow::try_into_keepsake).transpose()
 }
 
 async fn revoke_tx(

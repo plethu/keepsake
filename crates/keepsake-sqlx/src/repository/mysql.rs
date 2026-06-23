@@ -3,20 +3,20 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use keepsake::{
     ActiveRelation, ActiveRelationSource, ApplyKeepsake, AuditDecision, AuditEvent, ExpiryPolicy,
-    FulfillmentSnapshot, Keepsake, KeepsakeRecord, RelationDefinition, RelationId, RelationKey,
-    RelationSpec, RevokeKeepsake, SubjectRef,
+    FulfillmentSnapshot, Keepsake, KeepsakeId, KeepsakeRecord, RelationDefinition, RelationId,
+    RelationKey, RelationSpec, RevokeBySubject, RevokeKeepsake, SubjectRef,
 };
 use sqlx::{MySql, Row, Transaction};
 use uuid::Uuid;
 
 use super::support::{
     AuditEventParts, apply_event, audit_event_record, expires_at, parse_state, parse_uuid,
-    revoke_event,
+    revoke_by_subject_event, revoke_event,
 };
 use super::{
     AppliedKeepsake, AuditCursor, AuditEventRecord, FulfilledExpiryCandidate, MembershipCursor,
-    MySqlKeepsakeRepository, RelationCache, RepositoryError, RepositoryResult, TimedExpiryCandidate,
-    validate_limit,
+    MySqlKeepsakeRepository, RelationCache, RepositoryError, RepositoryResult,
+    TimedExpiryCandidate, validate_limit,
 };
 
 impl<C> MySqlKeepsakeRepository<C>
@@ -292,6 +292,29 @@ where
         Ok(revoked.is_some())
     }
 
+    /// Revokes the active keepsake for a subject and relation pair.
+    ///
+    /// Returns the revoked keepsake id, or `None` when no active keepsake exists
+    /// for the pair. The active uniqueness invariant guarantees at most one match.
+    pub async fn revoke_by_subject(
+        &self,
+        command: &RevokeBySubject,
+    ) -> RepositoryResult<Option<KeepsakeId>> {
+        command.subject.validate()?;
+        command.context.validate()?;
+
+        let mut tx = self.pool.begin().await?;
+        let revoked =
+            revoke_by_subject_tx(&mut tx, &command.subject, command.relation_id, command.at)
+                .await?;
+        let revoked_id = revoked.as_ref().map(Keepsake::id);
+        if let Some(keepsake) = &revoked {
+            record_audit_event_tx(&mut tx, &revoke_by_subject_event(command, keepsake)).await?;
+        }
+        tx.commit().await?;
+        Ok(revoked_id)
+    }
+
     /// Appends an explicit audit event without mutating lifecycle state.
     pub async fn append_audit_event(&self, event: &AuditEvent) -> RepositoryResult<i64> {
         event.subject.validate()?;
@@ -503,23 +526,16 @@ where
         rows.iter().map(timed_expiry_candidate_from_row).collect()
     }
 
-    /// Reads the persisted fulfillment counter snapshot for a keepsake.
+    /// Reads the persisted fulfillment snapshot (counters and checklist) for a keepsake.
     #[cfg(feature = "fulfillment-counters")]
     pub async fn fulfillment_snapshot(
         &self,
         keepsake_id: Uuid,
     ) -> RepositoryResult<FulfillmentSnapshot> {
-        let rows = sqlx::query(
-            r"
-            select `key`, value
-            from keepsake_fulfillment_counters
-            where keepsake_id = ?
-            ",
-        )
-        .bind(keepsake_id.to_string())
-        .fetch_all(&self.pool)
-        .await?;
-        counters_from_rows(&rows)
+        let mut tx = self.pool.begin().await?;
+        let snapshot = fulfillment_snapshot_tx(&mut tx, keepsake_id).await?;
+        tx.commit().await?;
+        Ok(snapshot)
     }
 
     /// Lists fulfillment expiry candidates in stable batch order.
@@ -638,6 +654,80 @@ where
         .bind(keepsake_id.to_string())
         .bind(key)
         .bind(value)
+        .bind(naive_timestamp(observed_at))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Atomically adds `delta` to a fulfillment counter and returns the new value.
+    ///
+    /// Unlike [`upsert_counter_projection`](Self::upsert_counter_projection), the
+    /// increment is computed in the database, so concurrent writers cannot lose
+    /// updates to a read-modify-write race.
+    #[cfg(feature = "fulfillment-counters")]
+    pub async fn increment_counter_projection(
+        &self,
+        keepsake_id: Uuid,
+        key: &str,
+        delta: i64,
+        observed_at: DateTime<Utc>,
+    ) -> RepositoryResult<i64> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            r"
+            insert into keepsake_fulfillment_counters
+                (keepsake_id, `key`, value, observed_at)
+            values (?, ?, ?, ?)
+            on duplicate key update
+                value = value + values(value),
+                observed_at = values(observed_at)
+            ",
+        )
+        .bind(keepsake_id.to_string())
+        .bind(key)
+        .bind(delta)
+        .bind(naive_timestamp(observed_at))
+        .execute(&mut *tx)
+        .await?;
+        let value: i64 = sqlx::query(
+            r"
+            select value
+            from keepsake_fulfillment_counters
+            where keepsake_id = ? and `key` = ?
+            ",
+        )
+        .bind(keepsake_id.to_string())
+        .bind(key)
+        .fetch_one(&mut *tx)
+        .await?
+        .try_get("value")?;
+        tx.commit().await?;
+        Ok(value)
+    }
+
+    /// Upserts a checklist item completion projection.
+    #[cfg(feature = "fulfillment-counters")]
+    pub async fn upsert_checklist_projection(
+        &self,
+        keepsake_id: Uuid,
+        item: &str,
+        complete: bool,
+        observed_at: DateTime<Utc>,
+    ) -> RepositoryResult<()> {
+        sqlx::query(
+            r"
+            insert into keepsake_fulfillment_checklist
+                (keepsake_id, item, complete, observed_at)
+            values (?, ?, ?, ?)
+            on duplicate key update
+                complete = values(complete),
+                observed_at = values(observed_at)
+            ",
+        )
+        .bind(keepsake_id.to_string())
+        .bind(item)
+        .bind(i64::from(complete))
         .bind(naive_timestamp(observed_at))
         .execute(&self.pool)
         .await?;
@@ -859,6 +949,31 @@ async fn revoke_tx(
     keepsake_by_id_tx(tx, keepsake.id()).await
 }
 
+async fn revoke_by_subject_tx(
+    tx: &mut Transaction<'_, MySql>,
+    subject: &SubjectRef,
+    relation_id: RelationId,
+    at: DateTime<Utc>,
+) -> RepositoryResult<Option<Keepsake>> {
+    let row = sqlx::query(
+        r"
+        select id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
+            expires_at, fulfilled_at, revoked_at, metadata
+        from keepsakes
+        where subject_kind = ? and subject_id = ? and relation_id = ? and state = 'applied'
+        ",
+    )
+    .bind(&subject.kind)
+    .bind(&subject.id)
+    .bind(relation_id.to_string())
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(keepsake) = row.as_ref().map(keepsake_from_row).transpose()? else {
+        return Ok(None);
+    };
+    revoke_tx(tx, keepsake.id(), at).await
+}
+
 async fn active_relation_rows_for_subject(
     pool: &sqlx::MySqlPool,
     subject: &SubjectRef,
@@ -908,7 +1023,7 @@ async fn fulfillment_snapshot_tx(
     tx: &mut Transaction<'_, MySql>,
     keepsake_id: Uuid,
 ) -> RepositoryResult<FulfillmentSnapshot> {
-    let rows = sqlx::query(
+    let counter_rows = sqlx::query(
         r"
         select `key`, value
         from keepsake_fulfillment_counters
@@ -918,7 +1033,17 @@ async fn fulfillment_snapshot_tx(
     .bind(keepsake_id.to_string())
     .fetch_all(&mut **tx)
     .await?;
-    counters_from_rows(&rows)
+    let checklist_rows = sqlx::query(
+        r"
+        select item, complete
+        from keepsake_fulfillment_checklist
+        where keepsake_id = ?
+        ",
+    )
+    .bind(keepsake_id.to_string())
+    .fetch_all(&mut **tx)
+    .await?;
+    snapshot_from_rows(&counter_rows, &checklist_rows)
 }
 
 fn relation_from_row(row: &sqlx::mysql::MySqlRow) -> RepositoryResult<RelationDefinition> {
@@ -996,14 +1121,24 @@ fn fulfilled_expiry_candidate_from_row(
 }
 
 #[cfg(feature = "fulfillment-counters")]
-fn counters_from_rows(rows: &[sqlx::mysql::MySqlRow]) -> RepositoryResult<FulfillmentSnapshot> {
+fn snapshot_from_rows(
+    counter_rows: &[sqlx::mysql::MySqlRow],
+    checklist_rows: &[sqlx::mysql::MySqlRow],
+) -> RepositoryResult<FulfillmentSnapshot> {
     let mut counters = BTreeMap::new();
-    for row in rows {
+    for row in counter_rows {
         counters.insert(row.try_get("key")?, row.try_get("value")?);
+    }
+    let mut checklist = BTreeMap::new();
+    for row in checklist_rows {
+        checklist.insert(
+            row.try_get("item")?,
+            row.try_get::<i64, _>("complete")? != 0,
+        );
     }
     Ok(FulfillmentSnapshot {
         counters,
-        checklist: BTreeMap::new(),
+        checklist,
     })
 }
 

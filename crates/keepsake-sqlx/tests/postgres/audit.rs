@@ -112,7 +112,9 @@ async fn audit_events_read_paginates_in_order() -> TestResult<()> {
         vec![AuditEventType::Revoke]
     );
 
-    let by_relation = repo.audit_events_for_relation(relation.id, None, 10).await?;
+    let by_relation = repo
+        .audit_events_for_relation(relation.id, None, 10)
+        .await?;
     assert_eq!(by_relation.len(), 2);
     Ok(())
 }

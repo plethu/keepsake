@@ -10,6 +10,15 @@
   instead of one statement per attribute.
 - Indexed the fulfillment expiry sweep: partial indexes on Postgres and SQLite,
   and a stored generated column plus index on MySQL.
+- Added `RevokeBySubject` and `revoke_by_subject`, revoking the active keepsake
+  for a `(subject, relation)` pair and returning the revoked keepsake id.
+- Added `increment_counter_projection`, an atomic database-side counter
+  increment that returns the new value, avoiding the read-modify-write race in
+  `upsert_counter_projection`.
+- Persisted checklist fulfillment state via a new `keepsake_fulfillment_checklist`
+  table and `upsert_checklist_projection`, so `when_fulfilled` policies with a
+  `checklist_complete` rule are evaluated by the expiry sweep instead of only in
+  application code.
 
 ## 0.5.1 - 2026-06-20
 

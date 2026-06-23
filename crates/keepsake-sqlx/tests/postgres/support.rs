@@ -7,7 +7,7 @@ pub use keepsake::{
     ActiveRelationSource, ActorRef, ApplyKeepsake, AuditContext, AuditDecision, AuditEvent,
     AuditEventType, CommandContext, DynActiveRelationSource, ExpiryCause, ExpiryPolicy,
     FulfillmentPolicy, FulfillmentSnapshot, LifecycleState, RelationDefinition, RelationId,
-    RelationKey, RelationSpec, RevokeKeepsake, StaticRelationKey, SubjectRef,
+    RelationKey, RelationSpec, RevokeBySubject, RevokeKeepsake, StaticRelationKey, SubjectRef,
 };
 #[cfg(feature = "cache")]
 pub use keepsake_sqlx::LocalRelationCacheConfig;

@@ -79,7 +79,7 @@ pub use audit::{
 };
 #[cfg(any(test, feature = "test"))]
 pub use audit::{InMemoryAuditError, InMemoryAuditSink};
-pub use command::{ApplyKeepsake, CommandContext, RevokeKeepsake};
+pub use command::{ApplyKeepsake, CommandContext, RevokeBySubject, RevokeKeepsake};
 pub use error::{KeepsakeError, Result};
 pub use evaluation::{DecisionKind, EvaluationDecision, NoopReason, TransitionReason, evaluate};
 pub use model::{

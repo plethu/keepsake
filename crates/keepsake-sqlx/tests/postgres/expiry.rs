@@ -392,3 +392,142 @@ async fn due_fulfilled_expiry_returns_only_when_fulfilled_keepsakes() -> TestRes
     );
     Ok(())
 }
+
+#[cfg(feature = "fulfillment-counters")]
+async fn checklist_relation(
+    repo: &KeepsakeRepository,
+    key_prefix: &str,
+) -> TestResult<RelationDefinition> {
+    let relation = RelationDefinition::new(
+        Uuid::now_v7(),
+        RelationKey::new("tag", unique_key(key_prefix))?,
+        true,
+        ExpiryPolicy::WhenFulfilled {
+            policy: FulfillmentPolicy::ChecklistComplete {
+                list_key: "onboarding.".to_owned(),
+            },
+        },
+    )?;
+    upsert_relation(repo, &relation).await
+}
+
+#[cfg(feature = "fulfillment-counters")]
+#[tokio::test]
+#[ignore = "requires docker postgres; run `make test-db`"]
+async fn increment_counter_projection_is_atomic_and_returns_value() -> TestResult<()> {
+    let repo = repo().await?;
+    let relation = fulfilled_relation(&repo, "increment-counter").await?;
+    let subject = SubjectRef::new("user", format!("increment_counter_{}", Uuid::now_v7()))?;
+    let applied = apply_at(&repo, &subject, relation.id, "2026-01-01T00:00:00Z").await?;
+    let keepsake_id = applied.keepsake.id();
+
+    assert_eq!(
+        repo.increment_counter_projection(keepsake_id, "steps", 2, ts("2026-01-02T00:00:00Z")?)
+            .await?,
+        2
+    );
+    assert_eq!(
+        repo.increment_counter_projection(keepsake_id, "steps", 3, ts("2026-01-02T00:01:00Z")?)
+            .await?,
+        5
+    );
+    assert_eq!(
+        repo.fulfillment_snapshot(keepsake_id).await?,
+        FulfillmentSnapshot::empty().with_counter("steps", 5)
+    );
+    Ok(())
+}
+
+#[cfg(feature = "fulfillment-counters")]
+#[tokio::test]
+#[ignore = "requires docker postgres; run `make test-db`"]
+async fn checklist_fulfillment_persists_and_expires() -> TestResult<()> {
+    let repo = repo().await?;
+    let relation = checklist_relation(&repo, "checklist-fulfill").await?;
+    let subject = SubjectRef::new("user", format!("checklist_{}", Uuid::now_v7()))?;
+    let applied = apply_at(&repo, &subject, relation.id, "2026-01-01T00:00:00Z").await?;
+    let keepsake_id = applied.keepsake.id();
+
+    repo.upsert_checklist_projection(
+        keepsake_id,
+        "onboarding.profile",
+        true,
+        ts("2026-01-02T00:00:00Z")?,
+    )
+    .await?;
+    repo.upsert_checklist_projection(
+        keepsake_id,
+        "onboarding.payment",
+        false,
+        ts("2026-01-02T00:00:00Z")?,
+    )
+    .await?;
+    assert_eq!(
+        repo.fulfillment_snapshot(keepsake_id).await?,
+        FulfillmentSnapshot::empty()
+            .with_check("onboarding.profile", true)
+            .with_check("onboarding.payment", false)
+    );
+    assert_eq!(
+        repo.expire_due_fulfilled(ts("2026-01-02T00:01:00Z")?, 10)
+            .await?,
+        0
+    );
+
+    repo.upsert_checklist_projection(
+        keepsake_id,
+        "onboarding.payment",
+        true,
+        ts("2026-01-02T00:02:00Z")?,
+    )
+    .await?;
+    assert_eq!(
+        repo.expire_due_fulfilled(ts("2026-01-02T00:03:00Z")?, 10)
+            .await?,
+        1
+    );
+    assert_eq!(stored_state(keepsake_id).await?, "expired");
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires docker postgres; run `make test-db`"]
+async fn revoke_by_subject_revokes_active_keepsake() -> TestResult<()> {
+    let repo = repo().await?;
+    let relation = timed_relation(&repo, "revoke-by-subject", "2026-02-01T00:00:00Z").await?;
+    let subject = SubjectRef::new("user", format!("revoke_by_subject_{}", Uuid::now_v7()))?;
+    let applied = apply_at(&repo, &subject, relation.id, "2026-01-01T00:00:00Z").await?;
+
+    let revoked = repo
+        .revoke_by_subject(&RevokeBySubject::new(
+            subject.clone(),
+            relation.id,
+            ts("2026-01-01T00:05:00Z")?,
+            test_context("moderator")?,
+        ))
+        .await?;
+    assert_eq!(revoked, Some(applied.keepsake.id()));
+    assert!(repo.active_for_subject(&subject).await?.is_empty());
+
+    let again = repo
+        .revoke_by_subject(&RevokeBySubject::new(
+            subject,
+            relation.id,
+            ts("2026-01-01T00:06:00Z")?,
+            test_context("moderator")?,
+        ))
+        .await?;
+    assert_eq!(again, None);
+
+    let events = repo
+        .audit_events_for_keepsake(applied.keepsake.id(), None, 10)
+        .await?;
+    assert_eq!(
+        events
+            .iter()
+            .map(|record| record.event.event_type)
+            .collect::<Vec<_>>(),
+        vec![AuditEventType::Apply, AuditEventType::Revoke]
+    );
+    Ok(())
+}

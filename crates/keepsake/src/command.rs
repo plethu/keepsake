@@ -127,6 +127,54 @@ impl RevokeKeepsake {
     }
 }
 
+/// Revokes the active keepsake for a subject and relation pair.
+///
+/// This addresses callers that know the `(subject, relation)` pair but not the
+/// keepsake id, which is the natural shape for relation-oriented access checks.
+/// The active uniqueness invariant guarantees at most one matching keepsake.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RevokeBySubject {
+    /// Subject holding the relation.
+    pub subject: SubjectRef,
+    /// Relation definition id.
+    pub relation_id: RelationId,
+    /// Command timestamp.
+    pub at: DateTime<Utc>,
+    /// Audit context.
+    pub context: CommandContext,
+}
+
+impl RevokeBySubject {
+    /// Creates a revoke-by-subject command.
+    #[must_use]
+    pub const fn new(
+        subject: SubjectRef,
+        relation_id: RelationId,
+        at: DateTime<Utc>,
+        context: CommandContext,
+    ) -> Self {
+        Self {
+            subject,
+            relation_id,
+            at,
+            context,
+        }
+    }
+
+    /// Creates a revoke-by-subject command for a typed relation spec.
+    #[must_use]
+    pub const fn for_spec<Spec>(
+        subject: SubjectRef,
+        at: DateTime<Utc>,
+        context: CommandContext,
+    ) -> Self
+    where
+        Spec: RelationSpec,
+    {
+        Self::new(subject, Spec::ID, at, context)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
@@ -197,6 +245,23 @@ mod tests {
         assert_eq!(revoke.keepsake_id, apply.id);
         assert_eq!(revoke.at, at);
         assert_eq!(revoke.context, apply.context);
+        Ok(())
+    }
+
+    #[test]
+    fn revoke_by_subject_constructors_set_command_fields() -> crate::Result<()> {
+        let at = Utc::now();
+        let subject = SubjectRef::new("account", "acct_123")?;
+        let context = CommandContext::new(ActorRef::new("user", "moderator")?);
+
+        let by_id = RevokeBySubject::new(subject.clone(), Uuid::nil(), at, context.clone());
+        assert_eq!(by_id.subject, subject);
+        assert_eq!(by_id.relation_id, Uuid::nil());
+        assert_eq!(by_id.at, at);
+        assert_eq!(by_id.context, context);
+
+        let by_spec = RevokeBySubject::for_spec::<TrustedTag>(subject, at, context);
+        assert_eq!(by_spec.relation_id, TrustedTag::ID);
         Ok(())
     }
 }

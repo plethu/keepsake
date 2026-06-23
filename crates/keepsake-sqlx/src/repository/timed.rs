@@ -147,6 +147,32 @@ where
             .upsert_counter_projection(keepsake_id, key, value, self.at)
             .await
     }
+
+    /// Atomically increments a fulfillment counter using this view's timestamp.
+    #[cfg(feature = "fulfillment-counters")]
+    pub async fn increment_counter_projection(
+        &self,
+        keepsake_id: Uuid,
+        key: &str,
+        delta: i64,
+    ) -> super::RepositoryResult<i64> {
+        self.repository
+            .increment_counter_projection(keepsake_id, key, delta, self.at)
+            .await
+    }
+
+    /// Upserts a checklist item completion projection using this view's timestamp.
+    #[cfg(feature = "fulfillment-counters")]
+    pub async fn upsert_checklist_projection(
+        &self,
+        keepsake_id: Uuid,
+        item: &str,
+        complete: bool,
+    ) -> super::RepositoryResult<()> {
+        self.repository
+            .upsert_checklist_projection(keepsake_id, item, complete, self.at)
+            .await
+    }
 }
 
 #[cfg(feature = "sqlite")]
@@ -230,6 +256,32 @@ where
             .upsert_counter_projection(keepsake_id, key, value, self.at)
             .await
     }
+
+    /// Atomically increments a fulfillment counter using this view's timestamp.
+    #[cfg(feature = "fulfillment-counters")]
+    pub async fn increment_counter_projection(
+        &self,
+        keepsake_id: Uuid,
+        key: &str,
+        delta: i64,
+    ) -> super::RepositoryResult<i64> {
+        self.repository
+            .increment_counter_projection(keepsake_id, key, delta, self.at)
+            .await
+    }
+
+    /// Upserts a checklist item completion projection using this view's timestamp.
+    #[cfg(feature = "fulfillment-counters")]
+    pub async fn upsert_checklist_projection(
+        &self,
+        keepsake_id: Uuid,
+        item: &str,
+        complete: bool,
+    ) -> super::RepositoryResult<()> {
+        self.repository
+            .upsert_checklist_projection(keepsake_id, item, complete, self.at)
+            .await
+    }
 }
 
 #[cfg(feature = "mysql")]
@@ -311,6 +363,32 @@ where
     ) -> super::RepositoryResult<()> {
         self.repository
             .upsert_counter_projection(keepsake_id, key, value, self.at)
+            .await
+    }
+
+    /// Atomically increments a fulfillment counter using this view's timestamp.
+    #[cfg(feature = "fulfillment-counters")]
+    pub async fn increment_counter_projection(
+        &self,
+        keepsake_id: Uuid,
+        key: &str,
+        delta: i64,
+    ) -> super::RepositoryResult<i64> {
+        self.repository
+            .increment_counter_projection(keepsake_id, key, delta, self.at)
+            .await
+    }
+
+    /// Upserts a checklist item completion projection using this view's timestamp.
+    #[cfg(feature = "fulfillment-counters")]
+    pub async fn upsert_checklist_projection(
+        &self,
+        keepsake_id: Uuid,
+        item: &str,
+        complete: bool,
+    ) -> super::RepositoryResult<()> {
+        self.repository
+            .upsert_checklist_projection(keepsake_id, item, complete, self.at)
             .await
     }
 }

@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use keepsake::{
     ActorRef, ApplyKeepsake, AuditContext, AuditDecision, AuditEvent, AuditEventType,
-    CommandContext, Keepsake, LifecycleState, RevokeKeepsake, SubjectRef,
+    CommandContext, Keepsake, LifecycleState, RevokeBySubject, RevokeKeepsake, SubjectRef,
 };
 use uuid::Uuid;
 
@@ -133,16 +133,37 @@ pub(super) fn audit_event_record(parts: AuditEventParts) -> RepositoryResult<Aud
     })
 }
 
-/// Builds the audit event for a revoke.
-pub(super) fn revoke_event(command: &RevokeKeepsake, keepsake: &Keepsake) -> AuditEvent {
+/// Builds the audit event for a revoke against the keepsake it resolved to.
+///
+/// Both the id-addressed and subject-addressed revoke commands resolve to a
+/// single keepsake, so the event is constructed from the resolved row plus the
+/// command's timestamp and context.
+fn revoke_audit_event(
+    at: DateTime<Utc>,
+    context: &CommandContext,
+    keepsake: &Keepsake,
+) -> AuditEvent {
     AuditEvent {
         event_type: AuditEventType::Revoke,
-        at: command.at,
-        actor: command.context.actor.clone(),
+        at,
+        actor: context.actor.clone(),
         keepsake_id: keepsake.id(),
         subject: keepsake.subject().clone(),
         relation_id: keepsake.relation_id(),
         decision: AuditDecision::Revoked,
-        context: audit_context_from_command(&command.context),
+        context: audit_context_from_command(context),
     }
+}
+
+/// Builds the audit event for an id-addressed revoke.
+pub(super) fn revoke_event(command: &RevokeKeepsake, keepsake: &Keepsake) -> AuditEvent {
+    revoke_audit_event(command.at, &command.context, keepsake)
+}
+
+/// Builds the audit event for a subject-addressed revoke.
+pub(super) fn revoke_by_subject_event(
+    command: &RevokeBySubject,
+    keepsake: &Keepsake,
+) -> AuditEvent {
+    revoke_audit_event(command.at, &command.context, keepsake)
 }

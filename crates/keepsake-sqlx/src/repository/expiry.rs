@@ -42,10 +42,7 @@ where
         Ok(rows)
     }
 
-    /// Reads the persisted fulfillment counter snapshot for a keepsake.
-    ///
-    /// Checklist state is not persisted by this adapter yet, so snapshots always
-    /// contain an empty checklist map.
+    /// Reads the persisted fulfillment snapshot (counters and checklist) for a keepsake.
     #[cfg(feature = "fulfillment-counters")]
     pub async fn fulfillment_snapshot(
         &self,
@@ -64,9 +61,22 @@ where
         .into_iter()
         .collect::<BTreeMap<_, _>>();
 
+        let checklist = sqlx::query_as::<_, (String, bool)>(
+            r"
+            select item, complete
+            from keepsake_fulfillment_checklist
+            where keepsake_id = $1
+            ",
+        )
+        .bind(keepsake_id)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
+
         Ok(FulfillmentSnapshot {
             counters,
-            checklist: BTreeMap::new(),
+            checklist,
         })
     }
 
@@ -93,11 +103,7 @@ where
         Ok(rows)
     }
 
-    /// Expires a stable batch whose persisted counter snapshots satisfy fulfillment policy.
-    ///
-    /// `ChecklistComplete` policies cannot be expired via this method because
-    /// checklist state is not persisted; callers using `ChecklistComplete` must
-    /// evaluate fulfillment in application code and call revoke directly.
+    /// Expires a stable batch whose persisted fulfillment snapshots satisfy policy.
     #[cfg(feature = "fulfillment-counters")]
     pub async fn expire_due_fulfilled(
         &self,
@@ -135,6 +141,24 @@ where
                 .insert(key, value);
         }
 
+        let checklist_rows = sqlx::query_as::<_, (Uuid, String, bool)>(
+            r"
+            select keepsake_id, item, complete
+            from keepsake_fulfillment_checklist
+            where keepsake_id = any($1)
+            ",
+        )
+        .bind(&candidate_ids)
+        .fetch_all(&mut *tx)
+        .await?;
+        let mut checklist_by_keepsake = BTreeMap::<Uuid, BTreeMap<String, bool>>::new();
+        for (keepsake_id, item, complete) in checklist_rows {
+            checklist_by_keepsake
+                .entry(keepsake_id)
+                .or_default()
+                .insert(item, complete);
+        }
+
         let satisfied_ids = candidates
             .into_iter()
             .filter_map(|candidate| {
@@ -145,7 +169,9 @@ where
                     counters: counters_by_keepsake
                         .remove(&candidate.keepsake_id)
                         .unwrap_or_default(),
-                    checklist: BTreeMap::new(),
+                    checklist: checklist_by_keepsake
+                        .remove(&candidate.keepsake_id)
+                        .unwrap_or_default(),
                 };
                 policy
                     .is_fulfilled(&snapshot)
@@ -236,6 +262,67 @@ where
         .bind(keepsake_id)
         .bind(key)
         .bind(value)
+        .bind(observed_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Atomically adds `delta` to a fulfillment counter and returns the new value.
+    ///
+    /// Unlike [`upsert_counter_projection`](Self::upsert_counter_projection), the
+    /// increment is computed in the database, so concurrent writers cannot lose
+    /// updates to a read-modify-write race.
+    #[cfg(feature = "fulfillment-counters")]
+    pub async fn increment_counter_projection(
+        &self,
+        keepsake_id: Uuid,
+        key: &str,
+        delta: i64,
+        observed_at: DateTime<Utc>,
+    ) -> RepositoryResult<i64> {
+        let (value,) = sqlx::query_as::<_, (i64,)>(
+            r"
+            insert into keepsake_fulfillment_counters
+                (keepsake_id, key, value, observed_at)
+            values ($1, $2, $3, $4)
+            on conflict (keepsake_id, key) do update set
+                value = keepsake_fulfillment_counters.value + excluded.value,
+                observed_at = excluded.observed_at
+            returning value
+            ",
+        )
+        .bind(keepsake_id)
+        .bind(key)
+        .bind(delta)
+        .bind(observed_at)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(value)
+    }
+
+    /// Upserts a checklist item completion projection.
+    #[cfg(feature = "fulfillment-counters")]
+    pub async fn upsert_checklist_projection(
+        &self,
+        keepsake_id: Uuid,
+        item: &str,
+        complete: bool,
+        observed_at: DateTime<Utc>,
+    ) -> RepositoryResult<()> {
+        sqlx::query(
+            r"
+            insert into keepsake_fulfillment_checklist
+                (keepsake_id, item, complete, observed_at)
+            values ($1, $2, $3, $4)
+            on conflict (keepsake_id, item) do update set
+                complete = excluded.complete,
+                observed_at = excluded.observed_at
+            ",
+        )
+        .bind(keepsake_id)
+        .bind(item)
+        .bind(complete)
         .bind(observed_at)
         .execute(&self.pool)
         .await?;
