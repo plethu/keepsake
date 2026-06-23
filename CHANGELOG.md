@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Added `audit_events_for_keepsake` and `audit_events_for_relation` read helpers
+  to the SQLx adapter (Postgres, MySQL, SQLite) with keyset pagination via
+  `AuditCursor`, returning `AuditEventRecord`s with hydrated context attributes.
+- Added `AuditEventType::from_storage_label` as the inverse of `as_str`.
+- Batched audit context attribute writes into a single statement per event
+  instead of one statement per attribute.
+- Indexed the fulfillment expiry sweep: partial indexes on Postgres and SQLite,
+  and a stored generated column plus index on MySQL.
+
 ## 0.5.1 - 2026-06-20
 
 - Fixed MySQL lifecycle check constraints so the SQLx migration applies on

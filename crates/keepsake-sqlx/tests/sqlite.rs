@@ -223,6 +223,75 @@ async fn sqlite_apply_persists_multiple_audit_context_attributes() -> TestResult
 }
 
 #[tokio::test]
+async fn sqlite_audit_event_read_paginates_in_order() -> TestResult<()> {
+    use keepsake::{
+        ActorRef, ApplyKeepsake, AuditEventType, CommandContext, RevokeKeepsake, SubjectRef,
+    };
+    use keepsake_sqlx::AuditCursor;
+
+    let (repo, _pool) = SqliteHarness::repo().await?;
+    let relation = upsert_relation::<SqliteHarness>(&repo, ExpiryPolicy::ManualOnly).await?;
+    let subject = SubjectRef::new("account", "sqlite_acct_audit")?;
+    let context = CommandContext::new(ActorRef::new("test", "worker")?)
+        .with_idempotency_key("req-1")
+        .with_metadata("source", "support");
+    let applied = repo
+        .apply(&ApplyKeepsake::new(
+            subject,
+            relation.id,
+            backend_cases::ts("2026-01-01T00:01:00Z")?,
+            context,
+        ))
+        .await?;
+    repo.revoke(&RevokeKeepsake::new(
+        applied.keepsake.id(),
+        backend_cases::ts("2026-01-01T00:02:00Z")?,
+        CommandContext::new(ActorRef::new("test", "worker")?),
+    ))
+    .await?;
+
+    let events = repo
+        .audit_events_for_keepsake(applied.keepsake.id(), None, 10)
+        .await?;
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].event.event_type, AuditEventType::Apply);
+    assert_eq!(events[1].event.event_type, AuditEventType::Revoke);
+    assert_eq!(
+        events[0].event.context.attributes.get("source").cloned(),
+        Some("support".to_owned())
+    );
+    assert_eq!(
+        events[0]
+            .event
+            .context
+            .attributes
+            .get("idempotency_key")
+            .cloned(),
+        Some("req-1".to_owned())
+    );
+    assert!(events[1].event.context.attributes.is_empty());
+
+    let first = repo
+        .audit_events_for_keepsake(applied.keepsake.id(), None, 1)
+        .await?;
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].event.event_type, AuditEventType::Apply);
+    let next = repo
+        .audit_events_for_keepsake(
+            applied.keepsake.id(),
+            Some(&AuditCursor::after(&first[0])),
+            10,
+        )
+        .await?;
+    assert_eq!(next.len(), 1);
+    assert_eq!(next[0].event.event_type, AuditEventType::Revoke);
+
+    let by_relation = repo.audit_events_for_relation(relation.id, None, 10).await?;
+    assert_eq!(by_relation.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
 async fn sqlite_migration_rejects_wrong_backend_marker() -> TestResult<()> {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)

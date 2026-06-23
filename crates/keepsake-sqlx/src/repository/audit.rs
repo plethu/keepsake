@@ -1,7 +1,13 @@
-use keepsake::AuditEvent;
-use sqlx::{Postgres, Transaction};
+use std::collections::BTreeMap;
 
-use super::{KeepsakeRepository, RelationCache, RepositoryResult};
+use keepsake::{AuditEvent, RelationId};
+use sqlx::{Postgres, Transaction};
+use uuid::Uuid;
+
+use super::{
+    AuditCursor, AuditEventRecord, AuditEventRow, KeepsakeRepository, RelationCache,
+    RepositoryResult, validate_limit,
+};
 
 impl<C> KeepsakeRepository<C>
 where
@@ -20,6 +26,92 @@ where
         let audit_event_id = record_audit_event_tx(&mut tx, event).await?;
         tx.commit().await?;
         Ok(audit_event_id)
+    }
+
+    /// Reads audit events for a keepsake in stable `(occurred_at, id)` order.
+    pub async fn audit_events_for_keepsake(
+        &self,
+        keepsake_id: Uuid,
+        after: Option<&AuditCursor>,
+        limit: i64,
+    ) -> RepositoryResult<Vec<AuditEventRecord>> {
+        let limit = validate_limit(limit)?;
+        let rows = sqlx::query_as::<_, AuditEventRow>(
+            r"
+            select id, keepsake_id, relation_id, subject_kind, subject_id, actor_kind, actor_id,
+                event_type, decision, occurred_at
+            from keepsake_audit_events
+            where keepsake_id = $1
+              and ($2::timestamptz is null or (occurred_at, id) > ($2, $3))
+            order by occurred_at, id
+            limit $4
+            ",
+        )
+        .bind(keepsake_id)
+        .bind(after.map(|cursor| cursor.occurred_at))
+        .bind(after.map(|cursor| cursor.id))
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        self.hydrate_audit_records(rows).await
+    }
+
+    /// Reads audit events for a relation in stable `(occurred_at, id)` order.
+    pub async fn audit_events_for_relation(
+        &self,
+        relation_id: RelationId,
+        after: Option<&AuditCursor>,
+        limit: i64,
+    ) -> RepositoryResult<Vec<AuditEventRecord>> {
+        let limit = validate_limit(limit)?;
+        let rows = sqlx::query_as::<_, AuditEventRow>(
+            r"
+            select id, keepsake_id, relation_id, subject_kind, subject_id, actor_kind, actor_id,
+                event_type, decision, occurred_at
+            from keepsake_audit_events
+            where relation_id = $1
+              and ($2::timestamptz is null or (occurred_at, id) > ($2, $3))
+            order by occurred_at, id
+            limit $4
+            ",
+        )
+        .bind(relation_id)
+        .bind(after.map(|cursor| cursor.occurred_at))
+        .bind(after.map(|cursor| cursor.id))
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        self.hydrate_audit_records(rows).await
+    }
+
+    async fn hydrate_audit_records(
+        &self,
+        rows: Vec<AuditEventRow>,
+    ) -> RepositoryResult<Vec<AuditEventRecord>> {
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids = rows.iter().map(|row| row.id).collect::<Vec<i64>>();
+        let attribute_rows = sqlx::query_as::<_, (i64, String, String)>(
+            r"
+            select audit_event_id, key, value
+            from keepsake_audit_context_attributes
+            where audit_event_id = any($1)
+            ",
+        )
+        .bind(&ids)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut attributes = BTreeMap::<i64, BTreeMap<String, String>>::new();
+        for (event_id, key, value) in attribute_rows {
+            attributes.entry(event_id).or_default().insert(key, value);
+        }
+        rows.into_iter()
+            .map(|row| {
+                let id = row.id;
+                row.into_record(attributes.remove(&id).unwrap_or_default())
+            })
+            .collect()
     }
 }
 

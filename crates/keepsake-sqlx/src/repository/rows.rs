@@ -2,14 +2,14 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use keepsake::{
-    ActiveRelation, ExpiryPolicy, Keepsake, KeepsakeRecord, RelationDefinition, RelationKey,
-    SubjectRef,
+    ActiveRelation, AuditDecision, ExpiryPolicy, Keepsake, KeepsakeRecord, RelationDefinition,
+    RelationKey, SubjectRef,
 };
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use super::support::parse_state;
-use super::RepositoryResult;
+use super::support::{AuditEventParts, audit_event_record, parse_state};
+use super::{AuditEventRecord, RepositoryResult};
 
 #[derive(Debug, FromRow)]
 pub(super) struct RelationRow {
@@ -144,6 +144,42 @@ impl ActiveRelationRow {
             relation_expiry,
         )?;
         Ok(ActiveRelation::new(keepsake, relation)?)
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub(super) struct AuditEventRow {
+    pub(super) id: i64,
+    keepsake_id: Uuid,
+    relation_id: Uuid,
+    subject_kind: String,
+    subject_id: String,
+    actor_kind: String,
+    actor_id: String,
+    event_type: String,
+    decision: serde_json::Value,
+    occurred_at: DateTime<Utc>,
+}
+
+impl AuditEventRow {
+    pub(super) fn into_record(
+        self,
+        attributes: BTreeMap<String, String>,
+    ) -> RepositoryResult<AuditEventRecord> {
+        let decision = serde_json::from_value::<AuditDecision>(self.decision)?;
+        audit_event_record(AuditEventParts {
+            id: self.id,
+            event_type: self.event_type,
+            at: self.occurred_at,
+            actor_kind: self.actor_kind,
+            actor_id: self.actor_id,
+            keepsake_id: self.keepsake_id,
+            subject_kind: self.subject_kind,
+            subject_id: self.subject_id,
+            relation_id: self.relation_id,
+            decision,
+            attributes,
+        })
     }
 }
 

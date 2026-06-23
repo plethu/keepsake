@@ -2,17 +2,21 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use keepsake::{
-    ActiveRelation, ActiveRelationSource, ApplyKeepsake, AuditEvent, ExpiryPolicy,
+    ActiveRelation, ActiveRelationSource, ApplyKeepsake, AuditDecision, AuditEvent, ExpiryPolicy,
     FulfillmentSnapshot, Keepsake, KeepsakeRecord, RelationDefinition, RelationId, RelationKey,
     RelationSpec, RevokeKeepsake, SubjectRef,
 };
 use sqlx::{Row, Sqlite, Transaction};
 use uuid::Uuid;
 
-use super::support::{apply_event, expires_at, parse_state, parse_uuid, revoke_event};
+use super::support::{
+    AuditEventParts, apply_event, audit_event_record, expires_at, parse_state, parse_uuid,
+    revoke_event,
+};
 use super::{
-    AppliedKeepsake, FulfilledExpiryCandidate, MembershipCursor, RelationCache, RepositoryError,
-    RepositoryResult, SqliteKeepsakeRepository, TimedExpiryCandidate, validate_limit,
+    AppliedKeepsake, AuditCursor, AuditEventRecord, FulfilledExpiryCandidate, MembershipCursor,
+    RelationCache, RepositoryError, RepositoryResult, SqliteKeepsakeRepository,
+    TimedExpiryCandidate, validate_limit,
 };
 
 impl<C> SqliteKeepsakeRepository<C>
@@ -290,6 +294,68 @@ where
         let audit_event_id = record_audit_event_tx(&mut tx, event).await?;
         tx.commit().await?;
         Ok(audit_event_id)
+    }
+
+    /// Reads audit events for a keepsake in stable `(occurred_at, id)` order.
+    pub async fn audit_events_for_keepsake(
+        &self,
+        keepsake_id: Uuid,
+        after: Option<&AuditCursor>,
+        limit: i64,
+    ) -> RepositoryResult<Vec<AuditEventRecord>> {
+        let limit = validate_limit(limit)?;
+        let rows = sqlx::query(
+            r"
+            select id, keepsake_id, relation_id, subject_kind, subject_id, actor_kind, actor_id,
+                event_type, decision, occurred_at
+            from keepsake_audit_events
+            where keepsake_id = ?1
+              and (
+                ?2 is null
+                or (occurred_at, id) > (?2, ?3)
+              )
+            order by occurred_at, id
+            limit ?4
+            ",
+        )
+        .bind(keepsake_id.to_string())
+        .bind(after.map(|cursor| format_timestamp(cursor.occurred_at)))
+        .bind(after.map(|cursor| cursor.id))
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        hydrate_audit_records(&self.pool, rows).await
+    }
+
+    /// Reads audit events for a relation in stable `(occurred_at, id)` order.
+    pub async fn audit_events_for_relation(
+        &self,
+        relation_id: RelationId,
+        after: Option<&AuditCursor>,
+        limit: i64,
+    ) -> RepositoryResult<Vec<AuditEventRecord>> {
+        let limit = validate_limit(limit)?;
+        let rows = sqlx::query(
+            r"
+            select id, keepsake_id, relation_id, subject_kind, subject_id, actor_kind, actor_id,
+                event_type, decision, occurred_at
+            from keepsake_audit_events
+            where relation_id = ?1
+              and (
+                ?2 is null
+                or (occurred_at, id) > (?2, ?3)
+              )
+            order by occurred_at, id
+            limit ?4
+            ",
+        )
+        .bind(relation_id.to_string())
+        .bind(after.map(|cursor| format_timestamp(cursor.occurred_at)))
+        .bind(after.map(|cursor| cursor.id))
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        hydrate_audit_records(&self.pool, rows).await
     }
 
     /// Returns active keepsakes for a subject.
@@ -661,6 +727,63 @@ async fn record_audit_event_tx(
     builder.build().execute(&mut **tx).await?;
 
     Ok(audit_event_id)
+}
+
+async fn hydrate_audit_records(
+    pool: &sqlx::SqlitePool,
+    rows: Vec<sqlx::sqlite::SqliteRow>,
+) -> RepositoryResult<Vec<AuditEventRecord>> {
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids = rows
+        .iter()
+        .map(|row| row.try_get::<i64, _>("id"))
+        .collect::<Result<Vec<i64>, _>>()?;
+    let mut attributes = audit_attributes_by_event(pool, &ids).await?;
+    rows.into_iter()
+        .map(|row| {
+            let id = row.try_get::<i64, _>("id")?;
+            let decision = serde_json::from_str::<AuditDecision>(row.try_get("decision")?)?;
+            audit_event_record(AuditEventParts {
+                id,
+                event_type: row.try_get("event_type")?,
+                at: parse_timestamp(row.try_get("occurred_at")?)?,
+                actor_kind: row.try_get("actor_kind")?,
+                actor_id: row.try_get("actor_id")?,
+                keepsake_id: parse_uuid(row.try_get("keepsake_id")?)?,
+                subject_kind: row.try_get("subject_kind")?,
+                subject_id: row.try_get("subject_id")?,
+                relation_id: parse_uuid(row.try_get("relation_id")?)?,
+                decision,
+                attributes: attributes.remove(&id).unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
+async fn audit_attributes_by_event(
+    pool: &sqlx::SqlitePool,
+    ids: &[i64],
+) -> RepositoryResult<BTreeMap<i64, BTreeMap<String, String>>> {
+    let mut builder = sqlx::QueryBuilder::<Sqlite>::new(
+        "select audit_event_id, key, value from keepsake_audit_context_attributes \
+         where audit_event_id in (",
+    );
+    let mut separated = builder.separated(", ");
+    for id in ids {
+        separated.push_bind(id);
+    }
+    builder.push(")");
+    let rows = builder
+        .build_query_as::<(i64, String, String)>()
+        .fetch_all(pool)
+        .await?;
+    let mut attributes = BTreeMap::<i64, BTreeMap<String, String>>::new();
+    for (event_id, key, value) in rows {
+        attributes.entry(event_id).or_default().insert(key, value);
+    }
+    Ok(attributes)
 }
 
 async fn relation_for_update_tx(

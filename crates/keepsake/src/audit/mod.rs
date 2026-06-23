@@ -65,6 +65,22 @@ impl AuditEventType {
             Self::FulfillmentExpiry => "fulfillment_expiry",
         }
     }
+
+    /// Parses a stable storage label back into an event type.
+    ///
+    /// This is the inverse of [`Self::as_str`]; unknown labels return `None` so
+    /// storage adapters can surface a typed decode error.
+    #[must_use]
+    pub fn from_storage_label(label: &str) -> Option<Self> {
+        match label {
+            "apply" => Some(Self::Apply),
+            "duplicate_apply" => Some(Self::DuplicateApply),
+            "revoke" => Some(Self::Revoke),
+            "timed_expiry" => Some(Self::TimedExpiry),
+            "fulfillment_expiry" => Some(Self::FulfillmentExpiry),
+            _ => None,
+        }
+    }
 }
 
 /// Audited lifecycle decision.
@@ -118,5 +134,27 @@ impl AuditSink for NoopAuditSink {
 
     fn record(&self, _event: AuditEvent) -> AuditResult<(), Self::Error> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AuditEventType;
+
+    #[test]
+    fn event_type_storage_label_round_trips() {
+        for event_type in [
+            AuditEventType::Apply,
+            AuditEventType::DuplicateApply,
+            AuditEventType::Revoke,
+            AuditEventType::TimedExpiry,
+            AuditEventType::FulfillmentExpiry,
+        ] {
+            assert_eq!(
+                AuditEventType::from_storage_label(event_type.as_str()),
+                Some(event_type)
+            );
+        }
+        assert_eq!(AuditEventType::from_storage_label("unknown"), None);
     }
 }

@@ -5,19 +5,19 @@
 //! decoding; this module owns the parts of those flows that do not vary by
 //! dialect so they are written and tested once.
 
-use keepsake::{
-    ApplyKeepsake, AuditContext, AuditDecision, AuditEvent, AuditEventType, CommandContext,
-    Keepsake, LifecycleState, RevokeKeepsake,
-};
+use std::collections::BTreeMap;
 
-#[cfg(any(feature = "mysql", feature = "sqlite"))]
 use chrono::{DateTime, Utc};
-#[cfg(any(feature = "mysql", feature = "sqlite"))]
-use keepsake::ExpiryPolicy;
-#[cfg(any(feature = "mysql", feature = "sqlite"))]
+use keepsake::{
+    ActorRef, ApplyKeepsake, AuditContext, AuditDecision, AuditEvent, AuditEventType,
+    CommandContext, Keepsake, LifecycleState, RevokeKeepsake, SubjectRef,
+};
 use uuid::Uuid;
 
-use super::{RepositoryError, RepositoryResult};
+#[cfg(any(feature = "mysql", feature = "sqlite"))]
+use keepsake::ExpiryPolicy;
+
+use super::{AuditEventRecord, RepositoryError, RepositoryResult};
 
 /// Parses a stored lifecycle state token.
 pub(super) fn parse_state(value: String) -> RepositoryResult<LifecycleState> {
@@ -83,6 +83,54 @@ pub(super) fn apply_event(
         },
         context: audit_context_from_command(&command.context),
     }
+}
+
+/// Decoded primitive columns of a stored audit event row.
+///
+/// Backends decode their own row types into these dialect-independent parts so
+/// the event reconstruction below is written once.
+pub(super) struct AuditEventParts {
+    pub id: i64,
+    pub event_type: String,
+    pub at: DateTime<Utc>,
+    pub actor_kind: String,
+    pub actor_id: String,
+    pub keepsake_id: Uuid,
+    pub subject_kind: String,
+    pub subject_id: String,
+    pub relation_id: Uuid,
+    pub decision: AuditDecision,
+    pub attributes: BTreeMap<String, String>,
+}
+
+/// Reconstructs a stored audit event, rejecting unknown event type labels.
+pub(super) fn audit_event_record(parts: AuditEventParts) -> RepositoryResult<AuditEventRecord> {
+    let event_type = AuditEventType::from_storage_label(&parts.event_type).ok_or_else(|| {
+        RepositoryError::InvalidAuditEventType {
+            event_type: parts.event_type.clone(),
+        }
+    })?;
+    Ok(AuditEventRecord {
+        id: parts.id,
+        event: AuditEvent {
+            event_type,
+            at: parts.at,
+            actor: ActorRef {
+                kind: parts.actor_kind,
+                id: parts.actor_id,
+            },
+            keepsake_id: parts.keepsake_id,
+            subject: SubjectRef {
+                kind: parts.subject_kind,
+                id: parts.subject_id,
+            },
+            relation_id: parts.relation_id,
+            decision: parts.decision,
+            context: AuditContext {
+                attributes: parts.attributes,
+            },
+        },
+    })
 }
 
 /// Builds the audit event for a revoke.

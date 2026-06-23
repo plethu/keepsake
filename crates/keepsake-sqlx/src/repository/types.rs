@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use keepsake::{ExpiryPolicy, Keepsake};
+use keepsake::{AuditEvent, ExpiryPolicy, Keepsake};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -25,6 +25,35 @@ impl MembershipCursor {
             subject_kind: keepsake.subject().kind.clone(),
             subject_id: keepsake.subject().id.clone(),
             keepsake_id: keepsake.id(),
+        }
+    }
+}
+
+/// A persisted audit event together with its stable storage id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuditEventRecord {
+    /// Monotonic audit row id, stable for keyset pagination.
+    pub id: i64,
+    /// Reconstructed audit event.
+    pub event: AuditEvent,
+}
+
+/// Keyset cursor for audit event reads in stable `(occurred_at, id)` order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuditCursor {
+    /// Last seen occurrence time.
+    pub occurred_at: DateTime<Utc>,
+    /// Last seen audit row id.
+    pub id: i64,
+}
+
+impl AuditCursor {
+    /// Creates a cursor positioned after a returned audit event.
+    #[must_use]
+    pub const fn after(record: &AuditEventRecord) -> Self {
+        Self {
+            occurred_at: record.event.at,
+            id: record.id,
         }
     }
 }

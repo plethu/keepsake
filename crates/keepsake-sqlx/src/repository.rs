@@ -49,12 +49,15 @@ pub use timed::TimedMySqlKeepsakeRepository;
 pub use timed::TimedSqliteKeepsakeRepository;
 pub use timed::TimedSqlxKeepsakeRepository;
 pub use types::{
-    AppliedKeepsake, FulfilledExpiryCandidate, MembershipCursor, TimedExpiryCandidate,
+    AppliedKeepsake, AuditCursor, AuditEventRecord, FulfilledExpiryCandidate, MembershipCursor,
+    TimedExpiryCandidate,
 };
 
 use backend::BackendMarker;
 #[cfg(feature = "postgres")]
-use rows::{ActiveRelationRow, AppliedKeepsakeRow, AppliedKeepsakeWriteRow, RelationRow};
+use rows::{
+    ActiveRelationRow, AppliedKeepsakeRow, AppliedKeepsakeWriteRow, AuditEventRow, RelationRow,
+};
 
 #[cfg(all(feature = "migrations", feature = "postgres"))]
 static POSTGRES_MIGRATOR: Migrator = sqlx::migrate!("./migrations/postgres");
@@ -144,6 +147,13 @@ pub enum RepositoryError {
     InvalidLifecycleState {
         /// Stored state value.
         state: String,
+    },
+
+    /// A stored audit event carried an unknown event type label.
+    #[error("unknown audit event type {event_type}")]
+    InvalidAuditEventType {
+        /// Stored event type label.
+        event_type: String,
     },
 }
 

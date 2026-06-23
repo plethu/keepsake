@@ -59,6 +59,66 @@ async fn apply_records_audit_event_with_context() -> TestResult<()> {
 
 #[tokio::test]
 #[ignore = "requires docker postgres; run `make test-db`"]
+async fn audit_events_read_paginates_in_order() -> TestResult<()> {
+    let repo = repo().await?;
+    let relation = timed_relation(&repo, "audit-read", "2026-02-01T00:00:00Z").await?;
+    let subject = SubjectRef::new("user", format!("audit_read_{}", Uuid::now_v7()))?;
+    let context = CommandContext::new(ActorRef::new("user", "admin")?)
+        .with_idempotency_key("req-1")
+        .with_metadata("reason", "support");
+    let applied = repo
+        .apply(&ApplyKeepsake::new(
+            subject,
+            relation.id,
+            ts("2026-01-01T00:00:00Z")?,
+            context,
+        ))
+        .await?;
+    revoke_at(&repo, applied.keepsake.id(), "2026-01-01T00:05:00Z").await?;
+
+    let events = repo
+        .audit_events_for_keepsake(applied.keepsake.id(), None, 10)
+        .await?;
+    assert_eq!(
+        events
+            .iter()
+            .map(|record| record.event.event_type)
+            .collect::<Vec<_>>(),
+        vec![AuditEventType::Apply, AuditEventType::Revoke]
+    );
+    assert_eq!(
+        events[0].event.context.attributes,
+        BTreeMap::from([
+            ("idempotency_key".to_owned(), "req-1".to_owned()),
+            ("reason".to_owned(), "support".to_owned()),
+        ])
+    );
+
+    let first = repo
+        .audit_events_for_keepsake(applied.keepsake.id(), None, 1)
+        .await?;
+    assert_eq!(first.len(), 1);
+    let next = repo
+        .audit_events_for_keepsake(
+            applied.keepsake.id(),
+            Some(&keepsake_sqlx::AuditCursor::after(&first[0])),
+            10,
+        )
+        .await?;
+    assert_eq!(
+        next.iter()
+            .map(|record| record.event.event_type)
+            .collect::<Vec<_>>(),
+        vec![AuditEventType::Revoke]
+    );
+
+    let by_relation = repo.audit_events_for_relation(relation.id, None, 10).await?;
+    assert_eq!(by_relation.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires docker postgres; run `make test-db`"]
 async fn duplicate_apply_records_duplicate_audit_event() -> TestResult<()> {
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
