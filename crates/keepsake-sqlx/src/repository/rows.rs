@@ -2,13 +2,14 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use keepsake::{
-    ActiveRelation, ExpiryPolicy, Keepsake, KeepsakeRecord, LifecycleState, RelationDefinition,
-    RelationKey, SubjectRef,
+    ActiveRelation, ExpiryPolicy, Keepsake, KeepsakeRecord, RelationDefinition, RelationKey,
+    SubjectRef,
 };
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use super::{RepositoryError, RepositoryResult};
+use super::support::parse_state;
+use super::RepositoryResult;
 
 #[derive(Debug, FromRow)]
 pub(super) struct RelationRow {
@@ -179,13 +180,4 @@ fn row_into_keepsake(row: KeepsakeRow) -> RepositoryResult<Keepsake> {
         metadata,
     }
     .try_into()?)
-}
-
-pub(super) fn parse_state(value: String) -> RepositoryResult<LifecycleState> {
-    match value.as_str() {
-        "applied" => Ok(LifecycleState::Applied),
-        "revoked" => Ok(LifecycleState::Revoked),
-        "expired" => Ok(LifecycleState::Expired),
-        _ => Err(RepositoryError::InvalidLifecycleState { state: value }),
-    }
 }

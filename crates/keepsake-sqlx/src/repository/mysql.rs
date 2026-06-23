@@ -2,13 +2,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use keepsake::{
-    ActiveRelation, ActiveRelationSource, ApplyKeepsake, AuditDecision, AuditEvent, AuditEventType,
-    ExpiryPolicy, FulfillmentSnapshot, Keepsake, KeepsakeRecord, LifecycleState,
-    RelationDefinition, RelationId, RelationKey, RelationSpec, RevokeKeepsake, SubjectRef,
+    ActiveRelation, ActiveRelationSource, ApplyKeepsake, AuditEvent, ExpiryPolicy,
+    FulfillmentSnapshot, Keepsake, KeepsakeRecord, RelationDefinition, RelationId, RelationKey,
+    RelationSpec, RevokeKeepsake, SubjectRef,
 };
 use sqlx::{MySql, Row, Transaction};
 use uuid::Uuid;
 
+use super::support::{apply_event, expires_at, parse_state, parse_uuid, revoke_event};
 use super::{
     AppliedKeepsake, FulfilledExpiryCandidate, MembershipCursor, MySqlKeepsakeRepository,
     RelationCache, RepositoryError, RepositoryResult, TimedExpiryCandidate, validate_limit,
@@ -226,7 +227,7 @@ where
             active_keepsake_for_subject_relation_tx(&mut tx, &command.subject, command.relation_id)
                 .await?
         {
-            record_audit_event_tx(&mut tx, &duplicate_apply_event(command, &existing)).await?;
+            record_audit_event_tx(&mut tx, &apply_event(command, &existing, true)).await?;
             tx.commit().await?;
             return Ok(AppliedKeepsake {
                 keepsake: existing,
@@ -254,7 +255,7 @@ where
         .bind(command.relation_id.to_string())
         .bind(serde_json::to_value(&relation.expiry)?)
         .bind(naive_timestamp(command.at))
-        .bind(expires_at_naive(&relation.expiry))
+        .bind(expires_at(&relation.expiry).map(naive_timestamp))
         .bind(serde_json::to_value(&command.metadata)?)
         .bind(naive_timestamp(command.at))
         .bind(naive_timestamp(command.at))
@@ -266,22 +267,7 @@ where
                 relation_id: command.relation_id,
             },
         )?;
-        record_audit_event_tx(
-            &mut tx,
-            &AuditEvent {
-                event_type: AuditEventType::Apply,
-                at: command.at,
-                actor: command.context.actor.clone(),
-                keepsake_id: keepsake.id(),
-                subject: keepsake.subject().clone(),
-                relation_id: command.relation_id,
-                decision: AuditDecision::Applied {
-                    duplicate_prevented: false,
-                },
-                context: audit_context_from_command(&command.context),
-            },
-        )
-        .await?;
+        record_audit_event_tx(&mut tx, &apply_event(command, &keepsake, false)).await?;
         tx.commit().await?;
         Ok(AppliedKeepsake {
             keepsake,
@@ -296,20 +282,7 @@ where
         let mut tx = self.pool.begin().await?;
         let revoked = revoke_tx(&mut tx, command.keepsake_id, command.at).await?;
         if let Some(keepsake) = &revoked {
-            record_audit_event_tx(
-                &mut tx,
-                &AuditEvent {
-                    event_type: AuditEventType::Revoke,
-                    at: command.at,
-                    actor: command.context.actor.clone(),
-                    keepsake_id: keepsake.id(),
-                    subject: keepsake.subject().clone(),
-                    relation_id: keepsake.relation_id(),
-                    decision: AuditDecision::Revoked,
-                    context: audit_context_from_command(&command.context),
-                },
-            )
-            .await?;
+            record_audit_event_tx(&mut tx, &revoke_event(command, keepsake)).await?;
         }
         tx.commit().await?;
         Ok(revoked.is_some())
@@ -911,44 +884,6 @@ fn counters_from_rows(rows: &[sqlx::mysql::MySqlRow]) -> RepositoryResult<Fulfil
     })
 }
 
-fn duplicate_apply_event(command: &ApplyKeepsake, keepsake: &Keepsake) -> AuditEvent {
-    AuditEvent {
-        event_type: AuditEventType::DuplicateApply,
-        at: command.at,
-        actor: command.context.actor.clone(),
-        keepsake_id: keepsake.id(),
-        subject: keepsake.subject().clone(),
-        relation_id: command.relation_id,
-        decision: AuditDecision::Applied {
-            duplicate_prevented: true,
-        },
-        context: audit_context_from_command(&command.context),
-    }
-}
-
-fn audit_context_from_command(context: &keepsake::CommandContext) -> keepsake::AuditContext {
-    let mut attributes = context.metadata.clone();
-    if let Some(idempotency_key) = &context.idempotency_key {
-        attributes
-            .entry("idempotency_key".to_owned())
-            .or_insert_with(|| idempotency_key.clone());
-    }
-    keepsake::AuditContext { attributes }
-}
-
-fn parse_state(value: String) -> RepositoryResult<LifecycleState> {
-    match value.as_str() {
-        "applied" => Ok(LifecycleState::Applied),
-        "revoked" => Ok(LifecycleState::Revoked),
-        "expired" => Ok(LifecycleState::Expired),
-        _ => Err(RepositoryError::InvalidLifecycleState { state: value }),
-    }
-}
-
-fn parse_uuid(value: &str) -> RepositoryResult<Uuid> {
-    Ok(Uuid::parse_str(value).map_err(|error| sqlx::Error::Decode(Box::new(error)))?)
-}
-
 const fn naive_timestamp(value: DateTime<Utc>) -> NaiveDateTime {
     value.naive_utc()
 }
@@ -959,11 +894,4 @@ const fn utc_timestamp(value: NaiveDateTime) -> DateTime<Utc> {
 
 fn optional_utc_timestamp(value: Option<NaiveDateTime>) -> Option<DateTime<Utc>> {
     value.map(utc_timestamp)
-}
-
-const fn expires_at_naive(expiry: &ExpiryPolicy) -> Option<NaiveDateTime> {
-    match expiry {
-        ExpiryPolicy::At { timestamp } => Some(timestamp.naive_utc()),
-        ExpiryPolicy::ManualOnly | ExpiryPolicy::WhenFulfilled { .. } => None,
-    }
 }

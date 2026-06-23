@@ -1,4 +1,4 @@
-use keepsake::{AuditEvent, CommandContext};
+use keepsake::AuditEvent;
 use sqlx::{Postgres, Transaction};
 
 use super::{KeepsakeRepository, RelationCache, RepositoryResult};
@@ -65,14 +65,4 @@ pub(super) async fn record_audit_event_tx(
     }
 
     Ok(audit_event_id)
-}
-
-pub(super) fn audit_context_from_command(context: &CommandContext) -> keepsake::AuditContext {
-    let mut attributes = context.metadata.clone();
-    if let Some(idempotency_key) = &context.idempotency_key {
-        attributes
-            .entry("idempotency_key".to_owned())
-            .or_insert_with(|| idempotency_key.clone());
-    }
-    keepsake::AuditContext { attributes }
 }

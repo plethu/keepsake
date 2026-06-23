@@ -1,11 +1,9 @@
-use keepsake::{
-    ApplyKeepsake, AuditDecision, AuditEvent, AuditEventType, Keepsake, RelationDefinition,
-    RelationId, RevokeKeepsake,
-};
+use keepsake::{ApplyKeepsake, Keepsake, RelationDefinition, RelationId, RevokeKeepsake};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
-use super::audit::{audit_context_from_command, record_audit_event_tx};
+use super::audit::record_audit_event_tx;
+use super::support::{apply_event, revoke_event};
 use super::{
     AppliedKeepsake, AppliedKeepsakeRow, AppliedKeepsakeWriteRow, KeepsakeRepository,
     RelationCache, RelationRow, RepositoryError, RepositoryResult,
@@ -72,22 +70,7 @@ where
         }
 
         let (keepsake, duplicate_prevented) = applied.try_into_parts()?;
-        let event = AuditEvent {
-            event_type: if duplicate_prevented {
-                AuditEventType::DuplicateApply
-            } else {
-                AuditEventType::Apply
-            },
-            at: command.at,
-            actor: command.context.actor.clone(),
-            keepsake_id: keepsake.id(),
-            subject: keepsake.subject().clone(),
-            relation_id: command.relation_id,
-            decision: AuditDecision::Applied {
-                duplicate_prevented,
-            },
-            context: audit_context_from_command(&command.context),
-        };
+        let event = apply_event(command, &keepsake, duplicate_prevented);
         record_audit_event_tx(&mut tx, &event).await?;
         tx.commit().await?;
         Ok(AppliedKeepsake {
@@ -103,16 +86,7 @@ where
         let mut tx = self.pool.begin().await?;
         let revoked = revoke_tx(&mut tx, command.keepsake_id, command.at).await?;
         if let Some(keepsake) = &revoked {
-            let event = AuditEvent {
-                event_type: AuditEventType::Revoke,
-                at: command.at,
-                actor: command.context.actor.clone(),
-                keepsake_id: keepsake.id(),
-                subject: keepsake.subject().clone(),
-                relation_id: keepsake.relation_id(),
-                decision: AuditDecision::Revoked,
-                context: audit_context_from_command(&command.context),
-            };
+            let event = revoke_event(command, keepsake);
             record_audit_event_tx(&mut tx, &event).await?;
         }
         tx.commit().await?;

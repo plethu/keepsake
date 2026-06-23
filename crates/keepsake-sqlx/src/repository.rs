@@ -25,6 +25,8 @@ mod relation;
 mod rows;
 #[cfg(feature = "sqlite")]
 mod sqlite;
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
+mod support;
 mod timed;
 mod types;
 
@@ -520,7 +522,7 @@ mod tests {
     use keepsake::SubjectRef;
     use sqlx::postgres::PgPoolOptions;
 
-    use super::rows::parse_state;
+    use super::support::parse_state;
     use super::*;
 
     fn ts(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
