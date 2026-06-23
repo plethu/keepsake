@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-06-23
+
 - Added `audit_events_for_keepsake` and `audit_events_for_relation` read helpers
   to the SQLx adapter (Postgres, MySQL, SQLite) with keyset pagination via
   `AuditCursor`, returning `AuditEventRecord`s with hydrated context attributes.
