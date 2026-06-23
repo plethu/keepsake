@@ -465,8 +465,7 @@ where
             r"
             select k.id as keepsake_id, k.relation_id, k.subject_kind, k.subject_id, k.expiry_policy
             from keepsakes k
-            where k.state = 'applied'
-              and json_unquote(json_extract(k.expiry_policy, '$.type')) = 'when_fulfilled'
+            where k.fulfillment_pending = 1
             order by k.relation_id, k.subject_kind, k.subject_id, k.id
             limit ?
             ",
@@ -636,20 +635,19 @@ async fn record_audit_event_tx(
     let audit_event_id = i64::try_from(result.last_insert_id())
         .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
 
-    for (key, value) in &event.context.attributes {
-        sqlx::query(
-            r"
-            insert into keepsake_audit_context_attributes
-                (audit_event_id, `key`, value)
-            values (?, ?, ?)
-            ",
-        )
-        .bind(audit_event_id)
-        .bind(key)
-        .bind(value)
-        .execute(&mut **tx)
-        .await?;
+    if event.context.attributes.is_empty() {
+        return Ok(audit_event_id);
     }
+
+    let mut builder = sqlx::QueryBuilder::<MySql>::new(
+        "insert into keepsake_audit_context_attributes (audit_event_id, `key`, value) ",
+    );
+    builder.push_values(&event.context.attributes, |mut row, (key, value)| {
+        row.push_bind(audit_event_id)
+            .push_bind(key.as_str())
+            .push_bind(value.as_str());
+    });
+    builder.build().execute(&mut **tx).await?;
 
     Ok(audit_event_id)
 }

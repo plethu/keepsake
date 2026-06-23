@@ -187,6 +187,42 @@ async fn sqlite_fulfilled_expiry_uses_counter_snapshot() -> TestResult<()> {
 }
 
 #[tokio::test]
+async fn sqlite_apply_persists_multiple_audit_context_attributes() -> TestResult<()> {
+    use keepsake::{ActorRef, ApplyKeepsake, CommandContext, SubjectRef};
+
+    let (repo, pool) = SqliteHarness::repo().await?;
+    let relation = upsert_relation::<SqliteHarness>(&repo, ExpiryPolicy::ManualOnly).await?;
+    let context = CommandContext::new(ActorRef::new("test", "worker")?)
+        .with_idempotency_key("request-1")
+        .with_metadata("request_id", "req_123")
+        .with_metadata("source", "support");
+    let command = ApplyKeepsake::new(
+        SubjectRef::new("account", "sqlite_acct_attrs")?,
+        relation.id,
+        backend_cases::ts("2026-01-01T00:01:00Z")?,
+        context,
+    );
+
+    repo.apply(&command).await?;
+
+    let attributes = sqlx::query_as::<_, (String, String)>(
+        "select key, value from keepsake_audit_context_attributes order by key",
+    )
+    .fetch_all(&pool)
+    .await?;
+
+    assert_eq!(
+        attributes,
+        vec![
+            ("idempotency_key".to_owned(), "request-1".to_owned()),
+            ("request_id".to_owned(), "req_123".to_owned()),
+            ("source".to_owned(), "support".to_owned()),
+        ]
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn sqlite_migration_rejects_wrong_backend_marker() -> TestResult<()> {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)

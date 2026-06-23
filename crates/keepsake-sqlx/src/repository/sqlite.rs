@@ -646,20 +646,19 @@ async fn record_audit_event_tx(
     .fetch_one(&mut **tx)
     .await?;
 
-    for (key, value) in &event.context.attributes {
-        sqlx::query(
-            r"
-            insert into keepsake_audit_context_attributes
-                (audit_event_id, key, value)
-            values (?1, ?2, ?3)
-            ",
-        )
-        .bind(audit_event_id)
-        .bind(key)
-        .bind(value)
-        .execute(&mut **tx)
-        .await?;
+    if event.context.attributes.is_empty() {
+        return Ok(audit_event_id);
     }
+
+    let mut builder = sqlx::QueryBuilder::<Sqlite>::new(
+        "insert into keepsake_audit_context_attributes (audit_event_id, key, value) ",
+    );
+    builder.push_values(&event.context.attributes, |mut row, (key, value)| {
+        row.push_bind(audit_event_id)
+            .push_bind(key.as_str())
+            .push_bind(value.as_str());
+    });
+    builder.build().execute(&mut **tx).await?;
 
     Ok(audit_event_id)
 }
