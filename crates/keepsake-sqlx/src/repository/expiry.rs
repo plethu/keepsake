@@ -114,72 +114,21 @@ where
     ) -> RepositoryResult<u64> {
         let limit = validate_limit(limit)?;
         let mut tx = self.pool.begin().await?;
-        let candidates = due_fulfilled_expiry_tx(&mut tx, limit).await?;
-        let candidate_ids = candidates
-            .iter()
-            .map(|candidate| candidate.keepsake_id)
-            .collect::<Vec<_>>();
+        let target =
+            usize::try_from(limit).map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
+        let mut after = None;
+        let mut satisfied_ids = Vec::new();
 
-        if candidate_ids.is_empty() {
-            tx.commit().await?;
-            return Ok(0);
+        while satisfied_ids.len() < target {
+            let remaining = i64::try_from(target - satisfied_ids.len())
+                .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
+            let candidates = due_fulfilled_expiry_tx(&mut tx, after.as_ref(), remaining).await?;
+            if candidates.is_empty() {
+                break;
+            }
+            after = candidates.last().map(FulfilledExpiryCursor::from);
+            satisfied_ids.extend(satisfied_fulfillment_ids_tx(&mut tx, candidates).await?);
         }
-
-        let counter_rows = sqlx::query_as::<_, (Uuid, String, i64)>(
-            r"
-            select keepsake_id, key, value
-            from keepsake_fulfillment_counters
-            where keepsake_id = any($1)
-            ",
-        )
-        .bind(&candidate_ids)
-        .fetch_all(&mut *tx)
-        .await?;
-        let mut counters_by_keepsake = BTreeMap::<Uuid, BTreeMap<String, i64>>::new();
-        for (keepsake_id, key, value) in counter_rows {
-            counters_by_keepsake
-                .entry(keepsake_id)
-                .or_default()
-                .insert(key, value);
-        }
-
-        let checklist_rows = sqlx::query_as::<_, (Uuid, String, bool)>(
-            r"
-            select keepsake_id, item, complete
-            from keepsake_fulfillment_checklist
-            where keepsake_id = any($1)
-            ",
-        )
-        .bind(&candidate_ids)
-        .fetch_all(&mut *tx)
-        .await?;
-        let mut checklist_by_keepsake = BTreeMap::<Uuid, BTreeMap<String, bool>>::new();
-        for (keepsake_id, item, complete) in checklist_rows {
-            checklist_by_keepsake
-                .entry(keepsake_id)
-                .or_default()
-                .insert(item, complete);
-        }
-
-        let satisfied_ids = candidates
-            .into_iter()
-            .filter_map(|candidate| {
-                let ExpiryPolicy::WhenFulfilled { policy } = candidate.expiry_policy else {
-                    return None;
-                };
-                let snapshot = FulfillmentSnapshot {
-                    counters: counters_by_keepsake
-                        .remove(&candidate.keepsake_id)
-                        .unwrap_or_default(),
-                    checklist: checklist_by_keepsake
-                        .remove(&candidate.keepsake_id)
-                        .unwrap_or_default(),
-                };
-                policy
-                    .is_fulfilled(&snapshot)
-                    .then_some(candidate.keepsake_id)
-            })
-            .collect::<Vec<_>>();
 
         if satisfied_ids.is_empty() {
             tx.commit().await?;
@@ -332,6 +281,76 @@ where
     }
 }
 
+#[cfg(feature = "fulfillment-counters")]
+async fn satisfied_fulfillment_ids_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    candidates: Vec<FulfilledExpiryCandidate>,
+) -> RepositoryResult<Vec<Uuid>> {
+    let candidate_ids = candidates
+        .iter()
+        .map(|candidate| candidate.keepsake_id)
+        .collect::<Vec<_>>();
+    if candidate_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let counter_rows = sqlx::query_as::<_, (Uuid, String, i64)>(
+        r"
+            select keepsake_id, key, value
+            from keepsake_fulfillment_counters
+            where keepsake_id = any($1)
+            ",
+    )
+    .bind(&candidate_ids)
+    .fetch_all(&mut **tx)
+    .await?;
+    let mut counters_by_keepsake = BTreeMap::<Uuid, BTreeMap<String, i64>>::new();
+    for (keepsake_id, key, value) in counter_rows {
+        counters_by_keepsake
+            .entry(keepsake_id)
+            .or_default()
+            .insert(key, value);
+    }
+
+    let checklist_rows = sqlx::query_as::<_, (Uuid, String, bool)>(
+        r"
+            select keepsake_id, item, complete
+            from keepsake_fulfillment_checklist
+            where keepsake_id = any($1)
+            ",
+    )
+    .bind(&candidate_ids)
+    .fetch_all(&mut **tx)
+    .await?;
+    let mut checklist_by_keepsake = BTreeMap::<Uuid, BTreeMap<String, bool>>::new();
+    for (keepsake_id, item, complete) in checklist_rows {
+        checklist_by_keepsake
+            .entry(keepsake_id)
+            .or_default()
+            .insert(item, complete);
+    }
+
+    Ok(candidates
+        .into_iter()
+        .filter_map(|candidate| {
+            let ExpiryPolicy::WhenFulfilled { policy } = candidate.expiry_policy else {
+                return None;
+            };
+            let snapshot = FulfillmentSnapshot {
+                counters: counters_by_keepsake
+                    .remove(&candidate.keepsake_id)
+                    .unwrap_or_default(),
+                checklist: checklist_by_keepsake
+                    .remove(&candidate.keepsake_id)
+                    .unwrap_or_default(),
+            };
+            policy
+                .is_fulfilled(&snapshot)
+                .then_some(candidate.keepsake_id)
+        })
+        .collect())
+}
+
 async fn due_timed_expiry_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     now: DateTime<Utc>,
@@ -362,6 +381,7 @@ async fn due_timed_expiry_tx(
 #[cfg(feature = "fulfillment-counters")]
 async fn due_fulfilled_expiry_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    after: Option<&FulfilledExpiryCursor>,
     limit: i64,
 ) -> RepositoryResult<Vec<FulfilledExpiryCandidate>> {
     let rows = sqlx::query_as::<_, FulfilledExpiryCandidate>(
@@ -372,6 +392,10 @@ async fn due_fulfilled_expiry_tx(
         where k.state = 'applied'
           and r.enabled
           and k.expiry_policy->>'type' = 'when_fulfilled'
+          and (
+            $2::uuid is null
+            or (k.relation_id, k.subject_kind, k.subject_id, k.id) > ($2, $3::text, $4::text, $5::uuid)
+          )
         order by k.relation_id, k.subject_kind, k.subject_id, k.id
         limit $1
         for update of k skip locked
@@ -379,7 +403,32 @@ async fn due_fulfilled_expiry_tx(
         ",
     )
     .bind(limit)
+    .bind(after.map(|cursor| cursor.relation_id))
+    .bind(after.map(|cursor| cursor.subject_kind.as_str()))
+    .bind(after.map(|cursor| cursor.subject_id.as_str()))
+    .bind(after.map(|cursor| cursor.keepsake_id))
     .fetch_all(&mut **tx)
     .await?;
     Ok(rows)
+}
+
+#[cfg(feature = "fulfillment-counters")]
+#[derive(Debug, Clone)]
+struct FulfilledExpiryCursor {
+    relation_id: Uuid,
+    subject_kind: String,
+    subject_id: String,
+    keepsake_id: Uuid,
+}
+
+#[cfg(feature = "fulfillment-counters")]
+impl From<&FulfilledExpiryCandidate> for FulfilledExpiryCursor {
+    fn from(candidate: &FulfilledExpiryCandidate) -> Self {
+        Self {
+            relation_id: candidate.relation_id,
+            subject_kind: candidate.subject_kind.clone(),
+            subject_id: candidate.subject_id.clone(),
+            keepsake_id: candidate.keepsake_id,
+        }
+    }
 }

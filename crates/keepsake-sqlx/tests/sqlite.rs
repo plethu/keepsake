@@ -201,6 +201,12 @@ async fn sqlite_fulfilled_expiry_skips_disabled_relations_before_limit() -> Test
 }
 
 #[tokio::test]
+async fn sqlite_fulfilled_expiry_skips_unfulfilled_relations_before_limit() -> TestResult<()> {
+    backend_cases::fulfilled_expiry_skips_unfulfilled_relations_before_limit::<SqliteHarness>()
+        .await
+}
+
+#[tokio::test]
 async fn sqlite_apply_persists_multiple_audit_context_attributes() -> TestResult<()> {
     use keepsake::{ActorRef, ApplyKeepsake, CommandContext, SubjectRef};
 

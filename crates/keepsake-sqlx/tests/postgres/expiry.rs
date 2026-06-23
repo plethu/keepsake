@@ -421,6 +421,70 @@ async fn fulfilled_expiry_skips_disabled_relations_before_limit() -> TestResult<
 #[cfg(feature = "fulfillment-counters")]
 #[tokio::test]
 #[ignore = "requires docker postgres; run `make test-db`"]
+async fn fulfilled_expiry_skips_unfulfilled_relations_before_limit() -> TestResult<()> {
+    let repo = repo().await?;
+    let unfulfilled_relation = RelationDefinition::enabled(
+        Uuid::from_u128(1),
+        RelationKey::new("tag", unique_key("fulfilled-unfulfilled-first"))?,
+        ExpiryPolicy::WhenFulfilled {
+            policy: FulfillmentPolicy::CounterAtLeast {
+                key: "steps".to_owned(),
+                threshold: 3,
+            },
+        },
+    )?;
+    let fulfilled_relation = RelationDefinition::enabled(
+        Uuid::from_u128(2),
+        RelationKey::new("tag", unique_key("fulfilled-fulfilled-second"))?,
+        ExpiryPolicy::WhenFulfilled {
+            policy: FulfillmentPolicy::CounterAtLeast {
+                key: "steps".to_owned(),
+                threshold: 3,
+            },
+        },
+    )?;
+    let unfulfilled_relation = upsert_relation(&repo, &unfulfilled_relation).await?;
+    let fulfilled_relation = upsert_relation(&repo, &fulfilled_relation).await?;
+    let unfulfilled_subject =
+        SubjectRef::new("user", format!("unfulfilled_first_{}", Uuid::now_v7()))?;
+    let fulfilled_subject =
+        SubjectRef::new("user", format!("fulfilled_second_{}", Uuid::now_v7()))?;
+    let unfulfilled = apply_at(
+        &repo,
+        &unfulfilled_subject,
+        unfulfilled_relation.id,
+        "2026-01-01T00:00:00Z",
+    )
+    .await?;
+    let fulfilled = apply_at(
+        &repo,
+        &fulfilled_subject,
+        fulfilled_relation.id,
+        "2026-01-01T00:00:00Z",
+    )
+    .await?;
+
+    repo.upsert_counter_projection(
+        fulfilled.keepsake.id(),
+        "steps",
+        3,
+        ts("2026-01-02T00:00:00Z")?,
+    )
+    .await?;
+
+    assert_eq!(
+        repo.expire_due_fulfilled(ts("2026-01-02T00:01:00Z")?, 1)
+            .await?,
+        1
+    );
+    assert_eq!(stored_state(unfulfilled.keepsake.id()).await?, "applied");
+    assert_eq!(stored_state(fulfilled.keepsake.id()).await?, "expired");
+    Ok(())
+}
+
+#[cfg(feature = "fulfillment-counters")]
+#[tokio::test]
+#[ignore = "requires docker postgres; run `make test-db`"]
 async fn due_fulfilled_expiry_returns_only_when_fulfilled_keepsakes() -> TestResult<()> {
     let repo = repo().await?;
     let fulfilled = fulfilled_relation(&repo, "fulfilled-due").await?;

@@ -306,3 +306,83 @@ where
     );
     Ok(())
 }
+
+pub async fn fulfilled_expiry_skips_unfulfilled_relations_before_limit<H>() -> TestResult<()>
+where
+    H: BackendHarness,
+{
+    let (repo, _pool) = H::repo().await?;
+    let unfulfilled_relation = RelationDefinition::enabled(
+        Uuid::from_u128(1),
+        RelationKey::new("tag", format!("{}-unfulfilled-first", H::BACKEND))?,
+        ExpiryPolicy::WhenFulfilled {
+            policy: FulfillmentPolicy::CounterAtLeast {
+                key: "steps".to_owned(),
+                threshold: 3,
+            },
+        },
+    )?;
+    let fulfilled_relation = RelationDefinition::enabled(
+        Uuid::from_u128(2),
+        RelationKey::new("tag", format!("{}-fulfilled-second", H::BACKEND))?,
+        ExpiryPolicy::WhenFulfilled {
+            policy: FulfillmentPolicy::CounterAtLeast {
+                key: "steps".to_owned(),
+                threshold: 3,
+            },
+        },
+    )?;
+    let unfulfilled_relation =
+        H::upsert_relation(&repo, &unfulfilled_relation, ts("2026-01-01T00:00:00Z")?).await?;
+    let fulfilled_relation =
+        H::upsert_relation(&repo, &fulfilled_relation, ts("2026-01-01T00:00:00Z")?).await?;
+
+    let unfulfilled_subject =
+        SubjectRef::new("account", format!("{}_unfulfilled_first", H::BACKEND))?;
+    let fulfilled_subject = SubjectRef::new("account", format!("{}_fulfilled_second", H::BACKEND))?;
+    let _unfulfilled = H::apply(
+        &repo,
+        &ApplyKeepsake::new(
+            unfulfilled_subject.clone(),
+            unfulfilled_relation.id,
+            ts("2026-01-01T00:02:00Z")?,
+            context()?,
+        ),
+    )
+    .await?;
+    let fulfilled = H::apply(
+        &repo,
+        &ApplyKeepsake::new(
+            fulfilled_subject.clone(),
+            fulfilled_relation.id,
+            ts("2026-01-01T00:02:00Z")?,
+            context()?,
+        ),
+    )
+    .await?;
+    H::upsert_counter_projection(
+        &repo,
+        fulfilled.keepsake.id(),
+        "steps",
+        3,
+        ts("2026-01-01T00:03:00Z")?,
+    )
+    .await?;
+
+    assert_eq!(
+        H::expire_due_fulfilled(&repo, ts("2026-01-01T00:04:00Z")?, 1).await?,
+        1
+    );
+    assert_eq!(
+        H::active_for_subject(&repo, &unfulfilled_subject)
+            .await?
+            .len(),
+        1
+    );
+    assert!(
+        H::active_for_subject(&repo, &fulfilled_subject)
+            .await?
+            .is_empty()
+    );
+    Ok(())
+}

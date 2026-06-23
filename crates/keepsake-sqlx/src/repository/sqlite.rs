@@ -575,33 +575,45 @@ where
         now: DateTime<Utc>,
         limit: i64,
     ) -> RepositoryResult<u64> {
-        let candidates = self.due_fulfilled_expiry(limit).await?;
+        let limit = validate_limit(limit)?;
+        let target = u64::try_from(limit).map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
         let mut expired = 0;
         let mut tx = self.pool.begin().await?;
-        for candidate in candidates {
-            let ExpiryPolicy::WhenFulfilled { policy } = candidate.expiry_policy else {
-                continue;
-            };
-            let snapshot = fulfillment_snapshot_tx(&mut tx, candidate.keepsake_id).await?;
-            if policy.is_fulfilled(&snapshot) {
-                let result = sqlx::query(
-                    r"
-                    update keepsakes
-                    set state = 'expired', fulfilled_at = ?2, updated_at = ?2
-                    where id = ?1
-                      and state = 'applied'
-                      and exists (
-                        select 1
-                        from keepsake_relation_definitions r
-                        where r.id = keepsakes.relation_id and r.enabled
-                      )
-                    ",
-                )
-                .bind(candidate.keepsake_id.to_string())
-                .bind(format_timestamp(now))
-                .execute(&mut *tx)
-                .await?;
-                expired += result.rows_affected();
+        let mut after = None;
+        while expired < target {
+            let remaining = i64::try_from(target - expired)
+                .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
+            let candidates =
+                due_fulfilled_expiry_after_tx(&mut tx, after.as_ref(), remaining).await?;
+            if candidates.is_empty() {
+                break;
+            }
+            after = candidates.last().map(FulfilledExpiryCursor::from);
+            for candidate in candidates {
+                let ExpiryPolicy::WhenFulfilled { policy } = candidate.expiry_policy else {
+                    continue;
+                };
+                let snapshot = fulfillment_snapshot_tx(&mut tx, candidate.keepsake_id).await?;
+                if policy.is_fulfilled(&snapshot) {
+                    let result = sqlx::query(
+                        r"
+                        update keepsakes
+                        set state = 'expired', fulfilled_at = ?2, updated_at = ?2
+                        where id = ?1
+                          and state = 'applied'
+                          and exists (
+                            select 1
+                            from keepsake_relation_definitions r
+                            where r.id = keepsakes.relation_id and r.enabled
+                          )
+                        ",
+                    )
+                    .bind(candidate.keepsake_id.to_string())
+                    .bind(format_timestamp(now))
+                    .execute(&mut *tx)
+                    .await?;
+                    expired += result.rows_affected();
+                }
             }
         }
         tx.commit().await?;
@@ -857,6 +869,42 @@ async fn audit_attributes_by_event(
         attributes.entry(event_id).or_default().insert(key, value);
     }
     Ok(attributes)
+}
+
+#[cfg(feature = "fulfillment-counters")]
+async fn due_fulfilled_expiry_after_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    after: Option<&FulfilledExpiryCursor>,
+    limit: i64,
+) -> RepositoryResult<Vec<FulfilledExpiryCandidate>> {
+    let after_relation_id = after.map(|cursor| cursor.relation_id.to_string());
+    let after_keepsake_id = after.map(|cursor| cursor.keepsake_id.to_string());
+    let rows = sqlx::query(
+        r"
+        select k.id as keepsake_id, k.relation_id, k.subject_kind, k.subject_id, k.expiry_policy
+        from keepsakes k
+        join keepsake_relation_definitions r on r.id = k.relation_id
+        where k.state = 'applied'
+          and r.enabled
+          and json_extract(k.expiry_policy, '$.type') = 'when_fulfilled'
+          and (
+            ?1 is null
+            or (k.relation_id, k.subject_kind, k.subject_id, k.id) > (?1, ?2, ?3, ?4)
+          )
+        order by k.relation_id, k.subject_kind, k.subject_id, k.id
+        limit ?5
+        ",
+    )
+    .bind(after_relation_id.as_deref())
+    .bind(after.map(|cursor| cursor.subject_kind.as_str()))
+    .bind(after.map(|cursor| cursor.subject_id.as_str()))
+    .bind(after_keepsake_id.as_deref())
+    .bind(limit)
+    .fetch_all(&mut **tx)
+    .await?;
+    rows.iter()
+        .map(fulfilled_expiry_candidate_from_row)
+        .collect()
 }
 
 async fn relation_for_update_tx(
@@ -1121,6 +1169,27 @@ fn fulfilled_expiry_candidate_from_row(
         subject_id: row.try_get("subject_id")?,
         expiry_policy: serde_json::from_str(row.try_get("expiry_policy")?)?,
     })
+}
+
+#[cfg(feature = "fulfillment-counters")]
+#[derive(Debug, Clone)]
+struct FulfilledExpiryCursor {
+    relation_id: Uuid,
+    subject_kind: String,
+    subject_id: String,
+    keepsake_id: Uuid,
+}
+
+#[cfg(feature = "fulfillment-counters")]
+impl From<&FulfilledExpiryCandidate> for FulfilledExpiryCursor {
+    fn from(candidate: &FulfilledExpiryCandidate) -> Self {
+        Self {
+            relation_id: candidate.relation_id,
+            subject_kind: candidate.subject_kind.clone(),
+            subject_id: candidate.subject_id.clone(),
+            keepsake_id: candidate.keepsake_id,
+        }
+    }
 }
 
 fn parse_timestamp(value: &str) -> RepositoryResult<DateTime<Utc>> {

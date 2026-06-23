@@ -314,6 +314,12 @@ async fn mysql_fulfilled_expiry_skips_disabled_relations_before_limit() -> TestR
 
 #[tokio::test]
 #[ignore = "requires docker mysql; run `make test-db`"]
+async fn mysql_fulfilled_expiry_skips_unfulfilled_relations_before_limit() -> TestResult<()> {
+    backend_cases::fulfilled_expiry_skips_unfulfilled_relations_before_limit::<MySqlHarness>().await
+}
+
+#[tokio::test]
+#[ignore = "requires docker mysql; run `make test-db`"]
 async fn mysql_revoke_by_subject_revokes_active_keepsake() -> TestResult<()> {
     use keepsake::{
         ActorRef, ApplyKeepsake, AuditEventType, CommandContext, RevokeBySubject, SubjectRef,
