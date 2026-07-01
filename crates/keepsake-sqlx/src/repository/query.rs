@@ -28,8 +28,8 @@ where
             order by relation_id, id
             ",
         )
-        .bind(&subject.kind)
-        .bind(&subject.id)
+        .bind(subject.kind())
+        .bind(subject.id())
         .fetch_all(&self.pool)
         .await?;
 
@@ -68,8 +68,8 @@ where
             order by k.relation_id, k.id
             ",
         )
-        .bind(&subject.kind)
-        .bind(&subject.id)
+        .bind(subject.kind())
+        .bind(subject.id())
         .fetch_all(&self.pool)
         .await?;
 
@@ -142,8 +142,8 @@ where
             order by k.relation_id, k.id
             ",
         )
-        .bind(&subject.kind)
-        .bind(&subject.id)
+        .bind(subject.kind())
+        .bind(subject.id())
         .bind(&requested_relation_ids)
         .fetch_all(&self.pool)
         .await?;
@@ -224,8 +224,8 @@ where
             order by k.relation_id, k.id
             ",
         )
-        .bind(&subject.kind)
-        .bind(&subject.id)
+        .bind(subject.kind())
+        .bind(subject.id())
         .bind(&kinds)
         .bind(&names)
         .fetch_all(&self.pool)
@@ -332,8 +332,8 @@ where
             order by k.relation_id, k.id
             ",
         )
-        .bind(&subject.kind)
-        .bind(&subject.id)
+        .bind(subject.kind())
+        .bind(subject.id())
         .bind(relation_ids)
         .fetch_all(&self.pool)
         .await?;

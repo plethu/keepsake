@@ -27,99 +27,31 @@ async fn duplicate_active_apply_returns_existing_keepsake() -> TestResult<()> {
     Ok(())
 }
 
-#[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
-async fn invalid_subject_apply_fails_without_persisting_row() -> TestResult<()> {
-    let repo = repo().await?;
-    let relation = timed_relation(&repo, "invalid-subject", "2026-01-02T00:00:00Z").await?;
-    let subject = SubjectRef {
-        kind: String::new(),
-        id: String::new(),
-    };
-
-    let command = ApplyKeepsake::new(
-        subject.clone(),
-        relation.id,
-        ts("2026-01-01T00:00:00Z")?,
-        test_context("worker")?,
-    );
-    let result = repo.apply(&command).await;
+#[test]
+fn subject_ref_constructor_rejects_empty_kind() {
+    let result = SubjectRef::new("", "");
 
     assert!(
-        matches!(result, Err(RepositoryError::Keepsake(keepsake::KeepsakeError::EmptyIdentifier { field })) if field == "subject.kind")
+        matches!(result, Err(keepsake::KeepsakeError::EmptyIdentifier { field }) if field == "subject.kind")
     );
-    assert!(repo.active_for_subject(&subject).await?.is_empty());
-    Ok(())
 }
 
-#[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
-async fn invalid_actor_apply_fails_without_persisting_row() -> TestResult<()> {
-    let repo = repo().await?;
-    let relation = timed_relation(&repo, "invalid-apply-actor", "2026-01-02T00:00:00Z").await?;
-    let subject = SubjectRef::new("user", format!("invalid_actor_{}", Uuid::now_v7()))?;
-    let context = CommandContext {
-        actor: ActorRef {
-            kind: "system".to_owned(),
-            id: String::new(),
-        },
-        idempotency_key: None,
-        metadata: BTreeMap::new(),
-    };
-
-    let command = ApplyKeepsake::new(
-        subject.clone(),
-        relation.id,
-        ts("2026-01-01T00:00:00Z")?,
-        context,
-    );
-    let result = repo.apply(&command).await;
+#[test]
+fn actor_ref_constructor_rejects_empty_apply_actor_id() {
+    let result = ActorRef::new("system", "");
 
     assert!(
-        matches!(result, Err(RepositoryError::Keepsake(keepsake::KeepsakeError::EmptyIdentifier { field })) if field == "actor.id")
+        matches!(result, Err(keepsake::KeepsakeError::EmptyIdentifier { field }) if field == "actor.id")
     );
-    assert!(repo.active_for_subject(&subject).await?.is_empty());
-    Ok(())
 }
 
-#[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
-async fn invalid_actor_revoke_fails_without_transition_or_audit() -> TestResult<()> {
-    let database_url = std::env::var("DATABASE_URL")?;
-    let pool = PgPool::connect(&database_url).await?;
-    let repo = KeepsakeRepository::new(pool.clone());
-    repo.migrate().await?;
-    reset_database(&pool).await?;
-
-    let relation = timed_relation(&repo, "invalid-revoke-actor", "2026-01-02T00:00:00Z").await?;
-    let subject = SubjectRef::new("user", format!("invalid_revoke_{}", Uuid::now_v7()))?;
-    let applied = apply_at(&repo, &subject, relation.id, "2026-01-01T00:00:00Z").await?;
-    let context = CommandContext {
-        actor: ActorRef {
-            kind: "system".to_owned(),
-            id: String::new(),
-        },
-        idempotency_key: None,
-        metadata: BTreeMap::new(),
-    };
-    let command = RevokeKeepsake::new(applied.keepsake.id(), ts("2026-01-01T00:05:00Z")?, context);
-    let result = repo.revoke(&command).await;
+#[test]
+fn actor_ref_constructor_rejects_empty_revoke_actor_id() {
+    let result = ActorRef::new("system", "");
 
     assert!(
-        matches!(result, Err(RepositoryError::Keepsake(keepsake::KeepsakeError::EmptyIdentifier { field })) if field == "actor.id")
+        matches!(result, Err(keepsake::KeepsakeError::EmptyIdentifier { field }) if field == "actor.id")
     );
-    let active = repo.active_for_subject(&subject).await?;
-    assert_eq!(active.len(), 1);
-    assert_eq!(active[0].id(), applied.keepsake.id());
-    assert_eq!(
-        audit_rows_for_keepsake(&pool, applied.keepsake.id())
-            .await?
-            .iter()
-            .map(|row| row.event_type.as_str())
-            .collect::<Vec<&str>>(),
-        vec!["apply"]
-    );
-    Ok(())
 }
 
 #[tokio::test]

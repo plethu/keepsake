@@ -265,67 +265,25 @@ async fn append_audit_event_records_explicit_event() -> TestResult<()> {
     Ok(())
 }
 
-#[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
-async fn invalid_append_audit_event_fails_without_persisting_row() -> TestResult<()> {
-    let database_url = std::env::var("DATABASE_URL")?;
-    let pool = PgPool::connect(&database_url).await?;
-    let repo = KeepsakeRepository::new(pool.clone());
-    repo.migrate().await?;
-    reset_database(&pool).await?;
-
-    let relation = timed_relation(&repo, "invalid-append-audit", "2026-01-02T00:00:00Z").await?;
-    let subject = SubjectRef::new("user", format!("audit_invalid_{}", Uuid::now_v7()))?;
-    let applied = apply_at(&repo, &subject, relation.id, "2026-01-01T00:00:00Z").await?;
-
-    let valid_event = AuditEvent {
-        event_type: AuditEventType::TimedExpiry,
-        at: ts("2026-01-01T00:05:00Z")?,
-        actor: ActorRef::new("system", "expiry-worker")?,
-        keepsake_id: applied.keepsake.id(),
-        subject: subject.clone(),
-        relation_id: relation.id,
-        decision: AuditDecision::Expired {
-            cause: ExpiryCause::Timed,
-        },
-        context: AuditContext::default(),
-    };
-
-    let mut invalid_subject = valid_event.clone();
-    invalid_subject.subject.kind.clear();
-    let result = repo.append_audit_event(&invalid_subject).await;
+#[test]
+fn audit_ref_constructors_reject_empty_parts() {
+    let result = SubjectRef::new("", "audit-invalid");
     assert!(
         matches!(
             result,
-            Err(RepositoryError::Keepsake(
-                keepsake::KeepsakeError::EmptyIdentifier {
-                    field: "subject.kind"
-                }
-            ))
+            Err(keepsake::KeepsakeError::EmptyIdentifier {
+                field: "subject.kind"
+            })
         ),
         "unexpected result: {result:?}"
     );
 
-    let mut invalid_actor = valid_event;
-    invalid_actor.actor.id.clear();
-    let result = repo.append_audit_event(&invalid_actor).await;
+    let result = ActorRef::new("system", "");
     assert!(
         matches!(
             result,
-            Err(RepositoryError::Keepsake(
-                keepsake::KeepsakeError::EmptyIdentifier { field: "actor.id" }
-            ))
+            Err(keepsake::KeepsakeError::EmptyIdentifier { field: "actor.id" })
         ),
         "unexpected result: {result:?}"
     );
-
-    let audit_rows = audit_rows_for_keepsake(&pool, applied.keepsake.id()).await?;
-    assert_eq!(
-        audit_rows
-            .iter()
-            .map(|row| row.event_type.as_str())
-            .collect::<Vec<&str>>(),
-        vec!["apply"]
-    );
-    Ok(())
 }

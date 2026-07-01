@@ -202,10 +202,7 @@ fn row_into_keepsake(row: KeepsakeRow) -> RepositoryResult<Keepsake> {
     let metadata = serde_json::from_value::<BTreeMap<String, String>>(row.metadata)?;
     Ok(KeepsakeRecord {
         id: row.id,
-        subject: SubjectRef {
-            kind: row.subject_kind,
-            id: row.subject_id,
-        },
+        subject: SubjectRef::new(row.subject_kind, row.subject_id)?,
         relation_id: row.relation_id,
         state: parse_state(row.state)?,
         expiry,

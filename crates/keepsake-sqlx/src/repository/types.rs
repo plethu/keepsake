@@ -22,8 +22,8 @@ impl MembershipCursor {
     #[must_use]
     pub fn after(keepsake: &Keepsake) -> Self {
         Self {
-            subject_kind: keepsake.subject().kind.clone(),
-            subject_id: keepsake.subject().id.clone(),
+            subject_kind: keepsake.subject().kind().to_owned(),
+            subject_id: keepsake.subject().id().to_owned(),
             keepsake_id: keepsake.id(),
         }
     }

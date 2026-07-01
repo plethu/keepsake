@@ -143,7 +143,7 @@ fn applied_keepsake_exposes_common_accessors() -> TestResult<()> {
     )?;
 
     assert_eq!(keepsake.id(), Uuid::from_u128(2));
-    assert_eq!(keepsake.subject().id, "u_1");
+    assert_eq!(keepsake.subject().id(), "u_1");
     assert_eq!(keepsake.relation_id(), relation.id);
     assert_eq!(keepsake.state(), LifecycleState::Applied);
     assert!(matches!(keepsake.lifecycle(), KeepsakeLifecycle::Applied));

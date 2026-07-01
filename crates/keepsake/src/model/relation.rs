@@ -133,6 +133,8 @@ impl StaticRelationKey {
     /// Builds a static relation key.
     #[must_use]
     pub const fn new(kind: &'static str, name: &'static str) -> Self {
+        assert_valid_static_relation_component(kind);
+        assert_valid_static_relation_component(name);
         Self { kind, name }
     }
 
@@ -140,6 +142,27 @@ impl StaticRelationKey {
     pub fn to_relation_key(self) -> Result<RelationKey> {
         RelationKey::new(self.kind, self.name)
     }
+}
+
+const fn assert_valid_static_relation_component(value: &str) {
+    let bytes = value.as_bytes();
+    assert!(
+        !bytes.is_empty(),
+        "static relation component must not be empty"
+    );
+    let mut index = 0;
+    let mut has_non_whitespace = false;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if !(byte == b' ' || byte == b'\n' || byte == b'\r' || byte == b'\t') {
+            has_non_whitespace = true;
+        }
+        index += 1;
+    }
+    assert!(
+        has_non_whitespace,
+        "static relation component must not be whitespace"
+    );
 }
 
 /// Configured relation definition.

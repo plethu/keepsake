@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
 use crate::error::Result;
@@ -12,12 +12,12 @@ pub type KeepsakeId = Uuid;
 pub type RelationId = Uuid;
 
 /// Opaque application subject identifier.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SubjectRef {
     /// Application-owned subject kind, such as `user`, `account`, or `device`.
-    pub kind: String,
+    kind: String,
     /// Application-owned subject id.
-    pub id: String,
+    id: String,
 }
 
 impl SubjectRef {
@@ -33,18 +33,46 @@ impl SubjectRef {
 
     /// Validates the subject reference.
     pub fn validate(&self) -> Result<()> {
-        validate_not_empty("subject.kind", &self.kind)?;
-        validate_not_empty("subject.id", &self.id)
+        validate_not_empty("subject.kind", self.kind())?;
+        validate_not_empty("subject.id", self.id())
+    }
+
+    /// Returns the application-owned subject kind.
+    #[must_use]
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+
+    /// Returns the application-owned subject id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl<'de> Deserialize<'de> for SubjectRef {
+    fn deserialize<D>(deserializer: D) -> core::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct SubjectRefRecord {
+            kind: String,
+            id: String,
+        }
+
+        let record = SubjectRefRecord::deserialize(deserializer)?;
+        Self::new(record.kind, record.id).map_err(serde::de::Error::custom)
     }
 }
 
 /// Application-owned actor metadata.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ActorRef {
     /// Actor kind, such as `user`, `system`, or `job`.
-    pub kind: String,
+    kind: String,
     /// Actor id.
-    pub id: String,
+    id: String,
 }
 
 impl ActorRef {
@@ -60,7 +88,35 @@ impl ActorRef {
 
     /// Validates the actor reference.
     pub fn validate(&self) -> Result<()> {
-        validate_not_empty("actor.kind", &self.kind)?;
-        validate_not_empty("actor.id", &self.id)
+        validate_not_empty("actor.kind", self.kind())?;
+        validate_not_empty("actor.id", self.id())
+    }
+
+    /// Returns the actor kind.
+    #[must_use]
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+
+    /// Returns the actor id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl<'de> Deserialize<'de> for ActorRef {
+    fn deserialize<D>(deserializer: D) -> core::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct ActorRefRecord {
+            kind: String,
+            id: String,
+        }
+
+        let record = ActorRefRecord::deserialize(deserializer)?;
+        Self::new(record.kind, record.id).map_err(serde::de::Error::custom)
     }
 }

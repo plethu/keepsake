@@ -5,12 +5,13 @@
 //! decoding; this module owns the parts of those flows that do not vary by
 //! dialect so they are written and tested once.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use keepsake::{
-    ActorRef, ApplyKeepsake, AuditContext, AuditDecision, AuditEvent, AuditEventType,
-    CommandContext, Keepsake, LifecycleState, RevokeBySubject, RevokeKeepsake, SubjectRef,
+    ActiveRelation, ActorRef, ApplyKeepsake, AuditContext, AuditDecision, AuditEvent,
+    AuditEventType, CommandContext, Keepsake, LifecycleState, RelationId, RelationKey,
+    RevokeBySubject, RevokeKeepsake, SubjectRef,
 };
 use uuid::Uuid;
 
@@ -115,15 +116,9 @@ pub(super) fn audit_event_record(parts: AuditEventParts) -> RepositoryResult<Aud
         event: AuditEvent {
             event_type,
             at: parts.at,
-            actor: ActorRef {
-                kind: parts.actor_kind,
-                id: parts.actor_id,
-            },
+            actor: ActorRef::new(parts.actor_kind, parts.actor_id)?,
             keepsake_id: parts.keepsake_id,
-            subject: SubjectRef {
-                kind: parts.subject_kind,
-                id: parts.subject_id,
-            },
+            subject: SubjectRef::new(parts.subject_kind, parts.subject_id)?,
             relation_id: parts.relation_id,
             decision: parts.decision,
             context: AuditContext {
@@ -131,6 +126,36 @@ pub(super) fn audit_event_record(parts: AuditEventParts) -> RepositoryResult<Aud
             },
         },
     })
+}
+
+pub(super) fn filter_active_relations_by_ids(
+    active: Vec<ActiveRelation>,
+    relation_ids: &[RelationId],
+) -> Vec<ActiveRelation> {
+    if relation_ids.is_empty() {
+        return Vec::new();
+    }
+
+    let requested = relation_ids.iter().copied().collect::<BTreeSet<_>>();
+    active
+        .into_iter()
+        .filter(|active| requested.contains(&active.relation().id))
+        .collect()
+}
+
+pub(super) fn filter_active_relations_by_keys(
+    active: Vec<ActiveRelation>,
+    keys: &[RelationKey],
+) -> Vec<ActiveRelation> {
+    if keys.is_empty() {
+        return Vec::new();
+    }
+
+    let requested = keys.iter().collect::<BTreeSet<_>>();
+    active
+        .into_iter()
+        .filter(|active| requested.contains(&active.relation().key))
+        .collect()
 }
 
 /// Builds the audit event for a revoke against the keepsake it resolved to.

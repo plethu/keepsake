@@ -58,8 +58,8 @@ where
             ",
         )
         .bind(command.id)
-        .bind(&command.subject.kind)
-        .bind(&command.subject.id)
+        .bind(command.subject.kind())
+        .bind(command.subject.id())
         .bind(command.at)
         .bind(metadata)
         .bind(command.relation_id)
@@ -136,8 +136,8 @@ async fn revoke_by_subject_tx(
             expires_at, fulfilled_at, revoked_at, metadata
         ",
     )
-    .bind(&subject.kind)
-    .bind(&subject.id)
+    .bind(subject.kind())
+    .bind(subject.id())
     .bind(relation_id)
     .bind(at)
     .fetch_optional(&mut **tx)

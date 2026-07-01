@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use keepsake::{
@@ -10,8 +10,9 @@ use sqlx::{MySql, Row, Transaction};
 use uuid::Uuid;
 
 use super::support::{
-    AuditEventParts, apply_event, audit_event_record, expires_at, parse_state, parse_uuid,
-    revoke_by_subject_event, revoke_event,
+    AuditEventParts, apply_event, audit_event_record, expires_at, filter_active_relations_by_ids,
+    filter_active_relations_by_keys, parse_state, parse_uuid, revoke_by_subject_event,
+    revoke_event,
 };
 use super::{
     AppliedKeepsake, AuditCursor, AuditEventRecord, FulfilledExpiryCandidate, MembershipCursor,
@@ -254,8 +255,8 @@ where
             ",
         )
         .bind(command.id.to_string())
-        .bind(&command.subject.kind)
-        .bind(&command.subject.id)
+        .bind(command.subject.kind())
+        .bind(command.subject.id())
         .bind(command.relation_id.to_string())
         .bind(serde_json::to_value(&relation.expiry)?)
         .bind(naive_timestamp(command.at))
@@ -404,8 +405,8 @@ where
             order by relation_id, id
             ",
         )
-        .bind(&subject.kind)
-        .bind(&subject.id)
+        .bind(subject.kind())
+        .bind(subject.id())
         .fetch_all(&self.pool)
         .await?;
         rows.iter().map(keepsake_from_row).collect()
@@ -431,13 +432,12 @@ where
         subject: &SubjectRef,
         relation_ids: &[RelationId],
     ) -> RepositoryResult<Vec<ActiveRelation>> {
-        let requested = relation_ids.iter().copied().collect::<BTreeSet<_>>();
-        Ok(self
-            .active_relations_for_subject(subject)
-            .await?
-            .into_iter()
-            .filter(|active| requested.contains(&active.relation().id))
-            .collect())
+        if relation_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let active = self.active_relations_for_subject(subject).await?;
+        Ok(filter_active_relations_by_ids(active, relation_ids))
     }
 
     /// Returns active keepsakes for a subject, filtered by relation keys.
@@ -446,13 +446,12 @@ where
         subject: &SubjectRef,
         keys: &[RelationKey],
     ) -> RepositoryResult<Vec<ActiveRelation>> {
-        let requested = keys.iter().collect::<BTreeSet<_>>();
-        Ok(self
-            .active_relations_for_subject(subject)
-            .await?
-            .into_iter()
-            .filter(|active| requested.contains(&active.relation().key))
-            .collect())
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let active = self.active_relations_for_subject(subject).await?;
+        Ok(filter_active_relations_by_keys(active, keys))
     }
 
     /// Scans active memberships for a relation in stable order.
@@ -795,10 +794,10 @@ async fn record_audit_event_tx(
     )
     .bind(event.keepsake_id.to_string())
     .bind(event.relation_id.to_string())
-    .bind(&event.subject.kind)
-    .bind(&event.subject.id)
-    .bind(&event.actor.kind)
-    .bind(&event.actor.id)
+    .bind(event.subject.kind())
+    .bind(event.subject.id())
+    .bind(event.actor.kind())
+    .bind(event.actor.id())
     .bind(event.event_type.as_str())
     .bind(serde_json::to_value(&event.decision)?)
     .bind(naive_timestamp(event.at))
@@ -949,8 +948,8 @@ async fn active_keepsake_for_subject_relation_tx(
         for update
         ",
     )
-    .bind(&subject.kind)
-    .bind(&subject.id)
+    .bind(subject.kind())
+    .bind(subject.id())
     .bind(relation_id.to_string())
     .fetch_optional(&mut **tx)
     .await?;
@@ -1013,8 +1012,8 @@ async fn revoke_by_subject_tx(
         for update
         ",
     )
-    .bind(&subject.kind)
-    .bind(&subject.id)
+    .bind(subject.kind())
+    .bind(subject.id())
     .bind(relation_id.to_string())
     .fetch_optional(&mut **tx)
     .await?;
@@ -1053,8 +1052,8 @@ async fn active_relation_rows_for_subject(
         order by k.relation_id, k.id
         ",
     )
-    .bind(&subject.kind)
-    .bind(&subject.id)
+    .bind(subject.kind())
+    .bind(subject.id())
     .fetch_all(pool)
     .await?;
 
@@ -1114,10 +1113,10 @@ fn keepsake_from_row(row: &sqlx::mysql::MySqlRow) -> RepositoryResult<Keepsake> 
     let expiry = serde_json::from_value::<ExpiryPolicy>(row.try_get("expiry_policy")?)?;
     Ok(KeepsakeRecord {
         id: parse_uuid(row.try_get("id")?)?,
-        subject: SubjectRef {
-            kind: row.try_get("subject_kind")?,
-            id: row.try_get("subject_id")?,
-        },
+        subject: SubjectRef::new(
+            row.try_get::<String, _>("subject_kind")?,
+            row.try_get::<String, _>("subject_id")?,
+        )?,
         relation_id: parse_uuid(row.try_get("relation_id")?)?,
         state: parse_state(row.try_get("state")?)?,
         expiry,

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use keepsake::{
@@ -10,8 +10,9 @@ use sqlx::{Row, Sqlite, Transaction};
 use uuid::Uuid;
 
 use super::support::{
-    AuditEventParts, apply_event, audit_event_record, expires_at, parse_state, parse_uuid,
-    revoke_by_subject_event, revoke_event,
+    AuditEventParts, apply_event, audit_event_record, expires_at, filter_active_relations_by_ids,
+    filter_active_relations_by_keys, parse_state, parse_uuid, revoke_by_subject_event,
+    revoke_event,
 };
 use super::{
     AppliedKeepsake, AuditCursor, AuditEventRecord, FulfilledExpiryCandidate, MembershipCursor,
@@ -233,8 +234,8 @@ where
             ",
         )
         .bind(command.id.to_string())
-        .bind(&command.subject.kind)
-        .bind(&command.subject.id)
+        .bind(command.subject.kind())
+        .bind(command.subject.id())
         .bind(command.relation_id.to_string())
         .bind(expiry_policy)
         .bind(&at)
@@ -398,8 +399,8 @@ where
             order by relation_id, id
             ",
         )
-        .bind(&subject.kind)
-        .bind(&subject.id)
+        .bind(subject.kind())
+        .bind(subject.id())
         .fetch_all(&self.pool)
         .await?;
 
@@ -430,12 +431,8 @@ where
             return Ok(Vec::new());
         }
 
-        let requested = relation_ids.iter().copied().collect::<BTreeSet<_>>();
         let active = self.active_relations_for_subject(subject).await?;
-        Ok(active
-            .into_iter()
-            .filter(|active| requested.contains(&active.relation().id))
-            .collect())
+        Ok(filter_active_relations_by_ids(active, relation_ids))
     }
 
     /// Returns active keepsakes for a subject, filtered by relation keys.
@@ -448,12 +445,8 @@ where
             return Ok(Vec::new());
         }
 
-        let requested = keys.iter().collect::<BTreeSet<_>>();
         let active = self.active_relations_for_subject(subject).await?;
-        Ok(active
-            .into_iter()
-            .filter(|active| requested.contains(&active.relation().key))
-            .collect())
+        Ok(filter_active_relations_by_keys(active, keys))
     }
 
     /// Scans active memberships for a relation in stable order.
@@ -787,10 +780,10 @@ async fn record_audit_event_tx(
     )
     .bind(event.keepsake_id.to_string())
     .bind(event.relation_id.to_string())
-    .bind(&event.subject.kind)
-    .bind(&event.subject.id)
-    .bind(&event.actor.kind)
-    .bind(&event.actor.id)
+    .bind(event.subject.kind())
+    .bind(event.subject.id())
+    .bind(event.actor.kind())
+    .bind(event.actor.id())
     .bind(event.event_type.as_str())
     .bind(decision)
     .bind(format_timestamp(event.at))
@@ -937,8 +930,8 @@ async fn active_keepsake_for_subject_relation_tx(
         where subject_kind = ?1 and subject_id = ?2 and relation_id = ?3 and state = 'applied'
         ",
     )
-    .bind(&subject.kind)
-    .bind(&subject.id)
+    .bind(subject.kind())
+    .bind(subject.id())
     .bind(relation_id.to_string())
     .fetch_optional(&mut **tx)
     .await?;
@@ -999,8 +992,8 @@ async fn revoke_by_subject_tx(
             expires_at, fulfilled_at, revoked_at, metadata
         ",
     )
-    .bind(&subject.kind)
-    .bind(&subject.id)
+    .bind(subject.kind())
+    .bind(subject.id())
     .bind(relation_id.to_string())
     .bind(format_timestamp(at))
     .fetch_optional(&mut **tx)
@@ -1037,8 +1030,8 @@ async fn active_relation_rows_for_subject(
         order by k.relation_id, k.id
         ",
     )
-    .bind(&subject.kind)
-    .bind(&subject.id)
+    .bind(subject.kind())
+    .bind(subject.id())
     .fetch_all(pool)
     .await?;
 
@@ -1115,10 +1108,10 @@ fn keepsake_from_row(row: &sqlx::sqlite::SqliteRow) -> RepositoryResult<Keepsake
     let expiry = serde_json::from_str::<ExpiryPolicy>(row.try_get("expiry_policy")?)?;
     Ok(KeepsakeRecord {
         id: parse_uuid(row.try_get("id")?)?,
-        subject: SubjectRef {
-            kind: row.try_get("subject_kind")?,
-            id: row.try_get("subject_id")?,
-        },
+        subject: SubjectRef::new(
+            row.try_get::<String, _>("subject_kind")?,
+            row.try_get::<String, _>("subject_id")?,
+        )?,
         relation_id: parse_uuid(row.try_get("relation_id")?)?,
         state: parse_state(row.try_get("state")?)?,
         expiry,

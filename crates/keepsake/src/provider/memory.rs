@@ -340,8 +340,8 @@ impl InMemoryKeepsakeStore {
                 && keepsake.relation_id() == command.relation_id
         }) {
             return Err(KeepsakeError::DuplicateActiveKeepsake {
-                subject_kind: command.subject.kind.clone(),
-                subject_id: command.subject.id.clone(),
+                subject_kind: command.subject.kind().to_owned(),
+                subject_id: command.subject.id().to_owned(),
                 relation_id: command.relation_id,
             }
             .into());

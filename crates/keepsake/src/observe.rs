@@ -30,7 +30,7 @@ impl TransitionObservation {
         Self {
             operation,
             relation,
-            subject_kind: subject.kind.clone(),
+            subject_kind: subject.kind().to_owned(),
             decision,
         }
     }
