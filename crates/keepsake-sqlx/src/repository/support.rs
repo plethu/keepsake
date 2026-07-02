@@ -10,8 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Utc};
 use keepsake::{
     ActiveRelation, ActorRef, ApplyKeepsake, AuditContext, AuditDecision, AuditEvent,
-    AuditEventType, CommandContext, Keepsake, LifecycleState, RelationId, RelationKey,
-    RevokeBySubject, RevokeKeepsake, SubjectRef,
+    AuditEventType, CommandContext, ExpiryCause, Keepsake, KeepsakeId, LifecycleState, RelationId,
+    RelationKey, RevokeBySubject, RevokeKeepsake, SubjectRef,
 };
 use uuid::Uuid;
 
@@ -191,4 +191,28 @@ pub(super) fn revoke_by_subject_event(
     keepsake: &Keepsake,
 ) -> AuditEvent {
     revoke_audit_event(command.at, &command.context, keepsake)
+}
+
+/// Builds the audit event for an expiry worker transition.
+pub(super) fn expiry_event(
+    at: DateTime<Utc>,
+    cause: ExpiryCause,
+    keepsake_id: KeepsakeId,
+    relation_id: RelationId,
+    subject_kind: impl Into<String>,
+    subject_id: impl Into<String>,
+) -> RepositoryResult<AuditEvent> {
+    Ok(AuditEvent {
+        event_type: match cause {
+            ExpiryCause::Timed => AuditEventType::TimedExpiry,
+            ExpiryCause::Fulfilled => AuditEventType::FulfillmentExpiry,
+        },
+        at,
+        actor: ActorRef::new("system", "keepsake-expiry")?,
+        keepsake_id,
+        subject: SubjectRef::new(subject_kind, subject_id)?,
+        relation_id,
+        decision: AuditDecision::Expired { cause },
+        context: AuditContext::default(),
+    })
 }

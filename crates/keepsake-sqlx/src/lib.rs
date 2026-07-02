@@ -15,9 +15,10 @@ pub mod prelude {
 }
 
 pub use repository::{
-    ActiveRelation, AppliedKeepsake, AuditCursor, AuditEventRecord, FulfilledExpiryCandidate,
-    KeepsakeSqlxBackend, MembershipCursor, NoopRelationCache, RelationCache, RepositoryError,
-    RepositoryResult, SqlxKeepsakeRepository, TimedExpiryCandidate, TimedSqlxKeepsakeRepository,
+    ActiveRelation, AppliedKeepsake, AuditCursor, AuditEventRecord, AuditOutboxCursor,
+    AuditOutboxRecord, FulfilledExpiryCandidate, KeepsakeSqlxBackend, MembershipCursor,
+    NoopRelationCache, RelationCache, RepositoryError, RepositoryResult, SqlxKeepsakeRepository,
+    TimedExpiryCandidate, TimedSqlxKeepsakeRepository,
 };
 #[cfg(feature = "postgres")]
 pub use repository::{

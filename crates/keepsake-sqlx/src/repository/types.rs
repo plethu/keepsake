@@ -58,6 +58,40 @@ impl AuditCursor {
     }
 }
 
+/// Keyset cursor for audit outbox export in stable id order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuditOutboxCursor {
+    /// Last seen outbox row id.
+    pub id: i64,
+}
+
+impl AuditOutboxCursor {
+    /// Creates a cursor positioned after a returned outbox record.
+    #[must_use]
+    pub const fn after(record: &AuditOutboxRecord) -> Self {
+        Self { id: record.id }
+    }
+}
+
+/// Audit outbox row for external delivery workers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuditOutboxRecord {
+    /// Monotonic outbox row id.
+    pub id: i64,
+    /// Source audit event id.
+    pub audit_event_id: i64,
+    /// Stable event type label.
+    pub event_type: String,
+    /// Serialized [`AuditEvent`] payload.
+    pub payload: AuditEvent,
+    /// Worker that currently owns the lease, when claimed.
+    pub claimed_by: Option<String>,
+    /// Lease expiry timestamp, when claimed.
+    pub claimed_until: Option<DateTime<Utc>>,
+    /// Delivery acknowledgement timestamp.
+    pub delivered_at: Option<DateTime<Utc>>,
+}
+
 /// Result of an apply operation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppliedKeepsake {

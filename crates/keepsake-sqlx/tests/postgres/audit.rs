@@ -246,14 +246,14 @@ async fn append_audit_event_records_explicit_event() -> TestResult<()> {
             .iter()
             .map(|row| row.event_type.as_str())
             .collect::<Vec<&str>>(),
-        vec!["apply", "timed_expiry"]
+        vec!["apply", "timed_expiry", "timed_expiry"]
     );
-    assert_eq!(audit_rows[1].id, audit_event_id);
-    assert_eq!(audit_rows[1].actor_kind, "system");
-    assert_eq!(audit_rows[1].actor_id, "expiry-worker");
-    assert_eq!(audit_rows[1].occurred_at, due_at);
+    assert_eq!(audit_rows[2].id, audit_event_id);
+    assert_eq!(audit_rows[2].actor_kind, "system");
+    assert_eq!(audit_rows[2].actor_id, "expiry-worker");
+    assert_eq!(audit_rows[2].occurred_at, due_at);
     assert_eq!(
-        serde_json::from_value::<AuditDecision>(audit_rows[1].decision.clone())?,
+        serde_json::from_value::<AuditDecision>(audit_rows[2].decision.clone())?,
         AuditDecision::Expired {
             cause: ExpiryCause::Timed
         }

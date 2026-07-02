@@ -5,8 +5,8 @@ use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use super::{
-    AuditCursor, AuditEventRecord, AuditEventRow, KeepsakeRepository, RelationCache,
-    RepositoryResult, validate_limit,
+    AuditCursor, AuditEventRecord, AuditEventRow, AuditOutboxCursor, AuditOutboxRecord,
+    KeepsakeRepository, RelationCache, RepositoryResult, validate_limit,
 };
 
 impl<C> KeepsakeRepository<C>
@@ -84,6 +84,104 @@ where
         self.hydrate_audit_records(rows).await
     }
 
+    /// Exports undelivered audit outbox rows in stable id order.
+    pub async fn audit_outbox(
+        &self,
+        after: Option<&AuditOutboxCursor>,
+        limit: i64,
+    ) -> RepositoryResult<Vec<AuditOutboxRecord>> {
+        let limit = validate_limit(limit)?;
+        let rows = sqlx::query(
+            r"
+            select id, audit_event_id, event_type, payload, claimed_by, claimed_until, delivered_at
+            from keepsake_audit_outbox
+            where delivered_at is null and ($1::bigint is null or id > $1)
+            order by id
+            limit $2
+            ",
+        )
+        .bind(after.map(|cursor| cursor.id))
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(outbox_record_from_pg_row).collect()
+    }
+
+    /// Claims a stable batch of undelivered audit outbox rows until `lease_until`.
+    pub async fn claim_audit_outbox(
+        &self,
+        worker_id: &str,
+        now: chrono::DateTime<chrono::Utc>,
+        lease_until: chrono::DateTime<chrono::Utc>,
+        limit: i64,
+    ) -> RepositoryResult<Vec<AuditOutboxRecord>> {
+        let limit = validate_limit(limit)?;
+        let rows = sqlx::query(
+            r"
+            with claimable as (
+              select id
+              from keepsake_audit_outbox
+              where delivered_at is null
+                and (claimed_until is null or claimed_until <= $3)
+              order by id
+              limit $4
+              for update skip locked
+            ),
+            updated as (
+              update keepsake_audit_outbox
+              set claimed_by = $1, claimed_until = $2
+              where id in (select id from claimable)
+              returning id, audit_event_id, event_type, payload, claimed_by, claimed_until, delivered_at
+            )
+            select id, audit_event_id, event_type, payload, claimed_by, claimed_until, delivered_at
+            from updated
+            order by id
+            ",
+        )
+        .bind(worker_id)
+        .bind(lease_until)
+        .bind(now)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(outbox_record_from_pg_row).collect()
+    }
+
+    /// Acknowledges delivery of a claimed outbox row.
+    pub async fn ack_audit_outbox(
+        &self,
+        outbox_id: i64,
+        delivered_at: chrono::DateTime<chrono::Utc>,
+    ) -> RepositoryResult<bool> {
+        let result = sqlx::query(
+            r"
+            update keepsake_audit_outbox
+            set delivered_at = $2, claimed_by = null, claimed_until = null
+            where id = $1 and delivered_at is null and claimed_by is not null
+            ",
+        )
+        .bind(outbox_id)
+        .bind(delivered_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    /// Releases a claimed outbox row for another worker to retry.
+    pub async fn release_audit_outbox(&self, outbox_id: i64) -> RepositoryResult<bool> {
+        let result = sqlx::query(
+            r"
+            update keepsake_audit_outbox
+            set claimed_by = null, claimed_until = null
+            where id = $1 and delivered_at is null and claimed_by is not null
+            ",
+        )
+        .bind(outbox_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
     async fn hydrate_audit_records(
         &self,
         rows: Vec<AuditEventRow>,
@@ -115,6 +213,21 @@ where
     }
 }
 
+fn outbox_record_from_pg_row(row: &sqlx::postgres::PgRow) -> RepositoryResult<AuditOutboxRecord> {
+    use sqlx::Row;
+
+    let payload = serde_json::from_value::<AuditEvent>(row.try_get("payload")?)?;
+    Ok(AuditOutboxRecord {
+        id: row.try_get("id")?,
+        audit_event_id: row.try_get("audit_event_id")?,
+        event_type: row.try_get("event_type")?,
+        payload,
+        claimed_by: row.try_get("claimed_by")?,
+        claimed_until: row.try_get("claimed_until")?,
+        delivered_at: row.try_get("delivered_at")?,
+    })
+}
+
 pub(super) async fn record_audit_event_tx(
     tx: &mut Transaction<'_, Postgres>,
     event: &AuditEvent,
@@ -141,6 +254,8 @@ pub(super) async fn record_audit_event_tx(
     .fetch_one(&mut **tx)
     .await?;
 
+    record_audit_outbox_tx(tx, audit_event_id, event).await?;
+
     if event.context.attributes.is_empty() {
         return Ok(audit_event_id);
     }
@@ -166,4 +281,22 @@ pub(super) async fn record_audit_event_tx(
     .await?;
 
     Ok(audit_event_id)
+}
+
+async fn record_audit_outbox_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    audit_event_id: i64,
+    event: &AuditEvent,
+) -> RepositoryResult<()> {
+    sqlx::query(
+        r"
+        insert into keepsake_audit_outbox (audit_event_id, payload)
+        values ($1, $2)
+        ",
+    )
+    .bind(audit_event_id)
+    .bind(serde_json::to_value(event)?)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }

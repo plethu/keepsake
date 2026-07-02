@@ -12,8 +12,9 @@ logs for debugging a failing request. Use metrics for aggregate health.
 
 The core crate includes the audit event model, `AuditSink`, and a no-op sink.
 `InMemoryAuditSink` is behind the `test` feature because it is a test double,
-not production guidance. The SQLx adapter writes audit rows through `apply` and
-`revoke`; treat those command helpers as the canonical SQL mutation path.
+not production guidance. The SQLx adapter writes audit rows through `apply`,
+`revoke`, expiry helpers, and `append_audit_event`; treat those command helpers
+as the canonical SQL mutation path.
 
 `AuditSink` has an associated `Error` type. Production adapters should expose a
 small concrete error enum, usually derived with `thiserror`, rather than folding
@@ -33,10 +34,31 @@ command helpers copy command metadata into these rows and preserve
 a strict application reporting contract, promote it in the application's audit
 sink or warehouse schema.
 
+## Outbox Export
+
+`keepsake-sqlx` also writes one `keepsake_audit_outbox` row for every SQL audit
+event in the same transaction. Use `audit_outbox` for cursor export,
+`claim_audit_outbox` for leased at-least-once workers, `ack_audit_outbox` after
+successful delivery, and `release_audit_outbox` when a worker gives up a lease.
+
+```rust
+let batch = repo
+    .claim_audit_outbox("warehouse-worker-1", now, lease_until, 100)
+    .await?;
+
+for row in batch {
+    export(row.payload).await?;
+    repo.ack_audit_outbox(row.id, delivered_at).await?;
+}
+```
+
+Broker and storage clients stay outside the crate. Kafka, Restate, S3, and
+warehouse jobs should consume the database outbox API, then transform the
+`AuditEvent` payload for their destination.
+
 Avoid putting high-cardinality context into metrics labels. Audit rows and trace
 spans are better homes for values such as subject id, ticket id, and request id.
 
-SQL append-only audit, Kafka, object storage, and event-store integrations fit
-behind application adapters. Preserve Keepsake's durable audit fields and append
-application context attributes alongside them, while keeping logging and metrics
-separate.
+Preserve Keepsake's durable audit fields and application context attributes when
+copying outbox payloads into cold storage or event systems, while keeping logging
+and metrics separate.

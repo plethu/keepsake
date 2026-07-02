@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added a SQLx audit outbox for Postgres, SQLite, and MySQL. Every SQL audit
+  write now creates an outbox row in the same transaction, including apply,
+  duplicate apply, revoke, expiry helpers, and explicit `append_audit_event`.
+- Added `AuditOutboxRecord`, `AuditOutboxCursor`, and repository helpers for
+  cursor export, claim/lease, acknowledgement, and release.
+- Documented Kafka, Restate, S3, and warehouse export as external workers over
+  the database outbox API, not built-in broker clients.
+
 ## 0.6.0 - 2026-06-23
 
 - Added `audit_events_for_keepsake` and `audit_events_for_relation` read helpers

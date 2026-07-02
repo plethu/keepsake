@@ -109,7 +109,7 @@ async fn relation_cache_serves_reads_and_invalidates_local_writes() -> TestResul
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
     let repo = KeepsakeRepository::new(pool.clone())
-        .with_local_relation_cache(LocalRelationCacheConfig::new(Duration::from_secs(60)));
+        .with_local_relation_cache(LocalRelationCacheConfig::new(Duration::from_mins(1)));
     repo.migrate().await?;
     reset_database(&pool).await?;
 

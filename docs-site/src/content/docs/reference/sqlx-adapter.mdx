@@ -85,6 +85,15 @@ that do not have a built-in repository command. It appends audit rows without
 mutating lifecycle state. For apply and revoke flows, prefer the command
 helpers so lifecycle and audit rows commit together.
 
+Every SQL audit write also creates an outbox row in the same transaction. Export
+workers can scan with `audit_outbox`, lease work with `claim_audit_outbox`, mark
+delivery with `ack_audit_outbox`, and retry by lease expiry or
+`release_audit_outbox`. Keepsake does not include Kafka, Restate, S3, or
+warehouse clients; those integrations should consume the DB outbox API.
+`AuditOutboxCursor::after(&record)` is the stable cursor for id-ordered export.
+Leased workers should ack only after the external system has accepted the
+payload; unacked rows become claimable again when the lease expires.
+
 ## Read Helpers
 
 `active_relations_for_subject` returns active keepsakes with their stored
