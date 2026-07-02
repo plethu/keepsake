@@ -1,4 +1,16 @@
 //! `SQLx` adapter for Keepsake.
+//!
+//! This crate provides Postgres, `SQLite`, and `MySQL` repositories for durable
+//! keepsake lifecycle state, relation reads, expiry workers, audit history, and
+//! audit outbox export.
+//!
+//! SQL audit writes performed by repository commands are transactional:
+//! `apply`, `revoke`, expiry helpers, and `append_audit_event` write the audit
+//! event and the corresponding outbox row in the same database transaction.
+//! External systems such as Kafka, Restate, S3, or warehouse loaders should
+//! consume the database outbox through `audit_outbox`,
+//! `claim_audit_outbox`, `ack_audit_outbox`, and `release_audit_outbox`; broker
+//! and storage clients intentionally stay outside this crate.
 
 mod repository;
 
