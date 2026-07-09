@@ -1,11 +1,11 @@
-use super::backend::KeepsakeSqlxBackend;
-use super::{RepositoryError, RepositoryResult};
 #[cfg(feature = "mysql")]
 use super::MySqlBackend;
 #[cfg(feature = "postgres")]
 use super::PostgresBackend;
 #[cfg(feature = "sqlite")]
 use super::SqliteBackend;
+use super::backend::KeepsakeSqlxBackend;
+use super::{RepositoryError, RepositoryResult};
 
 #[cfg(all(feature = "postgres", feature = "migrations"))]
 pub(super) async fn postgres_schema_preflight(pool: &sqlx::PgPool) -> RepositoryResult<()> {

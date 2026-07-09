@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1 - 2026-07-09
+
+- Gate `filter_active_relations_by_ids` and `filter_active_relations_by_keys`
+  behind the `mysql` and `sqlite` features so default Postgres builds are
+  warning-free.
+
 ## 1.0.0 - 2026-07-09
 
 First stable release. Semver applies to the public Rust API and to schema

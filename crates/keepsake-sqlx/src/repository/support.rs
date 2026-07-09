@@ -5,13 +5,17 @@
 //! decoding; this module owns the parts of those flows that do not vary by
 //! dialect so they are written and tested once.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+#[cfg(any(feature = "mysql", feature = "sqlite"))]
+use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
+#[cfg(any(feature = "mysql", feature = "sqlite"))]
+use keepsake::{ActiveRelation, RelationKey};
 use keepsake::{
-    ActiveRelation, ActorRef, ApplyKeepsake, AuditContext, AuditDecision, AuditEvent,
-    AuditEventType, CommandContext, ExpiryCause, Keepsake, KeepsakeId, LifecycleState, RelationId,
-    RelationKey, RevokeBySubject, RevokeKeepsake, SubjectRef,
+    ActorRef, ApplyKeepsake, AuditContext, AuditDecision, AuditEvent, AuditEventType,
+    CommandContext, ExpiryCause, Keepsake, KeepsakeId, LifecycleState, RelationId, RevokeBySubject,
+    RevokeKeepsake, SubjectRef,
 };
 use uuid::Uuid;
 
@@ -128,6 +132,7 @@ pub(super) fn audit_event_record(parts: AuditEventParts) -> RepositoryResult<Aud
     })
 }
 
+#[cfg(any(feature = "mysql", feature = "sqlite"))]
 pub(super) fn filter_active_relations_by_ids(
     active: Vec<ActiveRelation>,
     relation_ids: &[RelationId],
@@ -143,6 +148,7 @@ pub(super) fn filter_active_relations_by_ids(
         .collect()
 }
 
+#[cfg(any(feature = "mysql", feature = "sqlite"))]
 pub(super) fn filter_active_relations_by_keys(
     active: Vec<ActiveRelation>,
     keys: &[RelationKey],
