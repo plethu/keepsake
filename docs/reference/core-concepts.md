@@ -1,7 +1,4 @@
----
-title: Core Concepts
-description: Keepsake domain terms.
----
+# Core Concepts
 
 Keepsake has a small vocabulary. The same terms appear in commands, repository
 methods, audit events, and database rows.

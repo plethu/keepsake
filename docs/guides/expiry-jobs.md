@@ -1,7 +1,4 @@
----
-title: Expiry Jobs
-description: Run deterministic expiry workers.
----
+# Expiry Jobs
 
 Timed relations stay active until a worker records the expiry transition. Run
 that worker from cron, a queue worker, or a service loop outside request paths.

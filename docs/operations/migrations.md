@@ -1,7 +1,4 @@
----
-title: Migrations
-description: Applying the Postgres schema.
----
+# Migrations
 
 `keepsake-sqlx` embeds SQLx migrations behind the default `migrations` feature.
 Call `KeepsakeRepository::migrate()` from startup or from your normal migration

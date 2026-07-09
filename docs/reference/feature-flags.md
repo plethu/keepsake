@@ -1,7 +1,4 @@
----
-title: Feature Flags
-description: Feature flags exposed by the Keepsake crates.
----
+# Feature Flags
 
 `keepsake` has no backend features. The core model and evaluator stay small,
 synchronous, and persistence-agnostic.

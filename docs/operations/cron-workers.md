@@ -1,7 +1,4 @@
----
-title: Cron And Workers
-description: Run expiry outside request paths.
----
+# Cron And Workers
 
 Run expiry workers from cron, a queue worker, or a service loop. Keep expiry
 outside request paths so user-facing requests do not pay for background cleanup.

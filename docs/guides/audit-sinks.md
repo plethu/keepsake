@@ -1,7 +1,4 @@
----
-title: Audit Sinks
-description: Keep durable audit separate from operational state.
----
+# Audit Sinks
 
 Audit is durable history. Logging is diagnostic. Metrics are aggregate health
 signals. Keepsake keeps these concerns separate through provider traits.

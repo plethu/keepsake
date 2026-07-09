@@ -1,12 +1,18 @@
 # Contributing
 
-Run the local gates before opening a change:
+Keepsake is stable infrastructure for relation lifecycles. The main consumers
+are Rust services and policy adapters such as gatekeep that read active relation
+state through `ActiveRelationSource`.
+
+## Before you open a PR
+
+Run the local gates:
 
 ```sh
 make check
 ```
 
-Run database tests with Docker:
+When a change touches SQLx, migrations, or database queries, also run:
 
 ```sh
 make test-db
@@ -18,14 +24,22 @@ Tool versions are pinned in `.mise.toml`:
 mise install
 ```
 
-When a change touches the public surface, lean on what keeps the project healthy
-over time: maintainability, reliability, interoperability, and a workflow other
-contributors can follow.
+CI runs on pull requests via Codeberg-hosted Forgejo Actions. If Actions is
+unavailable, `make check` is the release gate.
 
-Issues are welcome for bugs, gaps in the docs, missing features, and anything
-that bites you in operation.
+## Stability
 
-A heads-up on pull requests: I can't promise timely review on unsolicited
-patches right now, so please open an issue before you put real work into one.
-That way we can agree on the shape of a change before you spend an evening on
-it.
+From 1.0 onward, public API and schema changes follow semver. Open an issue
+before proposing breaking changes.
+
+## Docs
+
+Human guides live in [`docs/README.md`](docs/README.md). API detail belongs in rustdoc
+and on docs.rs. Update both when you change public behaviour.
+
+## Issues and pull requests
+
+Issues are welcome for bugs, doc gaps, and operational problems.
+
+Open an issue before spending time on a pull request. That way we can agree on
+scope before you implement it.

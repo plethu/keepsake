@@ -1,7 +1,4 @@
----
-title: Quickstart
-description: Apply a relation and scan active memberships.
----
+# Quickstart
 
 This example defines a manual `tag:trusted` relation, applies it to an account,
 then reads the active relations for that account.

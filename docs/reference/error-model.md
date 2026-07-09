@@ -1,7 +1,4 @@
----
-title: Error Model
-description: Typed core, adapter, and provider errors.
----
+# Error Model
 
 Keepsake keeps validation, provider, and adapter failures typed so callers can
 handle them without parsing strings.

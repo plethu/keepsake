@@ -1,7 +1,4 @@
----
-title: Lifecycle Model
-description: Core keepsake state, serde records, and timestamp invariants.
----
+# Lifecycle Model
 
 Every keepsake is either active, revoked, or expired. The active state only
 means the relation currently applies. Revoked and expired states are terminal

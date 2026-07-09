@@ -1,7 +1,4 @@
----
-title: SQLx Adapter
-description: Postgres repository surface and tables.
----
+# SQLx Adapter
 
 The SQLx adapter stores lifecycle state in Postgres. It provides migrations,
 relation upsert, idempotent apply and revoke, audited command helpers, active

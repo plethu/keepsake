@@ -1,7 +1,4 @@
----
-title: Overview
-description: What Keepsake is for.
----
+# Overview
 
 Keepsake stores relations that have lifecycle rules. A relation can be simple:
 `account:acct_123` has the `tag:trusted` relation. It can also expire:

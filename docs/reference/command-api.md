@@ -1,7 +1,4 @@
----
-title: Command API
-description: Typed commands for relation lifecycle changes.
----
+# Command API
 
 Commands describe lifecycle changes and carry audit metadata. The core crate
 stays synchronous; async appears at persistence boundaries such as SQLx.

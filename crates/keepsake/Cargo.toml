@@ -1,6 +1,6 @@
 [package]
 name = "keepsake"
-version = "0.6.0"
+version = "1.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -11,6 +11,7 @@ description = "Deterministic lifecycle model for auditable relation assignments"
 readme = "../../README.md"
 categories = ["data-structures"]
 keywords = ["lifecycle", "audit", "policy", "relations"]
+documentation = "https://docs.rs/keepsake"
 
 [features]
 default = []

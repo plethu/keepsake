@@ -1,7 +1,4 @@
----
-title: Fulfillment Projections
-description: Evaluate progress snapshots without owning application workflows.
----
+# Fulfillment Projections
 
 Fulfillment-based expiry is for relations that end when application progress
 reaches a target. A course entitlement might expire after required lessons are

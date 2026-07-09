@@ -1,10 +1,4 @@
 /target/
 /.sqlx/
-/docs-site/node_modules/
-/docs-site/dist/
-/docs-site/.astro/
-/.pnpm-store/
-/.cache/
 /.env
 /.env.*
-!/docs-site/.env.example

@@ -1,7 +1,4 @@
----
-title: Installation
-description: Add Keepsake to a Rust application.
----
+# Installation
 
 Add the core crate and the SQLx adapter to a Rust service that already uses
 Postgres:

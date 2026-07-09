@@ -1,7 +1,4 @@
----
-title: Sanctions
-description: Model timed sanctions.
----
+# Sanctions
 
 Sanctions usually need three properties: a durable active state, a predictable
 expiry time, and an audit trail. Keepsake stores the lifecycle state. The

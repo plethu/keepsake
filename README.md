@@ -49,6 +49,19 @@ matching SQLx pool. The repository type and pool type are coupled at compile
 time, and migrations also record a backend marker so a schema initialized for
 one driver is not silently reused by another.
 
+See [docs/installation.md](docs/installation.md) and
+[docs/reference/feature-flags.md](docs/reference/feature-flags.md) for backend
+setup.
+
+## Documentation
+
+- [docs/](docs/README.md) — guides and reference for integrators
+- [docs.rs/keepsake](https://docs.rs/keepsake) — core crate API
+- [docs.rs/keepsake-sqlx](https://docs.rs/keepsake-sqlx) — SQLx adapter API
+
+Examples: `examples/postgres-tags`, `examples/postgres-sanctions` (require
+`DATABASE_URL` and a running Postgres instance).
+
 ## Operations
 
 - Migrations: `keepsake-sqlx` embeds SQLx migrations. Run them at startup or

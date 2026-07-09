@@ -1,7 +1,4 @@
----
-title: Indexes
-description: Query paths supported by the v0 schema.
----
+# Indexes
 
 The initial migration includes indexes for active lookup by subject, active
 membership by relation, due timed expiry, simple fulfillment counters, and

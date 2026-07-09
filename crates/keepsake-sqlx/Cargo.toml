@@ -1,6 +1,6 @@
 [package]
 name = "keepsake-sqlx"
-version = "0.6.0"
+version = "1.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -11,6 +11,7 @@ description = "SQLx adapter for keepsake lifecycle storage"
 readme = "../../README.md"
 categories = ["database"]
 keywords = ["sqlx", "database", "lifecycle", "audit"]
+documentation = "https://docs.rs/keepsake-sqlx"
 
 [features]
 default = ["postgres", "cache", "fulfillment-counters", "migrations"]

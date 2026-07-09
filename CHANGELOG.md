@@ -1,14 +1,17 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 - 2026-07-09
+
+First stable release. Semver applies to the public Rust API and to schema
+expectations in `keepsake-sqlx` from this version onward.
 
 - Added a SQLx audit outbox for Postgres, SQLite, and MySQL. Every SQL audit
   write now creates an outbox row in the same transaction, including apply,
   duplicate apply, revoke, expiry helpers, and explicit `append_audit_event`.
 - Added `AuditOutboxRecord`, `AuditOutboxCursor`, and repository helpers for
   cursor export, claim/lease, acknowledgement, and release.
-- Documented Kafka, Restate, S3, and warehouse export as external workers over
-  the database outbox API, not built-in broker clients.
+- Moved human documentation from the Astro docs site into [`docs/`](docs/README.md).
+- CI runs on pull requests via Codeberg-hosted Forgejo Actions.
 
 ## 0.6.0 - 2026-06-23
 
@@ -83,10 +86,10 @@
   subject validation, and deterministic expiry behavior.
 - Split core model, SQL repository, and Postgres integration tests into focused
   private modules while preserving public API paths.
-- Refreshed README, docs-site, examples, and crate versions for the 0.2.0
-  release surface.
+- Refreshed README, docs, examples, and crate versions for the 0.2.0 release
+  surface.
 
 ## 0.1.0 - 2026-06-18
 
 - Initial workspace scaffold with core lifecycle model, SQLx/Postgres adapter,
-  Docker-backed database test wiring, examples, and Starlight documentation.
+  Docker-backed database test wiring, examples, and documentation.

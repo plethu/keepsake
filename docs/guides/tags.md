@@ -1,7 +1,4 @@
----
-title: Tags
-description: Model durable tags with manual expiry.
----
+# Tags
 
 Tags are the smallest Keepsake integration. They represent durable membership:
 an account is trusted, a user has beta access, or an organization belongs to a

@@ -1,7 +1,4 @@
----
-title: Query Performance
-description: Keep queries bounded and application-owned joins external.
----
+# Query Performance
 
 Use relation ids for hot membership scans and subject kind/id for active
 lookups. Join against application entity tables outside Keepsake so lifecycle

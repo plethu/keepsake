@@ -1,7 +1,4 @@
----
-title: Observability
-description: Record lifecycle outcomes without leaking application data.
----
+# Observability
 
 Observability needs to show whether lifecycle commands, scans, and workers are
 succeeding without putting application subjects in metric labels.

@@ -1,4 +1,7 @@
 //! Deterministic relation lifecycle primitives.
+//!
+//! Human guides and reference material are in the `docs/` directory of the
+//! repository. API reference: <https://docs.rs/keepsake>.
 
 pub mod audit;
 pub mod command;

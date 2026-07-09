@@ -1,5 +1,8 @@
 //! `SQLx` adapter for Keepsake.
 //!
+//! Human guides and reference material are in the `docs/` directory of the
+//! repository. API reference: <https://docs.rs/keepsake-sqlx>.
+//!
 //! This crate provides Postgres, `SQLite`, and `MySQL` repositories for durable
 //! keepsake lifecycle state, relation reads, expiry workers, audit history, and
 //! audit outbox export.
