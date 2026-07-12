@@ -6,10 +6,10 @@ use keepsake::{
 };
 use sqlx::Row;
 
+#[cfg(feature = "fulfillment-counters")]
+use crate::repository::FulfilledExpiryCandidate;
 use crate::repository::support::{parse_state, parse_uuid};
-use crate::repository::{
-    AuditOutboxRecord, FulfilledExpiryCandidate, RepositoryResult, TimedExpiryCandidate,
-};
+use crate::repository::{AuditOutboxRecord, RepositoryResult, TimedExpiryCandidate};
 pub(super) fn relation_from_row(
     row: &sqlx::sqlite::SqliteRow,
 ) -> RepositoryResult<RelationDefinition> {

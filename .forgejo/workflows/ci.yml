@@ -38,3 +38,63 @@ jobs:
 
       - name: Run project gates
         run: scripts/check-project-gates.sh
+
+  database-gates:
+    runs-on: codeberg-medium
+    services:
+      postgres:
+        image: postgres:17.6-alpine
+        env:
+          POSTGRES_DB: keepsake
+          POSTGRES_USER: keepsake
+          POSTGRES_PASSWORD: keepsake
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U keepsake -d keepsake"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 20
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: keepsake
+          MYSQL_USER: keepsake
+          MYSQL_PASSWORD: keepsake
+          MYSQL_ROOT_PASSWORD: keepsake-root
+        ports:
+          - 53306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -u keepsake -pkeepsake --silent"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgres://keepsake:keepsake@localhost:55432/keepsake
+      MYSQL_DATABASE_URL: mysql://keepsake:keepsake@localhost:53306/keepsake
+    steps:
+      - uses: https://code.forgejo.org/actions/checkout@v4
+
+      - name: Trust the checkout directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain "$RUST_VERSION"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustc" --version
+
+      - name: Cache cargo registry and build artifacts
+        uses: https://code.forgejo.org/actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: database-gates-rust-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            database-gates-rust-${{ env.RUST_VERSION }}-
+
+      - name: Run database gates
+        run: scripts/check-database-gates.sh

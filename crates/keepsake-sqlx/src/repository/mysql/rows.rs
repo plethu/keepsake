@@ -6,10 +6,10 @@ use keepsake::{
 };
 use sqlx::Row;
 
+#[cfg(feature = "fulfillment-counters")]
+use crate::repository::FulfilledExpiryCandidate;
 use crate::repository::support::{parse_state, parse_uuid};
-use crate::repository::{
-    AuditOutboxRecord, FulfilledExpiryCandidate, RepositoryResult, TimedExpiryCandidate,
-};
+use crate::repository::{AuditOutboxRecord, RepositoryResult, TimedExpiryCandidate};
 pub(super) fn relation_from_row(
     row: &sqlx::mysql::MySqlRow,
 ) -> RepositoryResult<RelationDefinition> {
@@ -101,7 +101,6 @@ pub(super) fn fulfilled_expiry_candidate_from_row(
     })
 }
 
-#[cfg(feature = "fulfillment-counters")]
 pub(super) const fn naive_timestamp(value: DateTime<Utc>) -> NaiveDateTime {
     value.naive_utc()
 }

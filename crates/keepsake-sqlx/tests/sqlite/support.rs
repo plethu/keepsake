@@ -54,6 +54,24 @@ impl BackendHarness for SqliteHarness {
         repo.active_relations_for_subject(subject).await
     }
 
+    async fn active_relations_for_subject_by_ids(
+        repo: &Self::Repo,
+        subject: &keepsake::SubjectRef,
+        relation_ids: &[Uuid],
+    ) -> Result<Vec<keepsake_sqlx::ActiveRelation>, RepositoryError> {
+        repo.active_relations_for_subject_by_ids(subject, relation_ids)
+            .await
+    }
+
+    async fn active_relations_for_subject_by_keys(
+        repo: &Self::Repo,
+        subject: &keepsake::SubjectRef,
+        keys: &[keepsake::RelationKey],
+    ) -> Result<Vec<keepsake_sqlx::ActiveRelation>, RepositoryError> {
+        repo.active_relations_for_subject_by_keys(subject, keys)
+            .await
+    }
+
     async fn active_for_subject(
         repo: &Self::Repo,
         subject: &keepsake::SubjectRef,

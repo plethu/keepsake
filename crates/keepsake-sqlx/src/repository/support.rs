@@ -6,12 +6,8 @@
 //! dialect so they are written and tested once.
 
 use std::collections::BTreeMap;
-#[cfg(any(feature = "mysql", feature = "sqlite"))]
-use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
-#[cfg(any(feature = "mysql", feature = "sqlite"))]
-use keepsake::{ActiveRelation, RelationKey};
 use keepsake::{
     ActorRef, ApplyKeepsake, AuditContext, AuditDecision, AuditEvent, AuditEventType,
     CommandContext, ExpiryCause, Keepsake, KeepsakeId, LifecycleState, RelationId, RevokeBySubject,
@@ -130,38 +126,6 @@ pub(super) fn audit_event_record(parts: AuditEventParts) -> RepositoryResult<Aud
             },
         },
     })
-}
-
-#[cfg(any(feature = "mysql", feature = "sqlite"))]
-pub(super) fn filter_active_relations_by_ids(
-    active: Vec<ActiveRelation>,
-    relation_ids: &[RelationId],
-) -> Vec<ActiveRelation> {
-    if relation_ids.is_empty() {
-        return Vec::new();
-    }
-
-    let requested = relation_ids.iter().copied().collect::<BTreeSet<_>>();
-    active
-        .into_iter()
-        .filter(|active| requested.contains(&active.relation().id))
-        .collect()
-}
-
-#[cfg(any(feature = "mysql", feature = "sqlite"))]
-pub(super) fn filter_active_relations_by_keys(
-    active: Vec<ActiveRelation>,
-    keys: &[RelationKey],
-) -> Vec<ActiveRelation> {
-    if keys.is_empty() {
-        return Vec::new();
-    }
-
-    let requested = keys.iter().collect::<BTreeSet<_>>();
-    active
-        .into_iter()
-        .filter(|active| requested.contains(&active.relation().key))
-        .collect()
 }
 
 /// Builds the audit event for a revoke against the keepsake it resolved to.

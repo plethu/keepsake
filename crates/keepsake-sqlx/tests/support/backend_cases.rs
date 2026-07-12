@@ -24,6 +24,8 @@ pub enum TestError {
     Sqlx(#[from] sqlx::Error),
     #[error(transparent)]
     Env(#[from] std::env::VarError),
+    #[error(transparent)]
+    Join(#[from] tokio::task::JoinError),
 }
 
 #[async_trait::async_trait]
@@ -47,6 +49,16 @@ pub trait BackendHarness {
     async fn active_relations_for_subject(
         repo: &Self::Repo,
         subject: &SubjectRef,
+    ) -> Result<Vec<keepsake_sqlx::ActiveRelation>, RepositoryError>;
+    async fn active_relations_for_subject_by_ids(
+        repo: &Self::Repo,
+        subject: &SubjectRef,
+        relation_ids: &[Uuid],
+    ) -> Result<Vec<keepsake_sqlx::ActiveRelation>, RepositoryError>;
+    async fn active_relations_for_subject_by_keys(
+        repo: &Self::Repo,
+        subject: &SubjectRef,
+        keys: &[RelationKey],
     ) -> Result<Vec<keepsake_sqlx::ActiveRelation>, RepositoryError>;
     async fn active_for_subject(
         repo: &Self::Repo,
@@ -143,6 +155,48 @@ where
     assert_eq!(first.keepsake.id(), second.keepsake.id());
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].relation().id, relation.id);
+    Ok(())
+}
+
+pub async fn bounded_relation_reads_filter_in_the_database<H>() -> TestResult<()>
+where
+    H: BackendHarness,
+{
+    let (repo, _pool) = H::repo().await?;
+    let relation_a = upsert_relation::<H>(&repo, ExpiryPolicy::ManualOnly).await?;
+    let relation_b = upsert_relation::<H>(&repo, ExpiryPolicy::ManualOnly).await?;
+    let subject = SubjectRef::new("account", format!("{}_bounded_reads", H::BACKEND))?;
+    for relation_id in [relation_a.id, relation_b.id] {
+        H::apply(
+            &repo,
+            &ApplyKeepsake::new(
+                subject.clone(),
+                relation_id,
+                ts("2026-01-01T00:01:00Z")?,
+                context()?,
+            ),
+        )
+        .await?;
+    }
+
+    let by_ids = H::active_relations_for_subject_by_ids(
+        &repo,
+        &subject,
+        &[relation_a.id, relation_a.id, Uuid::nil()],
+    )
+    .await?;
+    assert_eq!(by_ids.len(), 1);
+    assert_eq!(by_ids[0].relation().id, relation_a.id);
+
+    let missing_key = RelationKey::new("tag", format!("{}-missing", H::BACKEND))?;
+    let by_keys = H::active_relations_for_subject_by_keys(
+        &repo,
+        &subject,
+        &[relation_b.key.clone(), relation_b.key.clone(), missing_key],
+    )
+    .await?;
+    assert_eq!(by_keys.len(), 1);
+    assert_eq!(by_keys[0].relation().id, relation_b.id);
     Ok(())
 }
 

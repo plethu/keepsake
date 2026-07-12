@@ -9,7 +9,8 @@ Usage:
 Runs Keepsake's canonical local project gates:
   1. cargo fmt --all --check
   2. cargo clippy --workspace --all-targets --all-features -- -D warnings
-  3. cargo test --workspace --all-features
+  3. keepsake-sqlx feature-matrix clippy checks
+  4. cargo test --workspace --all-features
 EOF
 }
 
@@ -42,6 +43,31 @@ echo "== cargo clippy =="
 (
   cd "$repo_root"
   cargo clippy --workspace --all-targets --all-features -- -D warnings
+)
+
+echo
+echo "== keepsake-sqlx feature matrix =="
+(
+  cd "$repo_root"
+  feature_sets=(
+    ""
+    "postgres"
+    "sqlite"
+    "mysql"
+    "postgres,cache,migrations"
+    "sqlite,cache,migrations"
+    "mysql,cache,migrations"
+  )
+  for features in "${feature_sets[@]}"; do
+    args=(cargo clippy -p keepsake-sqlx --no-default-features)
+    label="no features"
+    if [[ -n "$features" ]]; then
+      args+=(--features "$features")
+      label="$features"
+    fi
+    echo "-- $label"
+    "${args[@]}" -- -D warnings
+  done
 )
 
 echo

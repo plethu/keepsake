@@ -54,6 +54,24 @@ impl BackendHarness for MySqlHarness {
         repo.active_relations_for_subject(subject).await
     }
 
+    async fn active_relations_for_subject_by_ids(
+        repo: &Self::Repo,
+        subject: &keepsake::SubjectRef,
+        relation_ids: &[Uuid],
+    ) -> Result<Vec<keepsake_sqlx::ActiveRelation>, RepositoryError> {
+        repo.active_relations_for_subject_by_ids(subject, relation_ids)
+            .await
+    }
+
+    async fn active_relations_for_subject_by_keys(
+        repo: &Self::Repo,
+        subject: &keepsake::SubjectRef,
+        keys: &[keepsake::RelationKey],
+    ) -> Result<Vec<keepsake_sqlx::ActiveRelation>, RepositoryError> {
+        repo.active_relations_for_subject_by_keys(subject, keys)
+            .await
+    }
+
     async fn active_for_subject(
         repo: &Self::Repo,
         subject: &keepsake::SubjectRef,
@@ -102,7 +120,7 @@ pub async fn mysql_pool() -> TestResult<MySqlPool> {
     let database_url = std::env::var("MYSQL_DATABASE_URL")
         .unwrap_or_else(|_| DEFAULT_MYSQL_DATABASE_URL.to_owned());
     Ok(MySqlPoolOptions::new()
-        .max_connections(1)
+        .max_connections(5)
         .connect(&database_url)
         .await?)
 }

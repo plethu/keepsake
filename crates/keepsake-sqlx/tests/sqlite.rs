@@ -7,5 +7,6 @@ mod sqlite {
     mod fulfillment;
     mod lifecycle;
     mod migrations;
+    mod queries;
     mod support;
 }

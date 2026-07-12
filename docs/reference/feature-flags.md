@@ -65,9 +65,20 @@ semantics.
 
 | Feature | Default | Use |
 | --- | --- | --- |
+| `postgres` | Yes | Enables `PostgresKeepsakeRepository` and the `KeepsakeRepository` default alias. |
+| `sqlite` | No | Enables `SqliteKeepsakeRepository`. |
+| `mysql` | No | Enables `MySqlKeepsakeRepository`. |
 | `migrations` | Yes | Exposes embedded SQLx migrations through `KeepsakeRepository::migrate()`. |
 | `cache` | Yes | Exposes opt-in relation-definition caching through repository cache helpers. |
 | `fulfillment-counters` | Yes | Exposes simple built-in counter projection writes. |
+
+Enable the backend or backends used by the application. When selecting SQLite
+or MySQL, disable default features so Postgres is not enabled implicitly:
+
+```toml
+[dependencies]
+keepsake-sqlx = { version = "1", default-features = false, features = ["sqlite", "migrations"] }
+```
 
 Disable `migrations` when your service vendors the SQL into a separate
 migration framework. Disable `fulfillment-counters` when fulfillment state is
@@ -77,6 +88,10 @@ lookups.
 The `cache` feature is inert until configured with
 `KeepsakeRepository::with_local_relation_cache` or an application-provided
 `RelationCache` adapter.
+
+The `postgres-tests`, `sqlite-tests`, and `mysql-tests` features are repository
+test harnesses, not application features. They combine the matching backend
+with migrations, cache support, and fulfillment counters.
 
 ## Stable Contract
 

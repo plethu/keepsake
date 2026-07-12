@@ -6,5 +6,6 @@ mod mysql {
     mod fulfillment;
     mod lifecycle;
     mod migrations;
+    mod queries;
     mod support;
 }

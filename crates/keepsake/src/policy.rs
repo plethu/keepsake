@@ -95,3 +95,63 @@ impl FulfillmentPolicy {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counter_threshold_must_be_positive() {
+        let policy = FulfillmentPolicy::CounterAtLeast {
+            key: "steps".to_owned(),
+            threshold: 0,
+        };
+
+        assert_eq!(
+            policy.validate(),
+            Err(KeepsakeError::InvalidFulfillmentThreshold)
+        );
+    }
+
+    #[test]
+    fn counter_policy_uses_the_named_counter_and_inclusive_threshold() {
+        let policy = FulfillmentPolicy::CounterAtLeast {
+            key: "steps".to_owned(),
+            threshold: 3,
+        };
+
+        assert!(!policy.is_fulfilled(&FulfillmentSnapshot::empty()));
+        assert!(
+            !policy.is_fulfilled(
+                &FulfillmentSnapshot::empty()
+                    .with_counter("other", 10)
+                    .with_counter("steps", 2)
+            )
+        );
+        assert!(policy.is_fulfilled(&FulfillmentSnapshot::empty().with_counter("steps", 3)));
+    }
+
+    #[test]
+    fn checklist_requires_at_least_one_matching_complete_item() {
+        let policy = FulfillmentPolicy::ChecklistComplete {
+            list_key: "onboarding.".to_owned(),
+        };
+
+        assert!(!policy.is_fulfilled(&FulfillmentSnapshot::empty()));
+        assert!(!policy.is_fulfilled(&FulfillmentSnapshot::empty().with_check("other.done", true)));
+        assert!(
+            !policy.is_fulfilled(
+                &FulfillmentSnapshot::empty()
+                    .with_check("onboarding.profile", true)
+                    .with_check("onboarding.terms", false)
+            )
+        );
+        assert!(
+            policy.is_fulfilled(
+                &FulfillmentSnapshot::empty()
+                    .with_check("onboarding.profile", true)
+                    .with_check("onboarding.terms", true)
+            )
+        );
+    }
+}

@@ -15,8 +15,8 @@ Several services may need the same data:
 
 Keepsake models these operations as one relation lifecycle. The core crate
 provides the types, commands, expiry policies, evaluator, audit traits, and
-errors. The SQLx adapter stores the state in Postgres and provides query
-helpers for request paths and workers.
+errors. The SQLx adapter stores state in Postgres, SQLite, or MySQL and provides
+query helpers for request paths and workers.
 
 ## Core Model
 

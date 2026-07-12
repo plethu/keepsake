@@ -84,7 +84,9 @@ pub use audit::{
 pub use audit::{InMemoryAuditError, InMemoryAuditSink};
 pub use command::{ApplyKeepsake, CommandContext, RevokeBySubject, RevokeKeepsake};
 pub use error::{KeepsakeError, Result};
-pub use evaluation::{DecisionKind, EvaluationDecision, NoopReason, TransitionReason, evaluate};
+pub use evaluation::{
+    DecisionKind, EvaluationDecision, NoopReason, TransitionReason, evaluate, evaluate_active,
+};
 pub use model::{
     ActiveRelation, ActorRef, ExpiryCause, FulfillmentSnapshot, Keepsake, KeepsakeId,
     KeepsakeLifecycle, KeepsakeRecord, LifecycleState, RelationDefinition, RelationId, RelationKey,

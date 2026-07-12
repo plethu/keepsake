@@ -1,11 +1,45 @@
 use super::support::*;
-use keepsake::ExpiryPolicy;
+use keepsake::{ActorRef, ApplyKeepsake, CommandContext, ExpiryPolicy, SubjectRef};
 use uuid::Uuid;
 
 #[tokio::test]
 #[ignore = "requires docker mysql; run `make test-db`"]
 async fn mysql_apply_duplicate_and_active_read() -> TestResult<()> {
     backend_cases::apply_duplicate_and_active_read::<MySqlHarness>().await
+}
+
+#[tokio::test]
+#[ignore = "requires docker mysql; run `make test-db`"]
+async fn mysql_concurrent_duplicate_apply_creates_one_active_keepsake() -> TestResult<()> {
+    let (repo, _pool) = MySqlHarness::repo().await?;
+    let relation = upsert_relation::<MySqlHarness>(&repo, ExpiryPolicy::ManualOnly).await?;
+    let subject = SubjectRef::new("account", format!("mysql_race_{}", Uuid::now_v7()))?;
+    let at = ts("2026-01-01T00:01:00Z")?;
+
+    let spawn_apply = |repo: keepsake_sqlx::MySqlKeepsakeRepository| {
+        let subject = subject.clone();
+        let relation_id = relation.id;
+        tokio::spawn(async move {
+            let command = ApplyKeepsake::new(
+                subject,
+                relation_id,
+                at,
+                CommandContext::new(ActorRef::new("test", "worker")?),
+            );
+            repo.apply(&command).await
+        })
+    };
+    let apply_a = spawn_apply(repo.clone());
+    let apply_b = spawn_apply(repo.clone());
+    let result_a = apply_a.await??;
+    let result_b = apply_b.await??;
+    let active = repo.active_for_subject(&subject).await?;
+
+    assert_eq!(active.len(), 1);
+    assert_eq!(result_a.keepsake.id(), active[0].id());
+    assert_eq!(result_b.keepsake.id(), active[0].id());
+    assert_ne!(result_a.duplicate_prevented, result_b.duplicate_prevented);
+    Ok(())
 }
 
 #[tokio::test]

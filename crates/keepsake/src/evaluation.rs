@@ -3,7 +3,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::model::{FulfillmentSnapshot, Keepsake, LifecycleState, RelationDefinition};
+use crate::model::{
+    ActiveRelation, FulfillmentSnapshot, Keepsake, LifecycleState, RelationDefinition,
+};
 use crate::policy::ExpiryPolicy;
 
 /// Lifecycle evaluation result.
@@ -61,7 +63,21 @@ pub enum TransitionReason {
     FulfillmentSatisfied,
 }
 
+/// Evaluates a validated active relation lifecycle without side effects.
+#[must_use]
+pub fn evaluate_active(
+    now: DateTime<Utc>,
+    active: &ActiveRelation,
+    fulfillment: Option<&FulfillmentSnapshot>,
+) -> EvaluationDecision {
+    evaluate(now, active.relation(), active.keepsake(), fulfillment)
+}
+
 /// Evaluates a keepsake lifecycle without side effects.
+///
+/// The relation must be the stored definition for `keepsake`. Prefer
+/// [`evaluate_active`] when both values came from an [`ActiveRelationSource`](crate::ActiveRelationSource);
+/// that type validates the relation id and active lifecycle state at its boundary.
 #[must_use]
 pub fn evaluate(
     now: DateTime<Utc>,
@@ -123,7 +139,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::model::{RelationKey, SubjectRef};
+    use crate::model::{ActiveRelation, KeepsakeRecord, RelationKey, SubjectRef};
     use crate::policy::FulfillmentPolicy;
 
     fn ts(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
@@ -247,6 +263,111 @@ mod tests {
             decision.kind,
             DecisionKind::Noop {
                 reason: NoopReason::RelationDisabled
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn terminal_keepsake_is_not_evaluated_again() -> TestResult<()> {
+        let relation = relation(ExpiryPolicy::At {
+            timestamp: ts("2026-01-02T00:00:00Z")?,
+        })?;
+        let mut record = KeepsakeRecord::from(&keepsake(&relation)?);
+        record.state = LifecycleState::Expired;
+        let terminal = Keepsake::try_from(record)?;
+
+        let decision = evaluate(ts("2026-01-03T00:00:00Z")?, &relation, &terminal, None);
+
+        assert_eq!(
+            decision.kind,
+            DecisionKind::Noop {
+                reason: NoopReason::AlreadyTerminal
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn timed_expiry_before_due_date_is_a_noop() -> TestResult<()> {
+        let relation = relation(ExpiryPolicy::At {
+            timestamp: ts("2026-01-04T00:00:00Z")?,
+        })?;
+        let decision = evaluate(
+            ts("2026-01-03T00:00:00Z")?,
+            &relation,
+            &keepsake(&relation)?,
+            None,
+        );
+
+        assert_eq!(
+            decision.kind,
+            DecisionKind::Noop {
+                reason: NoopReason::NotDue
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fulfillment_policy_without_snapshot_is_a_noop() -> TestResult<()> {
+        let relation = relation(ExpiryPolicy::WhenFulfilled {
+            policy: FulfillmentPolicy::CounterAtLeast {
+                key: "messages_sent".to_owned(),
+                threshold: 3,
+            },
+        })?;
+        let decision = evaluate(
+            ts("2026-01-03T00:00:00Z")?,
+            &relation,
+            &keepsake(&relation)?,
+            None,
+        );
+
+        assert_eq!(
+            decision.kind,
+            DecisionKind::Noop {
+                reason: NoopReason::FulfillmentMissing
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn incomplete_fulfillment_snapshot_is_a_noop() -> TestResult<()> {
+        let relation = relation(ExpiryPolicy::WhenFulfilled {
+            policy: FulfillmentPolicy::CounterAtLeast {
+                key: "messages_sent".to_owned(),
+                threshold: 3,
+            },
+        })?;
+        let snapshot = FulfillmentSnapshot::empty().with_counter("messages_sent", 2);
+        let decision = evaluate(
+            ts("2026-01-03T00:00:00Z")?,
+            &relation,
+            &keepsake(&relation)?,
+            Some(&snapshot),
+        );
+
+        assert_eq!(
+            decision.kind,
+            DecisionKind::Noop {
+                reason: NoopReason::FulfillmentIncomplete
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn validated_active_relation_can_be_evaluated_directly() -> TestResult<()> {
+        let relation = relation(ExpiryPolicy::ManualOnly)?;
+        let active = ActiveRelation::new(keepsake(&relation)?, relation)?;
+        let decision = evaluate_active(ts("2026-01-03T00:00:00Z")?, &active, None);
+
+        assert_eq!(
+            decision.kind,
+            DecisionKind::Noop {
+                reason: NoopReason::ManualOnly
             }
         );
         Ok(())

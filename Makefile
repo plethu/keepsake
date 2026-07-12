@@ -22,8 +22,7 @@ db-down:
 	$(DOCKER_COMPOSE) down --remove-orphans
 
 test-db: db-up
-	DATABASE_URL="$(DATABASE_URL)" cargo test -p keepsake-sqlx --test postgres --features postgres-tests -- --ignored --test-threads=1
-	MYSQL_DATABASE_URL="$(MYSQL_DATABASE_URL)" cargo test -p keepsake-sqlx --test mysql --features mysql-tests -- --ignored --test-threads=1
+	DATABASE_URL="$(DATABASE_URL)" MYSQL_DATABASE_URL="$(MYSQL_DATABASE_URL)" scripts/check-database-gates.sh
 
 check:
 	scripts/check-project-gates.sh

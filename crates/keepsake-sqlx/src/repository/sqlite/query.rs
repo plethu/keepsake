@@ -1,9 +1,11 @@
+use std::collections::BTreeSet;
+
 use keepsake::{
     ActiveRelation, ActiveRelationSource, Keepsake, RelationDefinition, RelationId, RelationKey,
     SubjectRef,
 };
+use sqlx::{QueryBuilder, Sqlite};
 
-use crate::repository::support::{filter_active_relations_by_ids, filter_active_relations_by_keys};
 use crate::repository::{
     MembershipCursor, RelationCache, RepositoryError, RepositoryResult, SqliteKeepsakeRepository,
     validate_limit,
@@ -52,6 +54,8 @@ where
     }
 
     /// Returns active keepsakes for a subject, filtered by relation ids.
+    ///
+    /// Missing and duplicate requested ids are ignored.
     pub async fn active_relations_for_subject_by_ids(
         &self,
         subject: &SubjectRef,
@@ -61,11 +65,29 @@ where
             return Ok(Vec::new());
         }
 
-        let active = self.active_relations_for_subject(subject).await?;
-        Ok(filter_active_relations_by_ids(active, relation_ids))
+        let relation_ids = relation_ids.iter().copied().collect::<BTreeSet<_>>();
+        let mut query = QueryBuilder::<Sqlite>::new(ACTIVE_RELATION_SELECT);
+        query
+            .push(" where k.subject_kind = ")
+            .push_bind(subject.kind())
+            .push(" and k.subject_id = ")
+            .push_bind(subject.id())
+            .push(" and k.state = 'applied' and k.relation_id in (");
+        {
+            let mut separated = query.separated(", ");
+            for relation_id in relation_ids {
+                separated.push_bind(relation_id.to_string());
+            }
+        }
+        query.push(") order by k.relation_id, k.id");
+
+        let rows = query.build().fetch_all(&self.pool).await?;
+        self.active_relations_from_rows(&rows).await
     }
 
     /// Returns active keepsakes for a subject, filtered by relation keys.
+    ///
+    /// Missing and duplicate requested keys are ignored.
     pub async fn active_relations_for_subject_by_keys(
         &self,
         subject: &SubjectRef,
@@ -75,8 +97,32 @@ where
             return Ok(Vec::new());
         }
 
-        let active = self.active_relations_for_subject(subject).await?;
-        Ok(filter_active_relations_by_keys(active, keys))
+        let keys = keys
+            .iter()
+            .map(|key| (key.kind(), key.name()))
+            .collect::<BTreeSet<_>>();
+        let mut query = QueryBuilder::<Sqlite>::new(ACTIVE_RELATION_SELECT);
+        query
+            .push(" where k.subject_kind = ")
+            .push_bind(subject.kind())
+            .push(" and k.subject_id = ")
+            .push_bind(subject.id())
+            .push(" and k.state = 'applied' and (");
+        {
+            let mut separated = query.separated(" or ");
+            for (kind, name) in keys {
+                separated
+                    .push("(r.kind = ")
+                    .push_bind_unseparated(kind)
+                    .push_unseparated(" and r.key = ")
+                    .push_bind_unseparated(name)
+                    .push_unseparated(")");
+            }
+        }
+        query.push(") order by k.relation_id, k.id");
+
+        let rows = query.build().fetch_all(&self.pool).await?;
+        self.active_relations_from_rows(&rows).await
     }
 
     /// Scans active memberships for a relation in stable order.
@@ -121,6 +167,19 @@ where
         .await?;
 
         rows.iter().map(keepsake_from_row).collect()
+    }
+
+    async fn active_relations_from_rows(
+        &self,
+        rows: &[sqlx::sqlite::SqliteRow],
+    ) -> RepositoryResult<Vec<ActiveRelation>> {
+        let mut active = Vec::with_capacity(rows.len());
+        for row in rows {
+            let relation = relation_definition_from_active_row(row)?;
+            self.relation_cache.store(&relation).await;
+            active.push(ActiveRelation::new(keepsake_from_row(row)?, relation)?);
+        }
+        Ok(active)
     }
 }
 
@@ -199,3 +258,25 @@ pub(super) async fn active_relation_rows_for_subject(
         })
         .collect()
 }
+
+const ACTIVE_RELATION_SELECT: &str = r"
+    select
+        k.id,
+        k.subject_kind,
+        k.subject_id,
+        k.relation_id,
+        k.state,
+        k.expiry_policy,
+        k.applied_at,
+        k.expires_at,
+        k.fulfilled_at,
+        k.revoked_at,
+        k.metadata,
+        r.id as relation_definition_id,
+        r.kind as relation_kind,
+        r.key as relation_key,
+        r.enabled as relation_enabled,
+        r.expiry_policy as relation_expiry_policy
+    from keepsakes k
+    join keepsake_relation_definitions r on r.id = k.relation_id
+";

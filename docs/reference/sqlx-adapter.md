@@ -1,15 +1,15 @@
 # SQLx Adapter
 
-The SQLx adapter stores lifecycle state in Postgres. It provides migrations,
-relation upsert, idempotent apply and revoke, audited command helpers, active
-subject lookups, membership scans, timed expiry scans, and simple fulfillment
-counter projections.
+The SQLx adapter stores lifecycle state in Postgres, SQLite, or MySQL. It
+provides migrations, relation upsert, idempotent apply and revoke, audited
+command helpers, active subject lookups, membership scans, timed expiry scans,
+and simple fulfillment counter projections.
 
 The schema stores opaque subject identifiers and does not join application
 entity tables.
 
 Keepsake rows use the same flat lifecycle record shape as `KeepsakeRecord`.
-Postgres constraints reject state/timestamp combinations that the core model
+Each backend migration rejects state/timestamp combinations that the core model
 would reject during record conversion.
 
 ## Relation Definitions
@@ -159,7 +159,7 @@ let repo = KeepsakeRepository::new(pool)
 ```
 
 The cache only affects relation read helpers. Lifecycle mutations still read
-authoritative state from Postgres.
+authoritative state from the configured database.
 
 `KeepsakeRepository` is generic over the `RelationCache` trait. Unconfigured
 repositories use `NoopRelationCache`.

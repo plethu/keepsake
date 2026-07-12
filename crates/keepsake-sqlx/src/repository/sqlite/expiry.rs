@@ -1,20 +1,25 @@
 use chrono::{DateTime, Utc};
-use keepsake::{ExpiryCause, ExpiryPolicy, FulfillmentSnapshot};
+use keepsake::ExpiryCause;
+#[cfg(feature = "fulfillment-counters")]
+use keepsake::{ExpiryPolicy, FulfillmentSnapshot};
+#[cfg(feature = "fulfillment-counters")]
 use sqlx::{Sqlite, Transaction};
+#[cfg(feature = "fulfillment-counters")]
 use uuid::Uuid;
 
+#[cfg(feature = "fulfillment-counters")]
+use crate::repository::FulfilledExpiryCandidate;
 use crate::repository::support::expiry_event;
 use crate::repository::{
-    FulfilledExpiryCandidate, RelationCache, RepositoryResult, SqliteKeepsakeRepository,
-    TimedExpiryCandidate, validate_limit,
+    RelationCache, RepositoryResult, SqliteKeepsakeRepository, TimedExpiryCandidate, validate_limit,
 };
 
 use super::audit::record_audit_event_tx;
 #[cfg(feature = "fulfillment-counters")]
 use super::fulfillment::fulfillment_snapshot_tx;
-use super::rows::{
-    format_timestamp, fulfilled_expiry_candidate_from_row, timed_expiry_candidate_from_row,
-};
+#[cfg(feature = "fulfillment-counters")]
+use super::rows::fulfilled_expiry_candidate_from_row;
+use super::rows::{format_timestamp, timed_expiry_candidate_from_row};
 
 impl<C> SqliteKeepsakeRepository<C>
 where
@@ -203,6 +208,7 @@ where
     }
 }
 
+#[cfg(feature = "fulfillment-counters")]
 pub(super) async fn due_fulfilled_expiry_after_tx(
     tx: &mut Transaction<'_, Sqlite>,
     after: Option<&FulfilledExpiryCursor>,
@@ -237,6 +243,7 @@ pub(super) async fn due_fulfilled_expiry_after_tx(
         .map(fulfilled_expiry_candidate_from_row)
         .collect()
 }
+#[cfg(feature = "fulfillment-counters")]
 pub(super) struct FulfilledExpiryCursor {
     relation_id: Uuid,
     subject_kind: String,
