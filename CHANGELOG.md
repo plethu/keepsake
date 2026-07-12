@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.0 - 2026-07-12
+
+- Added `evaluate_active`, a non-breaking evaluator entry point that accepts a
+  validated `ActiveRelation`.
+- Fixed SQLite and MySQL builds when `fulfillment-counters` is disabled.
+- Changed bounded SQLite and MySQL active-relation reads to apply id and key
+  filters in SQL instead of loading every active relation for the subject.
+- Added SQLx feature-matrix checks and automated Postgres/MySQL integration
+  gates to CI, including concurrent MySQL apply coverage.
+- Documented SQLite/MySQL installation, feature selection, and contention
+  behavior.
+
 ## 1.0.1 - 2026-07-09
 
 - Gate `filter_active_relations_by_ids` and `filter_active_relations_by_keys`
