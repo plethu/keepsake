@@ -74,7 +74,7 @@ jobs:
       - name: Install project tools
         uses: https://github.com/jdx/mise-action@v4
         with:
-          install_args: rust
+          install_args: rust just
           github_token: ""
 
       - name: Cache cargo registry and build artifacts

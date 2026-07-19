@@ -2,24 +2,24 @@ use super::support::*;
 use keepsake::ExpiryPolicy;
 
 #[tokio::test]
-#[ignore = "requires docker mysql; run `make test-db`"]
+#[ignore = "requires docker mysql; run `mise run test-db`"]
 async fn mysql_fulfilled_expiry_uses_counter_snapshot() -> TestResult<()> {
     backend_cases::fulfilled_expiry_uses_counter_snapshot::<MySqlHarness>().await
 }
 
 #[tokio::test]
-#[ignore = "requires docker mysql; run `make test-db`"]
+#[ignore = "requires docker mysql; run `mise run test-db`"]
 async fn mysql_fulfilled_expiry_skips_disabled_relations_before_limit() -> TestResult<()> {
     backend_cases::fulfilled_expiry_skips_disabled_relations_before_limit::<MySqlHarness>().await
 }
 
 #[tokio::test]
-#[ignore = "requires docker mysql; run `make test-db`"]
+#[ignore = "requires docker mysql; run `mise run test-db`"]
 async fn mysql_fulfilled_expiry_skips_unfulfilled_relations_before_limit() -> TestResult<()> {
     backend_cases::fulfilled_expiry_skips_unfulfilled_relations_before_limit::<MySqlHarness>().await
 }
 #[tokio::test]
-#[ignore = "requires docker mysql; run `make test-db`"]
+#[ignore = "requires docker mysql; run `mise run test-db`"]
 async fn mysql_increment_counter_projection_is_atomic_and_returns_value() -> TestResult<()> {
     use keepsake::{ActorRef, ApplyKeepsake, CommandContext, SubjectRef};
 
@@ -58,7 +58,7 @@ async fn mysql_increment_counter_projection_is_atomic_and_returns_value() -> Tes
 }
 
 #[tokio::test]
-#[ignore = "requires docker mysql; run `make test-db`"]
+#[ignore = "requires docker mysql; run `mise run test-db`"]
 async fn mysql_checklist_fulfillment_persists_and_expires() -> TestResult<()> {
     use keepsake::{ActorRef, ApplyKeepsake, CommandContext, FulfillmentPolicy, SubjectRef};
 

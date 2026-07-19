@@ -20,7 +20,7 @@ async fn active_relation_source_accepts_generic_and_erased_sqlx_repository() -> 
 }
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn active_membership_scan_uses_keyset_pagination() -> TestResult<()> {
     let repo = repo().await?;
     let relation = timed_relation(&repo, "membership-pages", "2026-01-02T00:00:00Z").await?;
@@ -61,7 +61,7 @@ async fn active_membership_scan_uses_keyset_pagination() -> TestResult<()> {
 }
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn active_relations_for_subject_returns_joined_relation_definitions() -> TestResult<()> {
     let repo = repo().await?;
     let relation_a = timed_relation(&repo, "joined-a", "2026-01-02T00:00:00Z").await?;
@@ -92,7 +92,7 @@ async fn active_relations_for_subject_returns_joined_relation_definitions() -> T
 }
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn active_relations_for_subject_by_ids_returns_requested_active_relations() -> TestResult<()>
 {
     let repo = repo().await?;
@@ -148,7 +148,7 @@ async fn active_relations_for_subject_by_ids_returns_requested_active_relations(
 }
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn active_relations_for_subject_by_keys_returns_requested_active_relations() -> TestResult<()>
 {
     let repo = repo().await?;
@@ -204,7 +204,7 @@ async fn active_relations_for_subject_by_keys_returns_requested_active_relations
 }
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn batch_queries_reject_invalid_limits() -> TestResult<()> {
     let repo = repo().await?;
     let relation = timed_relation(&repo, "invalid-limit", "2026-01-02T00:00:00Z").await?;

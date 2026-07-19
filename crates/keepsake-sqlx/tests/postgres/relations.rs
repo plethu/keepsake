@@ -1,7 +1,7 @@
 use super::support::*;
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn relation_upsert_is_idempotent_by_natural_key() -> TestResult<()> {
     let repo = repo().await?;
     let key = RelationKey::new("tag", unique_key("idempotent"))?;
@@ -26,7 +26,7 @@ async fn relation_upsert_is_idempotent_by_natural_key() -> TestResult<()> {
 }
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn relation_reads_return_stored_relation_definition() -> TestResult<()> {
     let repo = repo().await?;
     let key = RelationKey::new("tag", unique_key("lookup"))?;
@@ -52,7 +52,7 @@ async fn relation_reads_return_stored_relation_definition() -> TestResult<()> {
 }
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn typed_relation_specs_upsert_and_apply_by_marker_type() -> TestResult<()> {
     let repo = repo().await?;
     let now = ts("2026-01-01T00:00:00Z")?;
@@ -72,7 +72,7 @@ async fn typed_relation_specs_upsert_and_apply_by_marker_type() -> TestResult<()
 }
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn typed_relation_specs_reject_existing_key_with_different_id() -> TestResult<()> {
     let repo = repo().await?;
     let now = ts("2026-01-01T00:00:00Z")?;
@@ -104,7 +104,7 @@ async fn typed_relation_specs_reject_existing_key_with_different_id() -> TestRes
 
 #[cfg(feature = "cache")]
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn relation_cache_serves_reads_and_invalidates_local_writes() -> TestResult<()> {
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
@@ -205,7 +205,7 @@ impl RelationCache for SpyRelationCache {
 }
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn relation_lookup_hits_cache_after_first_database_read() -> TestResult<()> {
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;

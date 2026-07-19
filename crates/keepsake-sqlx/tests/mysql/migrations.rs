@@ -3,13 +3,13 @@ use super::support::*;
 use keepsake_sqlx::{MySqlKeepsakeRepository, RepositoryError};
 
 #[tokio::test]
-#[ignore = "requires docker mysql; run `make test-db`"]
+#[ignore = "requires docker mysql; run `mise run test-db`"]
 async fn mysql_migration_initializes_backend_marker() -> TestResult<()> {
     backend_cases::migration_initializes_backend_marker::<MySqlHarness>().await
 }
 
 #[tokio::test]
-#[ignore = "requires docker mysql; run `make test-db`"]
+#[ignore = "requires docker mysql; run `mise run test-db`"]
 async fn mysql_migration_rejects_wrong_backend_marker() -> TestResult<()> {
     let pool = mysql_pool().await?;
     reset_schema(&pool).await?;

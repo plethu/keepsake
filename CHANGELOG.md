@@ -55,7 +55,7 @@ expectations in `keepsake-sqlx` from this version onward.
 
 - Fixed MySQL lifecycle check constraints so the SQLx migration applies on
   MySQL 8.4.
-- Added Docker-backed MySQL integration coverage to `make test-db`.
+- Added Docker-backed MySQL integration coverage to `mise run test-db`.
 
 ## 0.4.1 - 2026-06-20
 

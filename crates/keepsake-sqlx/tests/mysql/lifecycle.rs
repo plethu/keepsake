@@ -3,13 +3,13 @@ use keepsake::{ActorRef, ApplyKeepsake, CommandContext, ExpiryPolicy, SubjectRef
 use uuid::Uuid;
 
 #[tokio::test]
-#[ignore = "requires docker mysql; run `make test-db`"]
+#[ignore = "requires docker mysql; run `mise run test-db`"]
 async fn mysql_apply_duplicate_and_active_read() -> TestResult<()> {
     backend_cases::apply_duplicate_and_active_read::<MySqlHarness>().await
 }
 
 #[tokio::test]
-#[ignore = "requires docker mysql; run `make test-db`"]
+#[ignore = "requires docker mysql; run `mise run test-db`"]
 async fn mysql_concurrent_duplicate_apply_creates_one_active_keepsake() -> TestResult<()> {
     let (repo, _pool) = MySqlHarness::repo().await?;
     let relation = upsert_relation::<MySqlHarness>(&repo, ExpiryPolicy::ManualOnly).await?;
@@ -43,12 +43,12 @@ async fn mysql_concurrent_duplicate_apply_creates_one_active_keepsake() -> TestR
 }
 
 #[tokio::test]
-#[ignore = "requires docker mysql; run `make test-db`"]
+#[ignore = "requires docker mysql; run `mise run test-db`"]
 async fn mysql_timed_expiry_expires_due_keepsake() -> TestResult<()> {
     backend_cases::timed_expiry_expires_due_keepsake::<MySqlHarness>().await
 }
 #[tokio::test]
-#[ignore = "requires docker mysql; run `make test-db`"]
+#[ignore = "requires docker mysql; run `mise run test-db`"]
 async fn mysql_lifecycle_invariants_reject_invalid_rows() -> TestResult<()> {
     let (repo, pool) = MySqlHarness::repo().await?;
     let relation = upsert_relation::<MySqlHarness>(&repo, ExpiryPolicy::ManualOnly).await?;
@@ -75,7 +75,7 @@ async fn mysql_lifecycle_invariants_reject_invalid_rows() -> TestResult<()> {
 }
 
 #[tokio::test]
-#[ignore = "requires docker mysql; run `make test-db`"]
+#[ignore = "requires docker mysql; run `mise run test-db`"]
 async fn mysql_lifecycle_invariants_reject_malformed_policy_rows() -> TestResult<()> {
     let (repo, pool) = MySqlHarness::repo().await?;
     let relation = upsert_relation::<MySqlHarness>(&repo, ExpiryPolicy::ManualOnly).await?;
@@ -100,7 +100,7 @@ async fn mysql_lifecycle_invariants_reject_malformed_policy_rows() -> TestResult
 }
 
 #[tokio::test]
-#[ignore = "requires docker mysql; run `make test-db`"]
+#[ignore = "requires docker mysql; run `mise run test-db`"]
 async fn mysql_projection_invariant_rejects_fractional_expiry_mismatch() -> TestResult<()> {
     let (repo, pool) = MySqlHarness::repo().await?;
     let relation = upsert_relation::<MySqlHarness>(&repo, ExpiryPolicy::ManualOnly).await?;
@@ -130,7 +130,7 @@ async fn mysql_projection_invariant_rejects_fractional_expiry_mismatch() -> Test
     Ok(())
 }
 #[tokio::test]
-#[ignore = "requires docker mysql; run `make test-db`"]
+#[ignore = "requires docker mysql; run `mise run test-db`"]
 async fn mysql_revoke_by_subject_revokes_active_keepsake() -> TestResult<()> {
     use keepsake::{
         ActorRef, ApplyKeepsake, AuditEventType, CommandContext, RevokeBySubject, SubjectRef,

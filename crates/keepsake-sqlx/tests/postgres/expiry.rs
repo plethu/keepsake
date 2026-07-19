@@ -1,7 +1,7 @@
 use super::support::*;
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn lifecycle_commands_and_timed_batches_use_stable_order() -> TestResult<()> {
     let repo = repo().await?;
 
@@ -53,7 +53,7 @@ async fn lifecycle_commands_and_timed_batches_use_stable_order() -> TestResult<(
 }
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn disabled_relation_is_excluded_from_timed_expiry() -> TestResult<()> {
     let repo = repo().await?;
     let relation = timed_relation(&repo, "disabled-expiry", "2026-01-02T00:00:00Z").await?;
@@ -81,7 +81,7 @@ async fn disabled_relation_is_excluded_from_timed_expiry() -> TestResult<()> {
 }
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn lifecycle_check_constraints_reject_invalid_rows() -> TestResult<()> {
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
@@ -164,7 +164,7 @@ async fn lifecycle_check_constraints_reject_invalid_rows() -> TestResult<()> {
 }
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn concurrent_expiry_workers_expire_each_due_row_once() -> TestResult<()> {
     let repo = repo().await?;
     let relation = timed_relation(&repo, "concurrent-expiry", "2026-01-02T00:00:00Z").await?;
@@ -192,7 +192,7 @@ async fn concurrent_expiry_workers_expire_each_due_row_once() -> TestResult<()> 
 }
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn concurrent_expiry_and_disable_have_ordered_outcomes() -> TestResult<()> {
     let repo = repo().await?;
     let relation = timed_relation(&repo, "expiry-disable", "2026-01-02T00:00:00Z").await?;
@@ -224,7 +224,7 @@ async fn concurrent_expiry_and_disable_have_ordered_outcomes() -> TestResult<()>
 }
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn relation_share_lock_blocks_disable_until_expiry_order_is_resolved() -> TestResult<()> {
     let repo = repo().await?;
     let relation = timed_relation(&repo, "expiry-lock", "2026-01-02T00:00:00Z").await?;
@@ -294,7 +294,7 @@ async fn stored_state(keepsake_id: Uuid) -> TestResult<String> {
 
 #[cfg(feature = "fulfillment-counters")]
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn counter_at_least_fulfillment_expiry_runs_end_to_end() -> TestResult<()> {
     let repo = repo().await?;
     let relation = fulfilled_relation(&repo, "fulfilled-counter").await?;
@@ -337,7 +337,7 @@ async fn counter_at_least_fulfillment_expiry_runs_end_to_end() -> TestResult<()>
 
 #[cfg(feature = "fulfillment-counters")]
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn disabled_relation_is_not_expired_by_fulfillment() -> TestResult<()> {
     let repo = repo().await?;
     let relation = fulfilled_relation(&repo, "fulfilled-disabled").await?;
@@ -360,7 +360,7 @@ async fn disabled_relation_is_not_expired_by_fulfillment() -> TestResult<()> {
 
 #[cfg(feature = "fulfillment-counters")]
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn fulfilled_expiry_skips_disabled_relations_before_limit() -> TestResult<()> {
     let repo = repo().await?;
     let disabled_relation = RelationDefinition::enabled(
@@ -420,7 +420,7 @@ async fn fulfilled_expiry_skips_disabled_relations_before_limit() -> TestResult<
 
 #[cfg(feature = "fulfillment-counters")]
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn fulfilled_expiry_skips_unfulfilled_relations_before_limit() -> TestResult<()> {
     let repo = repo().await?;
     let unfulfilled_relation = RelationDefinition::enabled(
@@ -484,7 +484,7 @@ async fn fulfilled_expiry_skips_unfulfilled_relations_before_limit() -> TestResu
 
 #[cfg(feature = "fulfillment-counters")]
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn due_fulfilled_expiry_returns_only_when_fulfilled_keepsakes() -> TestResult<()> {
     let repo = repo().await?;
     let fulfilled = fulfilled_relation(&repo, "fulfilled-due").await?;
@@ -537,7 +537,7 @@ async fn checklist_relation(
 
 #[cfg(feature = "fulfillment-counters")]
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn increment_counter_projection_is_atomic_and_returns_value() -> TestResult<()> {
     let repo = repo().await?;
     let relation = fulfilled_relation(&repo, "increment-counter").await?;
@@ -564,7 +564,7 @@ async fn increment_counter_projection_is_atomic_and_returns_value() -> TestResul
 
 #[cfg(feature = "fulfillment-counters")]
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn checklist_fulfillment_persists_and_expires() -> TestResult<()> {
     let repo = repo().await?;
     let relation = checklist_relation(&repo, "checklist-fulfill").await?;
@@ -615,7 +615,7 @@ async fn checklist_fulfillment_persists_and_expires() -> TestResult<()> {
 }
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn revoke_by_subject_revokes_active_keepsake() -> TestResult<()> {
     let repo = repo().await?;
     let relation = timed_relation(&repo, "revoke-by-subject", "2026-02-01T00:00:00Z").await?;

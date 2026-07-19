@@ -2,7 +2,7 @@ use super::support::*;
 use keepsake::ExpiryPolicy;
 
 #[tokio::test]
-#[ignore = "requires docker mysql; run `make test-db`"]
+#[ignore = "requires docker mysql; run `mise run test-db`"]
 async fn mysql_audit_event_read_paginates_in_order() -> TestResult<()> {
     use keepsake::{
         ActorRef, ApplyKeepsake, AuditEventType, CommandContext, RevokeKeepsake, SubjectRef,

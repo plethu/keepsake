@@ -1,7 +1,7 @@
 use super::support::*;
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn duplicate_active_apply_returns_existing_keepsake() -> TestResult<()> {
     let repo = repo().await?;
     let relation = timed_relation(&repo, "duplicate", "2026-01-02T00:00:00Z").await?;
@@ -55,7 +55,7 @@ fn actor_ref_constructor_rejects_empty_revoke_actor_id() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn duplicate_apply_after_disable_returns_existing_keepsake() -> TestResult<()> {
     let repo = repo().await?;
     let relation = timed_relation(&repo, "disabled-duplicate", "2026-01-02T00:00:00Z").await?;
@@ -73,7 +73,7 @@ async fn duplicate_apply_after_disable_returns_existing_keepsake() -> TestResult
 }
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn concurrent_duplicate_apply_creates_one_active_keepsake() -> TestResult<()> {
     let repo = repo().await?;
     let relation = timed_relation(&repo, "concurrent-apply", "2026-01-02T00:00:00Z").await?;
@@ -96,7 +96,7 @@ async fn concurrent_duplicate_apply_creates_one_active_keepsake() -> TestResult<
 }
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn disabled_relation_rejects_apply() -> TestResult<()> {
     let repo = repo().await?;
     let relation = RelationDefinition::new(
@@ -124,7 +124,7 @@ async fn disabled_relation_rejects_apply() -> TestResult<()> {
 }
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn concurrent_apply_and_disable_have_ordered_outcomes() -> TestResult<()> {
     let repo = repo().await?;
     let relation = timed_relation(&repo, "apply-disable", "2026-01-02T00:00:00Z").await?;
@@ -162,7 +162,7 @@ async fn concurrent_apply_and_disable_have_ordered_outcomes() -> TestResult<()> 
 }
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn relation_share_lock_blocks_disable_until_apply_order_is_resolved() -> TestResult<()> {
     let repo = repo().await?;
     let relation = timed_relation(&repo, "apply-lock", "2026-01-02T00:00:00Z").await?;

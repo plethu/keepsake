@@ -1,7 +1,7 @@
 use super::support::*;
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn apply_records_audit_event_with_context() -> TestResult<()> {
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
@@ -58,7 +58,7 @@ async fn apply_records_audit_event_with_context() -> TestResult<()> {
 }
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn audit_events_read_paginates_in_order() -> TestResult<()> {
     let repo = repo().await?;
     let relation = timed_relation(&repo, "audit-read", "2026-02-01T00:00:00Z").await?;
@@ -120,7 +120,7 @@ async fn audit_events_read_paginates_in_order() -> TestResult<()> {
 }
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn duplicate_apply_records_duplicate_audit_event() -> TestResult<()> {
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
@@ -163,7 +163,7 @@ async fn duplicate_apply_records_duplicate_audit_event() -> TestResult<()> {
 }
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn revoke_records_audit_event_with_context() -> TestResult<()> {
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
@@ -208,7 +208,7 @@ async fn revoke_records_audit_event_with_context() -> TestResult<()> {
 }
 
 #[tokio::test]
-#[ignore = "requires docker postgres; run `make test-db`"]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn append_audit_event_records_explicit_event() -> TestResult<()> {
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
