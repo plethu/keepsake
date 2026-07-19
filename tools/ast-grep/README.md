@@ -15,7 +15,6 @@ Error-severity rules fail the task. Warnings need review and may be intentional.
 | Long `if` / `else if` cascade | `rust-elseif-cascade` | error | 3 branches |
 | Ordered `if let Some(...)` cascade | `rust-if-let-policy-cascade` | warning | 2 guards |
 | Dense `if let Some(...)` cascade | `rust-if-let-policy-cascade-dense` | error | 3 guards |
-| Empty match arm or bare return | `rust-empty-match-noop` | warning | — |
 | Missing blank after control flow | `rust-block-spacing` | error | — |
 
 `rust-block-spacing` runs after rustfmt. Rustfmt preserves intentional blank
@@ -24,8 +23,10 @@ lines after closing braces but has no stable option to insert them selectively.
 Suppress a true positive next to the code and name the rule:
 
 ```rust
-// ast-grep-ignore: rust-empty-match-noop
-None => {}
+// ast-grep-ignore: rust-if-let-policy-cascade
+if let Some(value) = first {
+    use_value(value);
+}
 ```
 
 For Clippy nesting, use `#[expect(clippy::excessive_nesting, reason = "...")]`.

@@ -29,7 +29,7 @@ jobs:
             gates-
 
       - name: Run project gates
-        run: mise exec -- scripts/check-project-gates.sh
+        run: mise run check
 
   database-gates:
     runs-on: codeberg-medium
@@ -64,6 +64,7 @@ jobs:
     env:
       DATABASE_URL: postgres://keepsake:keepsake@localhost:55432/keepsake
       MYSQL_DATABASE_URL: mysql://keepsake:keepsake@localhost:53306/keepsake
+      TEST_DB_UP: "0"
     steps:
       - uses: https://code.forgejo.org/actions/checkout@v4
 
@@ -88,4 +89,4 @@ jobs:
             database-gates-
 
       - name: Run database gates
-        run: mise exec -- scripts/check-database-gates.sh
+        run: mise run test-db
