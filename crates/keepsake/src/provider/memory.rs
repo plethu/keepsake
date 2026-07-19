@@ -261,6 +261,7 @@ impl InMemoryActiveRelations {
         if relation_ids.is_empty() {
             return Ok(Vec::new());
         }
+
         let requested = relation_ids.iter().copied().collect::<BTreeSet<_>>();
         let mut active = self
             .active
@@ -285,6 +286,7 @@ impl InMemoryActiveRelations {
         if keys.is_empty() {
             return Ok(Vec::new());
         }
+
         let requested = keys.iter().collect::<BTreeSet<_>>();
         let mut active = self
             .active
@@ -325,6 +327,7 @@ impl InMemoryKeepsakeStore {
                 relation_id: relation.id,
             });
         }
+
         let mut keepsakes = self
             .keepsakes
             .write()
@@ -334,6 +337,7 @@ impl InMemoryKeepsakeStore {
                 keepsake_id: command.id,
             });
         }
+
         if keepsakes.values().any(|keepsake| {
             keepsake.is_active()
                 && keepsake.subject() == &command.subject
@@ -346,6 +350,7 @@ impl InMemoryKeepsakeStore {
             }
             .into());
         }
+
         let keepsake = Keepsake::applied(
             command.id,
             command.subject.clone(),

@@ -1,0 +1,24 @@
+id: rust-empty-match-noop
+language: Rust
+severity: warning
+message: Empty match arm or bare return may silently ignore a case.
+note: |
+  Best-effort IO teardown and deliberate exhaustive no-ops may be fine.
+  Suppress with `// ast-grep-ignore: rust-empty-match-noop` and explain why.
+rule:
+  any:
+    - all:
+        - kind: match_arm
+        - regex: "=>\\s*\\{\\s*\\}\\s*,?\\s*$"
+        - not:
+            regex: "(?s)^\\s*_\\s*=>"
+    - all:
+        - kind: match_arm
+        - regex: "=>\\s*return\\s*,?\\s*$"
+        - not:
+            regex: "(?s)^\\s*_\\s*=>"
+    - all:
+        - kind: match_arm
+        - regex: "=>\\s*\\{\\s*return\\s*;\\s*\\}\\s*,?\\s*$"
+        - not:
+            regex: "(?s)^\\s*_\\s*=>"

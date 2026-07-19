@@ -60,6 +60,7 @@ impl TryFrom<KeepsakeRecord> for Keepsake {
                 let Some(revoked_at) = record.revoked_at else {
                     return Err(invalid_lifecycle("revoked keepsakes require revoked_at"));
                 };
+
                 if record.fulfilled_at.is_some() {
                     return Err(invalid_lifecycle(
                         "revoked keepsakes must not have fulfilled_at",
@@ -88,6 +89,7 @@ impl TryFrom<KeepsakeRecord> for Keepsake {
                             "fulfillment expiry requires fulfilled_at",
                         ));
                     };
+
                     if record.revoked_at.is_some() {
                         return Err(invalid_lifecycle(
                             "fulfillment expiry must not have revoked_at",

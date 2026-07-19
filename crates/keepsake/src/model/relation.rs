@@ -237,6 +237,7 @@ impl ActiveRelation {
                 relation_id: relation.id,
             });
         }
+
         if !keepsake.is_active() {
             return Err(KeepsakeError::InactiveActiveRelation {
                 keepsake_id: keepsake.id(),

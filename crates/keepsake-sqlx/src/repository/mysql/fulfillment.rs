@@ -151,6 +151,7 @@ fn snapshot_from_rows(
     for row in counter_rows {
         counters.insert(row.try_get("key")?, row.try_get("value")?);
     }
+
     let mut checklist = BTreeMap::new();
     for row in checklist_rows {
         checklist.insert(

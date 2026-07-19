@@ -1,0 +1,24 @@
+id: rust-empty-match-noop
+valid:
+  - |
+    fn wildcard_ok(x: i32) {
+        match x {
+            0 => { let _ = (); }
+            _ => {}
+        }
+    }
+invalid:
+  - |
+    fn silent(x: Option<i32>) {
+        match x {
+            Some(v) => { let _ = v; }
+            None => {}
+        }
+    }
+  - |
+    fn bare_return(x: Option<i32>) {
+        match x {
+            Some(v) => { let _ = v; }
+            None => return,
+        }
+    }

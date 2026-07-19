@@ -293,6 +293,7 @@ async fn satisfied_fulfillment_ids_tx(
             let ExpiryPolicy::WhenFulfilled { policy } = candidate.expiry_policy else {
                 return None;
             };
+
             let snapshot = FulfillmentSnapshot {
                 counters: counters_by_keepsake
                     .remove(&candidate.keepsake_id)

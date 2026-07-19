@@ -189,6 +189,7 @@ where
         if rows.is_empty() {
             return Ok(Vec::new());
         }
+
         let ids = rows.iter().map(|row| row.id).collect::<Vec<i64>>();
         let attribute_rows = sqlx::query_as::<_, (i64, String, String)>(
             r"

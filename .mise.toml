@@ -1,5 +1,5 @@
 [tools]
-rust = "1.94.0"
+rust = { version = "1.94.0", profile = "minimal", components = ["clippy", "rustfmt"] }
 
 [env]
 RUST_BACKTRACE = "1"

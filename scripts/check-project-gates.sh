@@ -8,9 +8,10 @@ Usage:
 
 Runs Keepsake's canonical local project gates:
   1. cargo fmt --all --check
-  2. cargo clippy --workspace --all-targets --all-features -- -D warnings
-  3. keepsake-sqlx feature-matrix clippy checks
-  4. cargo test --workspace --all-features
+  2. structural Rust checks
+  3. cargo clippy --workspace --all-targets --all-features -- -D warnings
+  4. keepsake-sqlx feature-matrix clippy checks
+  5. cargo test --workspace --all-features
 EOF
 }
 
@@ -37,6 +38,20 @@ echo "== cargo fmt --all --check =="
   cd "$repo_root"
   cargo fmt --all --check
 )
+
+echo
+echo "== structural Rust checks =="
+if command -v ast-grep >/dev/null 2>&1; then
+  MISE_PROJECT_ROOT="$repo_root" "$repo_root/.config/mise/tasks/lint-structure"
+elif command -v mise >/dev/null 2>&1; then
+  (
+    cd "$repo_root"
+    MISE_PROJECT_ROOT="$repo_root" mise exec -- .config/mise/tasks/lint-structure
+  )
+else
+  echo "ast-grep is unavailable; install the pinned tools with 'mise install'" >&2
+  exit 2
+fi
 
 echo
 echo "== cargo clippy =="

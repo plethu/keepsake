@@ -286,6 +286,7 @@ pub(super) async fn hydrate_audit_records(
     if rows.is_empty() {
         return Ok(Vec::new());
     }
+
     let ids = rows
         .iter()
         .map(|row| row.try_get::<i64, _>("id"))

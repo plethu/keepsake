@@ -81,16 +81,16 @@ impl FulfillmentPolicy {
                 .get(key)
                 .is_some_and(|value| value >= threshold),
             Self::ChecklistComplete { list_key } => {
-                let mut matched = false;
-                for (key, complete) in &snapshot.checklist {
-                    if key.starts_with(list_key) {
-                        matched = true;
-                        if !complete {
-                            return false;
-                        }
-                    }
-                }
-                matched
+                let mut matching_entries = snapshot
+                    .checklist
+                    .iter()
+                    .filter(|(key, _)| key.starts_with(list_key))
+                    .map(|(_, complete)| complete);
+                let Some(first) = matching_entries.next() else {
+                    return false;
+                };
+
+                *first && matching_entries.all(|complete| *complete)
             }
         }
     }

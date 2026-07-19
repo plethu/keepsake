@@ -118,45 +118,7 @@ where
             }
             after = candidates.last().map(FulfilledExpiryCursor::from);
             for candidate in candidates {
-                let ExpiryPolicy::WhenFulfilled { policy } = candidate.expiry_policy else {
-                    continue;
-                };
-                let snapshot = fulfillment_snapshot_tx(&mut tx, candidate.keepsake_id).await?;
-                if policy.is_fulfilled(&snapshot) {
-                    let result = sqlx::query(
-                        r"
-                        update keepsakes
-                        set state = 'expired', fulfilled_at = ?2, updated_at = ?2
-                        where id = ?1
-                          and state = 'applied'
-                          and exists (
-                            select 1
-                            from keepsake_relation_definitions r
-                            where r.id = keepsakes.relation_id and r.enabled
-                          )
-                        ",
-                    )
-                    .bind(candidate.keepsake_id.to_string())
-                    .bind(format_timestamp(now))
-                    .execute(&mut *tx)
-                    .await?;
-                    let rows_affected = result.rows_affected();
-                    if rows_affected == 1 {
-                        record_audit_event_tx(
-                            &mut tx,
-                            &expiry_event(
-                                now,
-                                ExpiryCause::Fulfilled,
-                                candidate.keepsake_id,
-                                candidate.relation_id,
-                                candidate.subject_kind,
-                                candidate.subject_id,
-                            )?,
-                        )
-                        .await?;
-                    }
-                    expired += rows_affected;
-                }
+                expired += expire_fulfilled_candidate_tx(&mut tx, now, candidate).await?;
             }
         }
         tx.commit().await?;
@@ -206,6 +168,57 @@ where
         tx.commit().await?;
         Ok(expired)
     }
+}
+
+#[cfg(feature = "fulfillment-counters")]
+async fn expire_fulfilled_candidate_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    now: DateTime<Utc>,
+    candidate: FulfilledExpiryCandidate,
+) -> RepositoryResult<u64> {
+    let ExpiryPolicy::WhenFulfilled { policy } = candidate.expiry_policy else {
+        return Ok(0);
+    };
+
+    let snapshot = fulfillment_snapshot_tx(tx, candidate.keepsake_id).await?;
+    if !policy.is_fulfilled(&snapshot) {
+        return Ok(0);
+    }
+
+    let result = sqlx::query(
+        r"
+        update keepsakes
+        set state = 'expired', fulfilled_at = ?2, updated_at = ?2
+        where id = ?1
+          and state = 'applied'
+          and exists (
+            select 1
+            from keepsake_relation_definitions r
+            where r.id = keepsakes.relation_id and r.enabled
+          )
+        ",
+    )
+    .bind(candidate.keepsake_id.to_string())
+    .bind(format_timestamp(now))
+    .execute(&mut **tx)
+    .await?;
+    let rows_affected = result.rows_affected();
+    if rows_affected == 1 {
+        record_audit_event_tx(
+            tx,
+            &expiry_event(
+                now,
+                ExpiryCause::Fulfilled,
+                candidate.keepsake_id,
+                candidate.relation_id,
+                candidate.subject_kind,
+                candidate.subject_id,
+            )?,
+        )
+        .await?;
+    }
+
+    Ok(rows_affected)
 }
 
 #[cfg(feature = "fulfillment-counters")]
