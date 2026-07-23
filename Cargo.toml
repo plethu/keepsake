@@ -11,8 +11,8 @@ resolver = "3"
 edition = "2024"
 rust-version = "1.94"
 license = "MIT OR Apache-2.0"
-repository = "https://codeberg.org/plethu/keepsake"
-homepage = "https://codeberg.org/plethu/keepsake"
+repository = "https://github.com/plethu/keepsake"
+homepage = "https://github.com/plethu/keepsake"
 authors = ["Mari"]
 
 [workspace.dependencies]

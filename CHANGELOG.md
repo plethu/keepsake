@@ -29,7 +29,7 @@ expectations in `keepsake-sqlx` from this version onward.
 - Added `AuditOutboxRecord`, `AuditOutboxCursor`, and repository helpers for
   cursor export, claim/lease, acknowledgement, and release.
 - Moved human documentation from the Astro docs site into [`docs/`](docs/README.md).
-- CI runs on pull requests via Codeberg-hosted Forgejo Actions.
+- CI runs on pull requests via GitHub Actions.
 
 ## 0.6.0 - 2026-06-23
 

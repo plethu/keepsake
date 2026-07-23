@@ -14,15 +14,28 @@ clippy:
 test:
     cargo test --workspace --all-features
 
-db-up:
-    {{ docker_compose }} up -d --wait postgres mysql
+db-up: db-up-postgres
+
+db-up-postgres:
+    {{ docker_compose }} up -d --wait postgres
+
+db-up-mysql:
+    {{ docker_compose }} up -d --wait mysql
 
 db-down:
     {{ docker_compose }} down --remove-orphans
 
-test-db:
-    if [[ "{{ test_db_up }}" == "1" ]]; then just db-up; fi
-    DATABASE_URL="{{ database_url }}" MYSQL_DATABASE_URL="{{ mysql_database_url }}" scripts/check-database-gates.sh
+test-db: test-db-all
+
+test-db-postgres:
+    if [[ "{{ test_db_up }}" == "1" ]]; then just db-up-postgres; fi
+    DATABASE_URL="{{ database_url }}" cargo test -p keepsake-sqlx --test postgres --features postgres-tests -- --ignored --test-threads=1
+
+test-db-mysql:
+    if [[ "{{ test_db_up }}" == "1" ]]; then just db-up-mysql; fi
+    MYSQL_DATABASE_URL="{{ mysql_database_url }}" cargo test -p keepsake-sqlx --test mysql --features mysql-tests -- --ignored --test-threads=1
+
+test-db-all: test-db-postgres test-db-mysql
 
 check:
     scripts/check-project-gates.sh

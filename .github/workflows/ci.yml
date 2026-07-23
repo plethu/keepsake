@@ -2,23 +2,28 @@ name: ci
 
 on:
   pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   gates:
-    runs-on: codeberg-medium
+    runs-on: ubuntu-latest
     steps:
-      - uses: https://code.forgejo.org/actions/checkout@v4
-
-      - name: Trust the checkout directory
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/checkout@v6
 
       - name: Install project tools
-        uses: https://github.com/jdx/mise-action@v4
-        with:
-          github_token: ""
+        uses: jdx/mise-action@v4
 
       - name: Cache cargo registry and build artifacts
-        uses: https://code.forgejo.org/actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -32,7 +37,7 @@ jobs:
         run: mise run check
 
   database-gates:
-    runs-on: codeberg-medium
+    runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:17.6-alpine
@@ -66,19 +71,15 @@ jobs:
       MYSQL_DATABASE_URL: mysql://keepsake:keepsake@localhost:53306/keepsake
       TEST_DB_UP: "0"
     steps:
-      - uses: https://code.forgejo.org/actions/checkout@v4
-
-      - name: Trust the checkout directory
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/checkout@v6
 
       - name: Install project tools
-        uses: https://github.com/jdx/mise-action@v4
+        uses: jdx/mise-action@v4
         with:
           install_args: rust just
-          github_token: ""
 
       - name: Cache cargo registry and build artifacts
-        uses: https://code.forgejo.org/actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
