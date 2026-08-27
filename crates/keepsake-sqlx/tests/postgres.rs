@@ -12,5 +12,7 @@ mod expiry;
 mod queries;
 #[path = "postgres/relations.rs"]
 mod relations;
+#[path = "postgres/schema.rs"]
+mod schema;
 #[path = "postgres/support.rs"]
 mod support;

@@ -60,8 +60,9 @@ source.insert_active_relation(
 
 ## SQLx Adapter
 
-`keepsake-sqlx` uses feature flags for integration surface area, not lifecycle
-semantics.
+`keepsake-sqlx` uses feature flags for backend integration surface area, not
+lifecycle or audit semantics. Every enabled SQL backend also requires the
+matching Dovecote SQLx adapter at runtime.
 
 | Feature | Default | Use |
 | --- | --- | --- |
@@ -77,8 +78,12 @@ or MySQL, disable default features so Postgres is not enabled implicitly:
 
 ```toml
 [dependencies]
-keepsake-sqlx = { version = "1", default-features = false, features = ["sqlite", "migrations"] }
+keepsake-sqlx = { version = "2", default-features = false, features = ["sqlite", "migrations"] }
+dovecote-sqlx-sqlite = { path = "../carrier/crates/dovecote-sqlx-sqlite" }
 ```
+
+Dovecote is pre-release and is not published yet. Replace the local path with
+`dovecote-sqlx-sqlite = "0.1"` after Dovecote 0.1 is published.
 
 Disable `migrations` when your service vendors the SQL into a separate
 migration framework. Disable `fulfillment-counters` when fulfillment state is
@@ -91,7 +96,9 @@ The `cache` feature is inert until configured with
 
 The `postgres-tests`, `sqlite-tests`, and `mysql-tests` features are repository
 test harnesses, not application features. They combine the matching backend
-with migrations, cache support, and fulfillment counters.
+with migrations, cache support, and fulfillment counters. Dovecote delivery
+features are selected on the matching Dovecote adapter; Keepsake does not
+duplicate those flags or APIs.
 
 ## Stable Contract
 

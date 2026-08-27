@@ -4,10 +4,10 @@ pub use std::time::Duration;
 
 pub use chrono::{DateTime, Utc};
 pub use keepsake::{
-    ActiveRelationSource, ActorRef, ApplyKeepsake, AuditContext, AuditDecision, AuditEvent,
-    AuditEventType, CommandContext, DynActiveRelationSource, ExpiryCause, ExpiryPolicy,
-    FulfillmentPolicy, FulfillmentSnapshot, LifecycleState, RelationDefinition, RelationId,
-    RelationKey, RelationSpec, RevokeBySubject, RevokeKeepsake, StaticRelationKey, SubjectRef,
+    ActiveRelationSource, ActorRef, ApplyKeepsake, CommandContext, DynActiveRelationSource,
+    ExpiryPolicy, FulfillmentPolicy, FulfillmentSnapshot, LifecycleState, RelationDefinition,
+    RelationId, RelationKey, RelationSpec, RevokeBySubject, RevokeKeepsake, StaticRelationKey,
+    SubjectRef,
 };
 #[cfg(feature = "cache")]
 pub use keepsake_sqlx::LocalRelationCacheConfig;
@@ -19,16 +19,6 @@ pub use uuid::Uuid;
 mod db;
 
 pub use db::*;
-
-#[derive(Debug, sqlx::FromRow)]
-pub struct AuditRow {
-    pub id: i64,
-    pub event_type: String,
-    pub actor_kind: String,
-    pub actor_id: String,
-    pub decision: serde_json::Value,
-    pub occurred_at: DateTime<Utc>,
-}
 
 pub struct TrustedAccountTag;
 
@@ -85,7 +75,7 @@ pub enum TestError {
 pub async fn repo() -> TestResult<KeepsakeRepository> {
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
-    let repo = KeepsakeRepository::new(pool.clone());
+    let repo = KeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/postgres")?;
     repo.migrate().await?;
     reset_database(&pool).await?;
     Ok(repo)

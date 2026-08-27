@@ -6,12 +6,14 @@ use keepsake::{
 use sqlx::{Sqlite, Transaction};
 use uuid::Uuid;
 
-use crate::repository::support::{apply_event, expires_at, revoke_by_subject_event, revoke_event};
+use crate::repository::support::{
+    apply_event, expires_at, replay_event, revoke_by_subject_event, revoke_event,
+};
 use crate::repository::{
     AppliedKeepsake, RelationCache, RepositoryError, RepositoryResult, SqliteKeepsakeRepository,
 };
 
-use super::audit::record_audit_event_tx;
+use super::super::support::dovecote_event;
 use super::rows::{format_timestamp, keepsake_from_row, relation_from_row};
 
 impl<C> SqliteKeepsakeRepository<C>
@@ -23,13 +25,17 @@ where
         command.subject.validate()?;
         command.context.validate()?;
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = begin_write_tx(&self.pool).await?;
         let relation = relation_for_update_tx(&mut tx, command.relation_id).await?;
         if let Some(existing) =
             active_keepsake_for_subject_relation_tx(&mut tx, &command.subject, command.relation_id)
                 .await?
         {
-            record_audit_event_tx(&mut tx, &apply_event(command, &existing, true)).await?;
+            let event = replay_event(
+                existing_audit_event_tx(&mut tx, &self.audit, command.audit_id).await?,
+                apply_event(command, &existing, true),
+            );
+            self.enqueue_audit_event_tx(&mut tx, &event).await?;
             tx.commit().await?;
             return Ok(AppliedKeepsake {
                 keepsake: existing,
@@ -88,7 +94,7 @@ where
             (keepsake, false)
         };
 
-        record_audit_event_tx(
+        self.enqueue_audit_event_tx(
             &mut tx,
             &apply_event(command, &keepsake, duplicate_prevented),
         )
@@ -104,10 +110,11 @@ where
     pub async fn revoke(&self, command: &RevokeKeepsake) -> RepositoryResult<bool> {
         command.context.validate()?;
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = begin_write_tx(&self.pool).await?;
         let revoked = revoke_tx(&mut tx, command.keepsake_id, command.at).await?;
         if let Some(keepsake) = &revoked {
-            record_audit_event_tx(&mut tx, &revoke_event(command, keepsake)).await?;
+            self.enqueue_audit_event_tx(&mut tx, &revoke_event(command, keepsake))
+                .await?;
         }
         tx.commit().await?;
         Ok(revoked.is_some())
@@ -124,17 +131,62 @@ where
         command.subject.validate()?;
         command.context.validate()?;
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = begin_write_tx(&self.pool).await?;
         let revoked =
             revoke_by_subject_tx(&mut tx, &command.subject, command.relation_id, command.at)
                 .await?;
         let revoked_id = revoked.as_ref().map(Keepsake::id);
         if let Some(keepsake) = &revoked {
-            record_audit_event_tx(&mut tx, &revoke_by_subject_event(command, keepsake)).await?;
+            self.enqueue_audit_event_tx(&mut tx, &revoke_by_subject_event(command, keepsake))
+                .await?;
         }
         tx.commit().await?;
         Ok(revoked_id)
     }
+}
+
+async fn existing_audit_event_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    config: &super::super::support::DovecoteAuditConfig,
+    audit_id: keepsake::AuditEventId,
+) -> RepositoryResult<Option<keepsake::AuditEvent>> {
+    let event_id = format!("keepsake-audit-{}", audit_id.as_uuid());
+    let bytes = sqlx::query_scalar::<_, Option<Vec<u8>>>(
+        "select data from dovecote_events where source = ? and event_id = ?",
+    )
+    .bind(config.source())
+    .bind(event_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    bytes
+        .flatten()
+        .map(|data| serde_json::from_slice(&data).map_err(RepositoryError::from))
+        .transpose()
+}
+
+impl<C> SqliteKeepsakeRepository<C>
+where
+    C: RelationCache,
+{
+    pub(super) async fn enqueue_audit_event_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        audit: &keepsake::AuditEvent,
+    ) -> RepositoryResult<()> {
+        let event = dovecote_event(&self.audit, audit)?;
+        dovecote_sqlx_sqlite::enqueue(tx, event)
+            .await
+            .map(|_| ())
+            .map_err(|error| RepositoryError::DovecoteEnqueue(error.into()))
+    }
+}
+
+pub(super) async fn begin_write_tx(
+    pool: &sqlx::SqlitePool,
+) -> RepositoryResult<Transaction<'static, Sqlite>> {
+    dovecote_sqlx_sqlite::begin_write(pool)
+        .await
+        .map_err(|error| RepositoryError::DovecoteEnqueue(error.into()))
 }
 
 pub(super) async fn relation_for_update_tx(

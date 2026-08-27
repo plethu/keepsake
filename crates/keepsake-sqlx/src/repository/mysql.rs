@@ -1,4 +1,3 @@
-mod audit;
 mod expiry;
 #[cfg(feature = "fulfillment-counters")]
 mod fulfillment;

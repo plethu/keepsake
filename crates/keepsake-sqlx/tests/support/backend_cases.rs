@@ -232,6 +232,7 @@ where
     Ok(())
 }
 
+#[allow(dead_code)]
 pub async fn fulfilled_expiry_uses_counter_snapshot<H>() -> TestResult<()>
 where
     H: BackendHarness,

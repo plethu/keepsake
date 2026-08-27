@@ -118,14 +118,5 @@ async fn sqlite_revoke_by_subject_revokes_active_keepsake() -> TestResult<()> {
         .await?;
     assert_eq!(again, None);
 
-    let events = repo
-        .audit_events_for_keepsake(applied.keepsake.id(), None, 10)
-        .await?;
-    assert_eq!(events.len(), 2);
-    assert_eq!(events[1].event.event_type, keepsake::AuditEventType::Revoke);
-    assert_eq!(
-        events[1].event.context.attributes.get("reason").cloned(),
-        Some("appeal".to_owned())
-    );
     Ok(())
 }

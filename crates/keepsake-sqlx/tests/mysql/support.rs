@@ -21,8 +21,12 @@ impl BackendHarness for MySqlHarness {
     async fn repo() -> TestResult<(Self::Repo, Self::Pool)> {
         let pool = mysql_pool().await?;
         reset_schema(&pool).await?;
-        let repo = MySqlKeepsakeRepository::new(pool.clone());
+        let repo =
+            MySqlKeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/mysql")?;
         repo.migrate().await?;
+        sqlx::raw_sql(dovecote_sqlx_mysql::MIGRATIONS[0].sql())
+            .execute(&pool)
+            .await?;
         Ok((repo, pool))
     }
 
@@ -128,7 +132,14 @@ pub async fn mysql_pool() -> TestResult<MySqlPool> {
 pub async fn reset_schema(pool: &MySqlPool) -> Result<(), sqlx::Error> {
     pool.execute("set foreign_key_checks = 0").await?;
     for query in [
+        "drop table if exists dovecote_deliveries",
+        "drop table if exists dovecote_events",
+        "drop table if exists dovecote_schema",
+        "drop table if exists keepsake_dovecote_bridge_claims",
+        "drop table if exists keepsake_dovecote_bridge_ledger",
+        "drop table if exists keepsake_dovecote_bridge_config",
         "drop table if exists keepsake_audit_outbox",
+        "drop table if exists keepsake_upgrade_evidence",
         "drop table if exists keepsake_audit_context_attributes",
         "drop table if exists keepsake_audit_events",
         "drop table if exists keepsake_fulfillment_checklist",

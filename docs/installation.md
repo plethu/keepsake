@@ -1,62 +1,97 @@
 # Installation
 
-Add the core crate and the SQLx adapter to a Rust service that already uses
-Postgres:
+Keepsake 2.0 has two persistence boundaries. Keepsake owns relation and
+entitlement state. [Dovecote](https://github.com/plethu/dovecote) owns
+immutable audit events and their at-least-once deliveries. Dovecote is currently
+used from a local checkout; install both schemas before serving requests.
 
-```sh
-cargo add keepsake keepsake-sqlx
-cargo add sqlx --features postgres,runtime-tokio,tls-rustls
+For Postgres, use a local Dovecote checkout while its crates are pre-release:
+
+```toml
+[dependencies]
+keepsake = "2"
+keepsake-sqlx = "2"
+dovecote-sqlx-postgres = { path = "../carrier/crates/dovecote-sqlx-postgres" }
+sqlx = { version = "0.9", features = ["postgres", "runtime-tokio", "tls-rustls"] }
 ```
 
-The core crate has no backend features. The SQLx adapter enables embedded
-migrations, relation-definition caching, and simple fulfillment counters by
-default.
+After Dovecote 0.1 is published, replace that path dependency with
+`dovecote-sqlx-postgres = "0.1"`.
 
-Run the embedded migration with a `sqlx::PgPool`:
+The normal setup is deliberately small:
 
 ```rust
-use sqlx::PgPool;
 use keepsake_sqlx::KeepsakeRepository;
+use sqlx::PgPool;
 
 let pool = PgPool::connect(&database_url).await?;
-let repo = KeepsakeRepository::new(pool);
-repo.migrate().await?;
+let repo = KeepsakeRepository::new(pool, "https://accounts.example.test/keepsake")?;
+repo.migrate().await?;       // clean Keepsake 2.0 domain baseline
+// Install the Dovecote schema with dovecote-sqlx-postgres before this call.
+repo.check_schema().await?;
 ```
 
-Applications own authorization, entity tables, and any domain-specific joins.
-Keepsake stores opaque subject identifiers and relation lifecycle state.
+The source URI is application-owned, stable, and absolute. It is copied into
+every Keepsake audit event and is part of the consumer deduplication identity.
+The adapter supplies the `keepsake-audit` stream and its durable event type.
+There is no migration-mode enum, legacy table configuration, bridge worker, or
+duplicate publication setting in the normal constructor.
 
 ## SQLite
 
-Select SQLite explicitly when the application does not need the default
-Postgres backend:
+Select SQLite explicitly and use the local `dovecote-sqlx-sqlite` adapter:
 
 ```toml
 [dependencies]
-keepsake = "1"
-keepsake-sqlx = { version = "1", default-features = false, features = ["sqlite", "migrations"] }
+keepsake = "2"
+keepsake-sqlx = { version = "2", default-features = false, features = ["sqlite", "migrations"] }
+dovecote-sqlx-sqlite = { path = "../carrier/crates/dovecote-sqlx-sqlite" }
 sqlx = { version = "0.9", default-features = false, features = ["sqlite", "runtime-tokio", "tls-rustls"] }
 ```
 
-Construct `SqliteKeepsakeRepository` with a `sqlx::SqlitePool`. SQLite
-serializes competing writers; retry `SQLITE_BUSY` failures at the job or
-request boundary when multiple workers share a database file.
+After Dovecote 0.1 is published, replace that path dependency with
+`dovecote-sqlx-sqlite = "0.1"`.
+
+Construct `SqliteKeepsakeRepository` with a `sqlx::SqlitePool` and an absolute
+source. Lifecycle writes use Dovecote's `BEGIN IMMEDIATE` boundary, so one
+transaction contains the domain mutation and audit enqueue. SQLite serializes
+competing writers; retry a bounded `SQLITE_BUSY` result at the request or job
+boundary.
 
 ## MySQL
 
-For MySQL, select the matching backend and migration feature:
+For MySQL, select the matching backend and use the local Dovecote adapter:
 
 ```toml
 [dependencies]
-keepsake = "1"
-keepsake-sqlx = { version = "1", default-features = false, features = ["mysql", "migrations"] }
+keepsake = "2"
+keepsake-sqlx = { version = "2", default-features = false, features = ["mysql", "migrations"] }
+dovecote-sqlx-mysql = { path = "../carrier/crates/dovecote-sqlx-mysql" }
 sqlx = { version = "0.9", default-features = false, features = ["mysql", "runtime-tokio", "tls-rustls"] }
 ```
 
-Construct `MySqlKeepsakeRepository` with a `sqlx::MySqlPool`. MySQL lifecycle
-commands use InnoDB row locks, so configure lock-wait timeouts and retries for
-the service's expected contention.
+After Dovecote 0.1 is published, replace that path dependency with
+`dovecote-sqlx-mysql = "0.1"`.
 
-Add `cache` or `fulfillment-counters` only when those integration surfaces are
-needed. The [feature reference](reference/feature-flags.md) lists the complete
-matrix.
+Construct `MySqlKeepsakeRepository` with a `sqlx::MySqlPool` and an absolute
+source. MySQL lifecycle commands use InnoDB row locks; configure lock-wait
+timeouts and retries for the service's expected contention.
+
+## Upgrade versus clean installation
+
+`migrate()` selects only the clean 2.0 domain baseline. It refuses a schema
+whose metadata identifies the historical 1.x track. For an existing Keepsake
+1.x installation, call `upgrade_migrate()` explicitly after installing and
+checking Dovecote, then run the complete-history importer described in the
+project migration runbook. Call `activate_upgrade()` only after reconciliation;
+until then, the normal 2.0 schema check remains blocked. The upgrade track leaves old audit and outbox
+tables available for reconciliation and rollback; 2.0 runtime code never
+writes them and the migration does not drop them.
+
+Do not point the clean baseline at an existing 1.x database, and do not point
+the upgrade track at a clean 2.0 database. The adapter fails loudly when the
+metadata does not match the requested track.
+
+Applications own authorization, entity tables, and domain-specific joins.
+Keepsake stores opaque subject identifiers and relation lifecycle state;
+Dovecote stores audit occurrences, not live domain state.

@@ -132,9 +132,7 @@ async fn mysql_projection_invariant_rejects_fractional_expiry_mismatch() -> Test
 #[tokio::test]
 #[ignore = "requires docker mysql; run `mise run test-db`"]
 async fn mysql_revoke_by_subject_revokes_active_keepsake() -> TestResult<()> {
-    use keepsake::{
-        ActorRef, ApplyKeepsake, AuditEventType, CommandContext, RevokeBySubject, SubjectRef,
-    };
+    use keepsake::{ActorRef, ApplyKeepsake, CommandContext, RevokeBySubject, SubjectRef};
 
     let (repo, _pool) = MySqlHarness::repo().await?;
     let relation = upsert_relation::<MySqlHarness>(&repo, ExpiryPolicy::ManualOnly).await?;
@@ -170,19 +168,5 @@ async fn mysql_revoke_by_subject_revokes_active_keepsake() -> TestResult<()> {
         .await?;
     assert_eq!(again, None);
 
-    let events = repo
-        .audit_events_for_keepsake(applied.keepsake.id(), None, 10)
-        .await?;
-    assert_eq!(
-        events
-            .iter()
-            .map(|record| record.event.event_type)
-            .collect::<Vec<_>>(),
-        vec![AuditEventType::Apply, AuditEventType::Revoke]
-    );
-    assert_eq!(
-        events[1].event.context.attributes.get("reason").cloned(),
-        Some("appeal".to_owned())
-    );
     Ok(())
 }

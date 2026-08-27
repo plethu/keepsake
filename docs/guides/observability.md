@@ -6,7 +6,7 @@ succeeding without putting application subjects in metric labels.
 Track bounded dimensions such as command type, relation kind/name, transition
 result, batch size, expired count, no-op category, and error category.
 
-Do not put opaque subject ids in metric labels. Use audit rows or trace spans
+Do not put opaque subject ids in metric labels. Use Dovecote audit events or trace spans
 for subject id, request id, ticket id, and other high-cardinality values.
 
 A practical dashboard starts with:

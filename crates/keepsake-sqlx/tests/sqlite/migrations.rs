@@ -22,7 +22,7 @@ async fn sqlite_migration_rejects_wrong_backend_marker() -> TestResult<()> {
         .execute(&pool)
         .await?;
 
-    let repo = SqliteKeepsakeRepository::new(pool);
+    let repo = SqliteKeepsakeRepository::new(pool, "https://tests.invalid/keepsake/sqlite")?;
     let result = repo.migrate().await;
 
     assert!(matches!(

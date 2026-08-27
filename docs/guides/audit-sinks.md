@@ -1,61 +1,47 @@
-# Audit Sinks
+# Audit events
 
 Audit is durable history. Logging is diagnostic. Metrics are aggregate health
-signals. Keepsake keeps these concerns separate through provider traits.
+signals. Keepsake keeps these concerns separate through its typed event model
+and `AuditSink` trait.
 
-Use audit for questions such as "who applied this relation", "which command
-expired it", and "what application context was attached to the transition". Use
-logs for debugging a failing request. Use metrics for aggregate health.
+In the core crate, `AuditEvent` is a validated, deterministic Rust value.
+`AuditEventId` is generated before persistence and must be retained when a
+caller retries the same logical operation. `AuditContext` carries application
+values such as an operator id, ticket id, reason code, tenant id, or request
+id. The core crate does not choose a product vocabulary or tracing stack.
 
-The core crate includes the audit event model, `AuditSink`, and a no-op sink.
-`InMemoryAuditSink` is behind the `test` feature because it is a test double,
-not production guidance. The SQLx adapter writes audit rows through `apply`,
-`revoke`, expiry helpers, and `append_audit_event`; treat those command helpers
-as the canonical SQL mutation path.
+The 2.0 SQLx adapter serializes the complete event to exact JSON bytes and
+enqueues one CloudEvents-compatible Dovecote event in the same SQL transaction
+as the Keepsake mutation. Its defaults are:
 
-`AuditSink` has an associated `Error` type. Production adapters should expose a
-small concrete error enum, usually derived with `thiserror`, rather than folding
-durable-write failures into `KeepsakeError`.
+- stream: `keepsake-audit`;
+- type: `keepsake.audit_event_recorded`;
+- content type: `application/json`.
 
-`AuditEvent` includes `AuditContext` for application-owned operational
-attributes. Good context keys are stable product facts such as operator id,
-ticket id, reason code, tenant id, or request id. The core model keeps those
-attributes generic and deterministic; it does not assume any product vocabulary
-or tracing stack.
+The application must configure a stable absolute source URI. The event id is
+`keepsake-audit-<audit event id>`. Consumers deduplicate at the CloudEvents
+`(source, id)` boundary because delivery remains at least once.
 
-The SQL schema stores context as one row per `(audit_event_id, key)`, with an
-index on `(key, value, audit_event_id)`. That is more explicit than one JSONB
-blob and easier for downstream export/indexing tools to process. The SQLx
-command helpers copy command metadata into these rows and preserve
-`idempotency_key` as an audit attribute when present. If a field becomes part of
-a strict application reporting contract, promote it in the application's audit
-sink or warehouse schema.
+## Reading history and publishing
 
-## Outbox Export
+Keepsake does not maintain SQL audit tables, normalized context rows, a second
+outbox, or project-specific claim/ack/release methods. Those 1.x APIs are not
+part of the 2.0 SQLx surface.
 
-`keepsake-sqlx` also writes one `keepsake_audit_outbox` row for every SQL audit
-event in the same transaction. Use `audit_outbox` for cursor export,
-`claim_audit_outbox` for leased at-least-once workers, `ack_audit_outbox` after
-successful delivery, and `release_audit_outbox` when a worker gives up a lease.
+Use the selected Dovecote SQLx adapter for live paging or a finite snapshot:
 
 ```rust
-let batch = repo
-    .claim_audit_outbox("warehouse-worker-1", now, lease_until, 100)
-    .await?;
-
-for row in batch {
-    export(row.payload).await?;
-    repo.ack_audit_outbox(row.id, delivered_at).await?;
+let page = dovecote_sqlx_postgres::page(&pool, after_row_id, limit).await?;
+for stored in page {
+    let event: keepsake::AuditEvent = serde_json::from_slice(stored.event().data().as_bytes())?;
+    // Use `stored.delivery()` for delivery state, not a Keepsake table.
 }
 ```
 
-Broker and storage clients stay outside the crate. Kafka, Restate, S3, and
-warehouse jobs should consume the database outbox API, then transform the
-`AuditEvent` payload for their destination.
+For a stable complete-history read, begin a Dovecote snapshot and call
+`next_page` until it returns an empty page, then finish it. Publication workers
+claim, finalize, retry, or quarantine through Dovecote's token-fenced APIs;
+transport clients remain application-owned.
 
-Avoid putting high-cardinality context into metrics labels. Audit rows and trace
-spans are better homes for values such as subject id, ticket id, and request id.
-
-Preserve Keepsake's durable audit fields and application context attributes when
-copying outbox payloads into cold storage or event systems, while keeping logging
-and metrics separate.
+`InMemoryAuditSink` remains useful for core tests and non-SQL consumers. It is
+not a second SQL persistence model and is not used by `keepsake-sqlx`.

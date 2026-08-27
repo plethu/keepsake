@@ -1,9 +1,21 @@
 # SQLx Adapter
 
-The SQLx adapter stores lifecycle state in Postgres, SQLite, or MySQL. It
-provides migrations, relation upsert, idempotent apply and revoke, audited
-command helpers, active subject lookups, membership scans, timed expiry scans,
-and simple fulfillment counter projections.
+The SQLx adapter stores Keepsake lifecycle state in Postgres, SQLite, or MySQL.
+It provides migrations, relation upsert, idempotent apply and revoke, active
+subject lookups, membership scans, timed expiry scans, and simple fulfillment
+counter projections. Audit persistence and delivery belong to Dovecote.
+
+Construct a repository with an application-owned, stable absolute source URI:
+
+```rust
+let repo = KeepsakeRepository::new(pool, "https://accounts.example.test/keepsake")?;
+```
+
+The adapter uses the `keepsake-audit` stream, the `keepsake.audit_event_recorded`
+event type, and `application/json` content. It does not invent a source. The
+same `AuditEventId` is carried from command construction into the CloudEvents
+id (`keepsake-audit-<audit id>`) so a retry of one logical operation remains
+deduplicable.
 
 The schema stores opaque subject identifiers and does not join application
 entity tables.
@@ -37,9 +49,9 @@ comments, conditional compilation, or unusual organization.
 
 ## Mutation Helpers
 
-`apply(&ApplyKeepsake)` is idempotent for active duplicates and writes an audit
-event in the same transaction. Duplicate commands return the existing active
-keepsake with `duplicate_prevented = true`. Disabled relations reject new
+`apply(&ApplyKeepsake)` is idempotent for active duplicates and writes one
+Dovecote event in the same transaction. Duplicate commands return the existing
+active keepsake with `duplicate_prevented = true`. Disabled relations reject new
 non-duplicate applies, but duplicate applies still return the existing active
 keepsake so retry loops do not turn a committed apply into an error.
 
@@ -75,21 +87,23 @@ repo.apply(&command).await?;
 timed_repo.expire_due_timed(500).await?;
 ```
 
-## Advanced Audit Appends
+## Audit history and delivery
 
-Use `append_audit_event(&AuditEvent)` only for application-owned audit events
-that do not have a built-in repository command. It appends audit rows without
-mutating lifecycle state. For apply and revoke flows, prefer the command
-helpers so lifecycle and audit rows commit together.
+Keepsake 2.0 does not expose `append_audit_event`, Keepsake audit repositories,
+outbox cursors, or claim/ack/release methods. Those APIs belonged to the 1.x
+schema and are deliberately absent from the maintained 2.0 SQLx surface.
 
-Every SQL audit write also creates an outbox row in the same transaction. Export
-workers can scan with `audit_outbox`, lease work with `claim_audit_outbox`, mark
-delivery with `ack_audit_outbox`, and retry by lease expiry or
-`release_audit_outbox`. Keepsake does not include Kafka, Restate, S3, or
-warehouse clients; those integrations should consume the DB outbox API.
-`AuditOutboxCursor::after(&record)` is the stable cursor for id-ordered export.
-Leased workers should ack only after the external system has accepted the
-payload; unacked rows become claimable again when the lease expires.
+For typed history, page Dovecote's live or snapshot stream with the selected
+backend adapter and decode each `PagedEvent` payload as `keepsake::AuditEvent`.
+The Dovecote delivery snapshot is the only durable delivery state. Publication
+workers and transport clients remain application concerns; Dovecote provides
+the lease and token-fenced lifecycle operations. Consumers deduplicate
+at-least-once delivery with CloudEvents `(source, id)`.
+
+The Dovecote event is enqueued in the same SQLx transaction as the lifecycle
+mutation. A validation or enqueue failure rolls back the Keepsake state change.
+For SQLite, the repository starts Dovecote's required `BEGIN IMMEDIATE` write
+transaction before the domain mutation.
 
 ## Read Helpers
 
@@ -154,7 +168,7 @@ use std::time::Duration;
 
 use keepsake_sqlx::{KeepsakeRepository, LocalRelationCacheConfig};
 
-let repo = KeepsakeRepository::new(pool)
+let repo = KeepsakeRepository::new(pool, "https://accounts.example.test/keepsake")?
     .with_local_relation_cache(LocalRelationCacheConfig::new(Duration::from_mins(1)));
 ```
 

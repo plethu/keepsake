@@ -7,7 +7,7 @@ mod fulfillment;
 
 use super::{
     KeepsakeRepository, RelationCache, RepositoryResult, TimedExpiryCandidate,
-    audit::record_audit_event_tx, support::expiry_event, validate_limit,
+    support::expiry_event, validate_limit,
 };
 
 impl<C> KeepsakeRepository<C>
@@ -72,7 +72,7 @@ where
         .execute(&mut *tx)
         .await?;
         for candidate in candidates {
-            record_audit_event_tx(
+            self.enqueue_audit_event_tx(
                 &mut tx,
                 &expiry_event(
                     now,

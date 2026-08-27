@@ -169,7 +169,10 @@ async fn relation_share_lock_blocks_disable_until_apply_order_is_resolved() -> T
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
     let disable_pool = single_connection_pool(&database_url).await?;
-    let disable_repo = KeepsakeRepository::new(disable_pool.clone());
+    let disable_repo = KeepsakeRepository::new(
+        disable_pool.clone(),
+        "https://tests.invalid/keepsake/postgres",
+    )?;
     let mut tx = pool.begin().await?;
 
     lock_relation_for_share(&mut tx, relation.id).await?;

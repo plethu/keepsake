@@ -45,7 +45,7 @@ use std::time::Duration;
 
 use keepsake_sqlx::{KeepsakeRepository, LocalRelationCacheConfig};
 
-let repo = KeepsakeRepository::new(pool)
+let repo = KeepsakeRepository::new(pool, "https://accounts.example.test/keepsake")?
     .with_local_relation_cache(LocalRelationCacheConfig::new(Duration::from_mins(1)));
 ```
 

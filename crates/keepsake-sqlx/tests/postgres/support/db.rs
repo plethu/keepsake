@@ -8,11 +8,20 @@ pub async fn single_connection_pool(database_url: &str) -> Result<PgPool, sqlx::
 }
 
 pub async fn reset_database(pool: &PgPool) -> TestResult<()> {
+    let has_dovecote =
+        sqlx::query_scalar::<_, bool>("select to_regclass('public.dovecote_events') is not null")
+            .fetch_one(pool)
+            .await?;
+    if !has_dovecote {
+        sqlx::raw_sql(dovecote_sqlx_postgres::MIGRATIONS[0].sql())
+            .execute(pool)
+            .await?;
+    }
     sqlx::query(
         r"
         truncate table
-            keepsake_audit_context_attributes,
-            keepsake_audit_events,
+            dovecote_deliveries,
+            dovecote_events,
             keepsake_fulfillment_checklist,
             keepsake_fulfillment_counters,
             keepsakes,
@@ -23,41 +32,6 @@ pub async fn reset_database(pool: &PgPool) -> TestResult<()> {
     .execute(pool)
     .await?;
     Ok(())
-}
-
-pub async fn audit_rows_for_keepsake(
-    pool: &PgPool,
-    keepsake_id: Uuid,
-) -> TestResult<Vec<AuditRow>> {
-    Ok(sqlx::query_as::<_, AuditRow>(
-        r"
-        select id, event_type, actor_kind, actor_id, decision, occurred_at
-        from keepsake_audit_events
-        where keepsake_id = $1
-        order by id
-        ",
-    )
-    .bind(keepsake_id)
-    .fetch_all(pool)
-    .await?)
-}
-
-pub async fn audit_attributes(
-    pool: &PgPool,
-    audit_event_id: i64,
-) -> TestResult<BTreeMap<String, String>> {
-    let rows = sqlx::query_as::<_, (String, String)>(
-        r"
-        select key, value
-        from keepsake_audit_context_attributes
-        where audit_event_id = $1
-        order by key
-        ",
-    )
-    .bind(audit_event_id)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows.into_iter().collect())
 }
 
 pub async fn insert_raw_keepsake(

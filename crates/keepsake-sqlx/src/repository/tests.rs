@@ -30,7 +30,7 @@ enum TestError {
 #[tokio::test]
 async fn timestamp_scoped_repository_reuses_explicit_timestamp() -> Result<(), TestError> {
     let pool = PgPoolOptions::new().connect_lazy("postgres://localhost/keepsake")?;
-    let repo = KeepsakeRepository::new(pool);
+    let repo = KeepsakeRepository::new(pool, "https://example.invalid/keepsake")?;
     let at = ts("2026-01-02T00:00:00Z")?;
     let timed_repo = repo.at(at);
 
@@ -41,7 +41,7 @@ async fn timestamp_scoped_repository_reuses_explicit_timestamp() -> Result<(), T
 #[tokio::test]
 async fn active_relations_for_subject_by_keys_short_circuits_empty_keys() -> Result<(), TestError> {
     let pool = PgPoolOptions::new().connect_lazy("postgres://localhost/keepsake")?;
-    let repo = KeepsakeRepository::new(pool);
+    let repo = KeepsakeRepository::new(pool, "https://example.invalid/keepsake")?;
     let subject = SubjectRef::new("account", "acct_123")?;
 
     let active = repo

@@ -34,7 +34,7 @@ keepsake::relation_spec! {
 async fn main() -> Result<(), ExampleError> {
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
-    let repo = KeepsakeRepository::new(pool);
+    let repo = KeepsakeRepository::new(pool, "https://example.invalid/keepsake")?;
     repo.migrate().await?;
     let now = Utc::now();
     let timed_repo = repo.at(now);

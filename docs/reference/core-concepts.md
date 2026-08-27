@@ -19,15 +19,16 @@ methods, audit events, and database rows.
 | `LifecycleState` | Cheap lifecycle discriminant used by records and SQL rows. |
 | `ExpiryPolicy` | Manual, timed, or fulfillment-based lifecycle policy. |
 | `FulfillmentSnapshot` | App-owned progress state evaluated by Keepsake. |
-| `AuditEventType` and `AuditDecision` | Stable audit category and decision payload for append-only audit rows. |
-| `AuditContext` | Deterministic application attributes carried with audit records. |
+| `AuditEventId` | Stable project-owned identity generated before persistence and reused on retries. |
+| `AuditEventType` and `AuditDecision` | Stable audit category and decision payload for a Dovecote event. |
+| `AuditContext` | Deterministic application attributes carried in the typed Dovecote payload. |
 | `ActiveRelationSource` | Async read-side contract for active relation state. |
 
 For a trusted tag, the subject might be `account:acct_123`, the relation key
 might be `tag:trusted`, and the keepsake is the active row connecting them. The
 application decides what "trusted" means. Keepsake stores whether that subject
-currently has that relation and provides audit records for apply and revoke
-commands.
+currently has that relation. Its SQLx adapter emits one Dovecote audit event
+for each lifecycle occurrence; Dovecote provides history and delivery paging.
 
 See the lifecycle model reference for the exact `KeepsakeRecord` shape,
 timestamp rules, and serde behavior.

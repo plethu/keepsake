@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::audit::AuditEventId;
 use crate::error::Result;
 use crate::model::{ActorRef, KeepsakeId, RelationId, RelationSpec, SubjectRef};
 
@@ -66,6 +67,8 @@ pub struct ApplyKeepsake {
     pub metadata: BTreeMap<String, String>,
     /// Audit context.
     pub context: CommandContext,
+    /// Stable audit occurrence identity retained across retries.
+    pub audit_id: AuditEventId,
 }
 
 impl ApplyKeepsake {
@@ -84,6 +87,7 @@ impl ApplyKeepsake {
             at,
             metadata: BTreeMap::new(),
             context,
+            audit_id: AuditEventId::new(),
         }
     }
 
@@ -102,6 +106,13 @@ impl ApplyKeepsake {
         self.metadata.insert(key.into(), value.into());
         self
     }
+
+    /// Replaces the generated audit identity when restoring a retryable command.
+    #[must_use]
+    pub const fn with_audit_id(mut self, audit_id: AuditEventId) -> Self {
+        self.audit_id = audit_id;
+        self
+    }
 }
 
 /// Revokes an active keepsake.
@@ -113,17 +124,27 @@ pub struct RevokeKeepsake {
     pub at: DateTime<Utc>,
     /// Audit context.
     pub context: CommandContext,
+    /// Stable audit occurrence identity retained across retries.
+    pub audit_id: AuditEventId,
 }
 
 impl RevokeKeepsake {
     /// Creates a revoke command.
     #[must_use]
-    pub const fn new(keepsake_id: KeepsakeId, at: DateTime<Utc>, context: CommandContext) -> Self {
+    pub fn new(keepsake_id: KeepsakeId, at: DateTime<Utc>, context: CommandContext) -> Self {
         Self {
             keepsake_id,
             at,
             context,
+            audit_id: AuditEventId::new(),
         }
+    }
+
+    /// Replaces the generated audit identity when restoring a retryable command.
+    #[must_use]
+    pub const fn with_audit_id(mut self, audit_id: AuditEventId) -> Self {
+        self.audit_id = audit_id;
+        self
     }
 }
 
@@ -142,12 +163,14 @@ pub struct RevokeBySubject {
     pub at: DateTime<Utc>,
     /// Audit context.
     pub context: CommandContext,
+    /// Stable audit occurrence identity retained across retries.
+    pub audit_id: AuditEventId,
 }
 
 impl RevokeBySubject {
     /// Creates a revoke-by-subject command.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         subject: SubjectRef,
         relation_id: RelationId,
         at: DateTime<Utc>,
@@ -158,16 +181,20 @@ impl RevokeBySubject {
             relation_id,
             at,
             context,
+            audit_id: AuditEventId::new(),
         }
+    }
+
+    /// Replaces the generated audit identity when restoring a retryable command.
+    #[must_use]
+    pub const fn with_audit_id(mut self, audit_id: AuditEventId) -> Self {
+        self.audit_id = audit_id;
+        self
     }
 
     /// Creates a revoke-by-subject command for a typed relation spec.
     #[must_use]
-    pub const fn for_spec<Spec>(
-        subject: SubjectRef,
-        at: DateTime<Utc>,
-        context: CommandContext,
-    ) -> Self
+    pub fn for_spec<Spec>(subject: SubjectRef, at: DateTime<Utc>, context: CommandContext) -> Self
     where
         Spec: RelationSpec,
     {

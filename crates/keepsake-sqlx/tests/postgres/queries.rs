@@ -11,7 +11,7 @@ async fn active_relation_source_accepts_generic_and_erased_sqlx_repository() -> 
     }
 
     let pool = PgPoolOptions::new().connect_lazy("postgres://keepsake@example.invalid/keepsake")?;
-    let repo = KeepsakeRepository::new(pool);
+    let repo = KeepsakeRepository::new(pool, "https://tests.invalid/keepsake/postgres")?;
 
     assert_generic(&repo);
     let erased: Arc<dyn DynActiveRelationSource<Error = RepositoryError>> = Arc::new(repo);

@@ -14,7 +14,6 @@ use crate::repository::{
     MySqlKeepsakeRepository, RelationCache, RepositoryResult, TimedExpiryCandidate, validate_limit,
 };
 
-use super::audit::record_audit_event_tx;
 #[cfg(feature = "fulfillment-counters")]
 use super::fulfillment::fulfillment_snapshot_tx;
 #[cfg(feature = "fulfillment-counters")]
@@ -115,7 +114,7 @@ where
             }
             after = candidates.last().map(FulfilledExpiryCursor::from);
             for candidate in candidates {
-                expired += expire_fulfilled_candidate_tx(&mut tx, now, candidate).await?;
+                expired += expire_fulfilled_candidate_tx(self, &mut tx, now, candidate).await?;
             }
         }
         tx.commit().await?;
@@ -147,7 +146,7 @@ where
             .await?;
             let rows_affected = result.rows_affected();
             if rows_affected == 1 {
-                record_audit_event_tx(
+                self.enqueue_audit_event_tx(
                     &mut tx,
                     &expiry_event(
                         now,
@@ -168,11 +167,15 @@ where
 }
 
 #[cfg(feature = "fulfillment-counters")]
-async fn expire_fulfilled_candidate_tx(
+async fn expire_fulfilled_candidate_tx<C>(
+    repository: &MySqlKeepsakeRepository<C>,
     tx: &mut Transaction<'_, MySql>,
     now: DateTime<Utc>,
     candidate: FulfilledExpiryCandidate,
-) -> RepositoryResult<u64> {
+) -> RepositoryResult<u64>
+where
+    C: RelationCache,
+{
     let ExpiryPolicy::WhenFulfilled { policy } = candidate.expiry_policy else {
         return Ok(0);
     };
@@ -202,18 +205,19 @@ async fn expire_fulfilled_candidate_tx(
     .await?;
     let rows_affected = result.rows_affected();
     if rows_affected == 1 {
-        record_audit_event_tx(
-            tx,
-            &expiry_event(
-                now,
-                ExpiryCause::Fulfilled,
-                candidate.keepsake_id,
-                candidate.relation_id,
-                candidate.subject_kind,
-                candidate.subject_id,
-            )?,
-        )
-        .await?;
+        repository
+            .enqueue_audit_event_tx(
+                tx,
+                &expiry_event(
+                    now,
+                    ExpiryCause::Fulfilled,
+                    candidate.keepsake_id,
+                    candidate.relation_id,
+                    candidate.subject_kind,
+                    candidate.subject_id,
+                )?,
+            )
+            .await?;
     }
 
     Ok(rows_affected)

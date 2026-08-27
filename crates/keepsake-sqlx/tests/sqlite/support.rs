@@ -5,7 +5,7 @@ use keepsake_sqlx::{RepositoryError, SqliteKeepsakeRepository};
 use sqlx::sqlite::SqlitePoolOptions;
 use uuid::Uuid;
 
-pub use backend_cases::{BackendHarness, TestResult, upsert_relation};
+pub use backend_cases::{BackendHarness, TestResult, ts, upsert_relation};
 
 pub struct SqliteHarness;
 
@@ -21,8 +21,12 @@ impl BackendHarness for SqliteHarness {
             .max_connections(1)
             .connect("sqlite::memory:")
             .await?;
-        let repo = SqliteKeepsakeRepository::new(pool.clone());
+        let repo =
+            SqliteKeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/sqlite")?;
         repo.migrate().await?;
+        sqlx::raw_sql(dovecote_sqlx_sqlite::MIGRATIONS[0].sql())
+            .execute(&pool)
+            .await?;
         Ok((repo, pool))
     }
 

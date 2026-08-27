@@ -108,7 +108,7 @@ async fn typed_relation_specs_reject_existing_key_with_different_id() -> TestRes
 async fn relation_cache_serves_reads_and_invalidates_local_writes() -> TestResult<()> {
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
-    let repo = KeepsakeRepository::new(pool.clone())
+    let repo = KeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/postgres")?
         .with_local_relation_cache(LocalRelationCacheConfig::new(Duration::from_mins(1)));
     repo.migrate().await?;
     reset_database(&pool).await?;
@@ -210,7 +210,8 @@ async fn relation_lookup_hits_cache_after_first_database_read() -> TestResult<()
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
     let cache = SpyRelationCache::default();
-    let repo = KeepsakeRepository::new(pool.clone()).with_relation_cache(cache.clone());
+    let repo = KeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/postgres")?
+        .with_relation_cache(cache.clone());
     repo.migrate().await?;
     reset_database(&pool).await?;
 

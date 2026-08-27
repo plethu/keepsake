@@ -2,14 +2,14 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use keepsake::{
-    AuditEvent, ExpiryPolicy, Keepsake, KeepsakeRecord, RelationDefinition, RelationKey, SubjectRef,
+    ExpiryPolicy, Keepsake, KeepsakeRecord, RelationDefinition, RelationKey, SubjectRef,
 };
 use sqlx::Row;
 
 #[cfg(feature = "fulfillment-counters")]
 use crate::repository::FulfilledExpiryCandidate;
 use crate::repository::support::{parse_state, parse_uuid};
-use crate::repository::{AuditOutboxRecord, RepositoryResult, TimedExpiryCandidate};
+use crate::repository::{RepositoryResult, TimedExpiryCandidate};
 pub(super) fn relation_from_row(
     row: &sqlx::sqlite::SqliteRow,
 ) -> RepositoryResult<RelationDefinition> {
@@ -83,31 +83,6 @@ pub(super) fn fulfilled_expiry_candidate_from_row(
         subject_kind: row.try_get("subject_kind")?,
         subject_id: row.try_get("subject_id")?,
         expiry_policy: serde_json::from_str(row.try_get("expiry_policy")?)?,
-    })
-}
-
-pub(super) fn outbox_record_from_sqlite_row(
-    row: &sqlx::sqlite::SqliteRow,
-) -> RepositoryResult<AuditOutboxRecord> {
-    let payload = serde_json::from_str::<AuditEvent>(row.try_get("payload")?)?;
-    let claimed_until = row
-        .try_get::<Option<String>, _>("claimed_until")?
-        .as_deref()
-        .map(parse_timestamp)
-        .transpose()?;
-    let delivered_at = row
-        .try_get::<Option<String>, _>("delivered_at")?
-        .as_deref()
-        .map(parse_timestamp)
-        .transpose()?;
-    Ok(AuditOutboxRecord {
-        id: row.try_get("id")?,
-        audit_event_id: row.try_get("audit_event_id")?,
-        event_type: row.try_get("event_type")?,
-        payload,
-        claimed_by: row.try_get("claimed_by")?,
-        claimed_until,
-        delivered_at,
     })
 }
 

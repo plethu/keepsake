@@ -2,14 +2,14 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use keepsake::{
-    AuditEvent, ExpiryPolicy, Keepsake, KeepsakeRecord, RelationDefinition, RelationKey, SubjectRef,
+    ExpiryPolicy, Keepsake, KeepsakeRecord, RelationDefinition, RelationKey, SubjectRef,
 };
 use sqlx::Row;
 
 #[cfg(feature = "fulfillment-counters")]
 use crate::repository::FulfilledExpiryCandidate;
 use crate::repository::support::{parse_state, parse_uuid};
-use crate::repository::{AuditOutboxRecord, RepositoryResult, TimedExpiryCandidate};
+use crate::repository::{RepositoryResult, TimedExpiryCandidate};
 pub(super) fn relation_from_row(
     row: &sqlx::mysql::MySqlRow,
 ) -> RepositoryResult<RelationDefinition> {
@@ -23,21 +23,6 @@ pub(super) fn relation_from_row(
         row.try_get("enabled")?,
         expiry,
     )?)
-}
-
-pub(super) fn outbox_record_from_mysql_row(
-    row: &sqlx::mysql::MySqlRow,
-) -> RepositoryResult<AuditOutboxRecord> {
-    let payload = serde_json::from_value::<AuditEvent>(row.try_get("payload")?)?;
-    Ok(AuditOutboxRecord {
-        id: row.try_get("id")?,
-        audit_event_id: row.try_get("audit_event_id")?,
-        event_type: row.try_get("event_type")?,
-        payload,
-        claimed_by: row.try_get("claimed_by")?,
-        claimed_until: optional_utc_timestamp(row.try_get("claimed_until")?),
-        delivered_at: optional_utc_timestamp(row.try_get("delivered_at")?),
-    })
 }
 
 pub(super) fn keepsake_from_row(row: &sqlx::mysql::MySqlRow) -> RepositoryResult<Keepsake> {

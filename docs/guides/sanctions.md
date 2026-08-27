@@ -49,5 +49,5 @@ Run a worker that calls `due_timed_expiry` and `expire_due_timed` in small
 batches. Batch order is stable: due time, relation id, subject id, keepsake id.
 
 Use application code for authorization, moderator tools, appeal workflows, and
-display text. Keepsake records current sanction membership and provides SQL
-audit rows for apply and revoke commands.
+display text. Keepsake records current sanction membership and emits typed
+Dovecote audit events for apply and revoke commands.

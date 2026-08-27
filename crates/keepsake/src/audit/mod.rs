@@ -6,6 +6,7 @@ use std::error::Error;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::evaluation::DecisionKind;
 use crate::model::{ActorRef, ExpiryCause, KeepsakeId, RelationId, SubjectRef};
@@ -19,6 +20,12 @@ pub use memory::{InMemoryAuditError, InMemoryAuditSink};
 /// Durable audit event.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditEvent {
+    /// Stable identity of this audit occurrence.
+    ///
+    /// The identity is generated before persistence and must be reused when a
+    /// caller retries the same logical operation. It is distinct from any
+    /// database row or delivery cursor.
+    pub id: AuditEventId,
     /// Event category written to append-only audit storage.
     pub event_type: AuditEventType,
     /// Timestamp when the audited change occurred.
@@ -35,6 +42,50 @@ pub struct AuditEvent {
     pub decision: AuditDecision,
     /// Application audit context carried alongside the durable event.
     pub context: AuditContext,
+}
+
+/// Stable, project-owned identity for one audit occurrence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct AuditEventId(Uuid);
+
+impl AuditEventId {
+    /// Generates a time-sortable audit identity before persistence.
+    #[must_use]
+    pub fn new() -> Self {
+        Self(Uuid::now_v7())
+    }
+
+    /// Wraps an existing UUID, for example one retained by a retrying caller.
+    #[must_use]
+    pub const fn from_uuid(value: Uuid) -> Self {
+        Self(value)
+    }
+
+    /// Returns the UUID representation.
+    #[must_use]
+    pub const fn as_uuid(self) -> Uuid {
+        self.0
+    }
+
+    /// Derives an idempotent identity for a deterministic worker transition.
+    #[must_use]
+    pub fn deterministic(namespace: &[u8]) -> Self {
+        // A small fixed hash keeps this core crate independent of a hashing
+        // dependency while making worker retries stable before persistence.
+        let mut high = 0xcbf2_9ce4_8422_2325_u64;
+        let mut low = 0x8422_2325_cbf2_9ce4_u64;
+        for byte in namespace {
+            high = (high ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3);
+            low = (low ^ u64::from(byte.rotate_left(1))).wrapping_mul(0x0100_0000_01b3);
+        }
+        Self(Uuid::from_u128((u128::from(high) << 64) | u128::from(low)))
+    }
+}
+
+impl Default for AuditEventId {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Append-only audit event category.

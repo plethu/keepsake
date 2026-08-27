@@ -15,8 +15,10 @@ Several services may need the same data:
 
 Keepsake models these operations as one relation lifecycle. The core crate
 provides the types, commands, expiry policies, evaluator, audit traits, and
-errors. The SQLx adapter stores state in Postgres, SQLite, or MySQL and provides
-query helpers for request paths and workers.
+errors. The SQLx adapter stores relation state in Postgres, SQLite, or MySQL
+and provides query helpers for request paths and workers. In 2.0, Dovecote
+stores immutable audit events and delivery state; Keepsake does not maintain a
+second SQL audit shape.
 
 ## Core Model
 
@@ -34,12 +36,13 @@ workflows. Keepsake stores whether "this subject has this relation".
 
 Pass lifecycle inputs explicitly. Callers provide `now`, relation definitions,
 current state, and any fulfillment snapshot. Retries, expiry workers, tests,
-and audit records all use the same values.
+and the typed audit event all use the same values. Dovecote records the event's
+occurrence separately from its enqueue and delivery times.
 
-## When To Use It
+## Boundaries
 
-Use Keepsake when relation state needs retry-safe writes, queryable active
-state, and deterministic expiry or revoke behavior. Good fits include tags,
+Keepsake is for relation state that needs retry-safe writes, queryable active
+state, and deterministic expiry or revoke behavior. Examples include tags,
 sanctions, entitlements, holds, risk flags, feature gates, and similar
 workflows.
 

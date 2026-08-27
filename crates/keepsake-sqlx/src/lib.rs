@@ -4,16 +4,22 @@
 //! repository. API reference: <https://docs.rs/keepsake-sqlx>.
 //!
 //! This crate provides Postgres, `SQLite`, and `MySQL` repositories for durable
-//! keepsake lifecycle state, relation reads, expiry workers, audit history, and
-//! audit outbox export.
+//! keepsake lifecycle state, relation reads, and expiry workers.
 //!
-//! SQL audit writes performed by repository commands are transactional:
-//! `apply`, `revoke`, expiry helpers, and `append_audit_event` write the audit
-//! event and the corresponding outbox row in the same database transaction.
-//! External systems such as Kafka, Restate, S3, or warehouse loaders should
-//! consume the database outbox through `audit_outbox`,
-//! `claim_audit_outbox`, `ack_audit_outbox`, and `release_audit_outbox`; broker
-//! and storage clients intentionally stay outside this crate.
+//! Keepsake 2.0 stores each lifecycle audit occurrence as one validated
+//! Dovecote event in the same caller transaction as the domain mutation. The
+//! repository owns relation state; Dovecote owns the immutable event and
+//! delivery records. Publication workers and transport clients stay outside
+//! both crates. Consumers should use Dovecote's live or snapshot paging and
+//! deduplicate at the `CloudEvents` `(source, id)` boundary.
+//!
+//! The constructor requires an application-owned absolute `CloudEvents` source.
+//! Install the matching Keepsake clean baseline and Dovecote schema, then call
+//! [`SqlxKeepsakeRepository::check_schema`] before serving requests. The
+//! explicit [`SqlxKeepsakeRepository::upgrade_migrate`] path is only for
+//! installations carrying the historical 1.x audit tables. Call
+//! `activate_upgrade` only after complete-history reconciliation; until then
+//! the 2.0 schema check remains blocked. Legacy tables stay inert for rollback.
 
 mod repository;
 
@@ -30,8 +36,8 @@ pub mod prelude {
 }
 
 pub use repository::{
-    ActiveRelation, AppliedKeepsake, AuditCursor, AuditEventRecord, AuditOutboxCursor,
-    AuditOutboxRecord, FulfilledExpiryCandidate, KeepsakeSqlxBackend, MembershipCursor,
+    ActiveRelation, AppliedKeepsake, DovecoteAuditConfig, DovecoteEnqueueError,
+    DovecoteSchemaError, FulfilledExpiryCandidate, KeepsakeSqlxBackend, MembershipCursor,
     NoopRelationCache, RelationCache, RepositoryError, RepositoryResult, SqlxKeepsakeRepository,
     TimedExpiryCandidate, TimedSqlxKeepsakeRepository,
 };

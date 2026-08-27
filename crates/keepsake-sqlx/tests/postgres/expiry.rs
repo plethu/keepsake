@@ -85,7 +85,7 @@ async fn disabled_relation_is_excluded_from_timed_expiry() -> TestResult<()> {
 async fn lifecycle_check_constraints_reject_invalid_rows() -> TestResult<()> {
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
-    let repo = KeepsakeRepository::new(pool.clone());
+    let repo = KeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/postgres")?;
     repo.migrate().await?;
     reset_database(&pool).await?;
 
@@ -234,7 +234,10 @@ async fn relation_share_lock_blocks_disable_until_expiry_order_is_resolved() -> 
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
     let disable_pool = single_connection_pool(&database_url).await?;
-    let disable_repo = KeepsakeRepository::new(disable_pool.clone());
+    let disable_repo = KeepsakeRepository::new(
+        disable_pool.clone(),
+        "https://tests.invalid/keepsake/postgres",
+    )?;
     let mut tx = pool.begin().await?;
 
     lock_due_keepsake_and_relation_for_expiry(&mut tx, relation.id).await?;
@@ -643,15 +646,5 @@ async fn revoke_by_subject_revokes_active_keepsake() -> TestResult<()> {
         .await?;
     assert_eq!(again, None);
 
-    let events = repo
-        .audit_events_for_keepsake(applied.keepsake.id(), None, 10)
-        .await?;
-    assert_eq!(
-        events
-            .iter()
-            .map(|record| record.event.event_type)
-            .collect::<Vec<_>>(),
-        vec![AuditEventType::Apply, AuditEventType::Revoke]
-    );
     Ok(())
 }

@@ -5,8 +5,9 @@ use keepsake::{
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
-use super::audit::record_audit_event_tx;
-use super::support::{apply_event, revoke_by_subject_event, revoke_event};
+use super::support::{
+    apply_event, dovecote_event, replay_event, revoke_by_subject_event, revoke_event,
+};
 use super::{
     AppliedKeepsake, AppliedKeepsakeRow, AppliedKeepsakeWriteRow, KeepsakeRepository,
     RelationCache, RelationRow, RepositoryError, RepositoryResult,
@@ -73,8 +74,11 @@ where
         }
 
         let (keepsake, duplicate_prevented) = applied.try_into_parts()?;
-        let event = apply_event(command, &keepsake, duplicate_prevented);
-        record_audit_event_tx(&mut tx, &event).await?;
+        let event = replay_event(
+            existing_audit_event_tx(&mut tx, &self.audit, command.audit_id).await?,
+            apply_event(command, &keepsake, duplicate_prevented),
+        );
+        self.enqueue_audit_event_tx(&mut tx, &event).await?;
         tx.commit().await?;
         Ok(AppliedKeepsake {
             keepsake,
@@ -90,7 +94,7 @@ where
         let revoked = revoke_tx(&mut tx, command.keepsake_id, command.at).await?;
         if let Some(keepsake) = &revoked {
             let event = revoke_event(command, keepsake);
-            record_audit_event_tx(&mut tx, &event).await?;
+            self.enqueue_audit_event_tx(&mut tx, &event).await?;
         }
         tx.commit().await?;
         Ok(revoked.is_some())
@@ -114,10 +118,46 @@ where
         let revoked_id = revoked.as_ref().map(Keepsake::id);
         if let Some(keepsake) = &revoked {
             let event = revoke_by_subject_event(command, keepsake);
-            record_audit_event_tx(&mut tx, &event).await?;
+            self.enqueue_audit_event_tx(&mut tx, &event).await?;
         }
         tx.commit().await?;
         Ok(revoked_id)
+    }
+}
+
+async fn existing_audit_event_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    config: &super::support::DovecoteAuditConfig,
+    audit_id: keepsake::AuditEventId,
+) -> RepositoryResult<Option<keepsake::AuditEvent>> {
+    let event_id = format!("keepsake-audit-{}", audit_id.as_uuid());
+    let bytes = sqlx::query_scalar::<_, Option<Vec<u8>>>(
+        "select data from dovecote_events where source = $1 and event_id = $2",
+    )
+    .bind(config.source())
+    .bind(event_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    bytes
+        .flatten()
+        .map(|data| serde_json::from_slice(&data).map_err(RepositoryError::from))
+        .transpose()
+}
+
+impl<C> KeepsakeRepository<C>
+where
+    C: RelationCache,
+{
+    pub(super) async fn enqueue_audit_event_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        event: &keepsake::AuditEvent,
+    ) -> RepositoryResult<()> {
+        let event = dovecote_event(&self.audit, event)?;
+        dovecote_sqlx_postgres::enqueue(tx, event)
+            .await
+            .map(|_| ())
+            .map_err(|error| RepositoryError::DovecoteEnqueue(error.into()))
     }
 }
 

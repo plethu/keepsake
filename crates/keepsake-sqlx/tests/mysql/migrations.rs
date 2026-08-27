@@ -24,7 +24,7 @@ async fn mysql_migration_rejects_wrong_backend_marker() -> TestResult<()> {
     .execute(&pool)
     .await?;
 
-    let repo = MySqlKeepsakeRepository::new(pool);
+    let repo = MySqlKeepsakeRepository::new(pool, "https://tests.invalid/keepsake/mysql")?;
     let result = repo.migrate().await;
 
     assert!(matches!(

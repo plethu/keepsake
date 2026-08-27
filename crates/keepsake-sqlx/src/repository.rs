@@ -7,8 +7,6 @@ use uuid::Uuid;
 #[cfg(feature = "migrations")]
 use sqlx::migrate::Migrator;
 
-#[cfg(feature = "postgres")]
-mod audit;
 mod backend;
 mod cache;
 #[cfg(feature = "postgres")]
@@ -25,11 +23,17 @@ mod relation;
 mod rows;
 #[cfg(feature = "sqlite")]
 mod sqlite;
-#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
+#[cfg_attr(
+    not(any(feature = "postgres", feature = "mysql", feature = "sqlite")),
+    allow(dead_code)
+)]
 mod support;
 mod timed;
 mod types;
+#[cfg(feature = "migrations")]
+mod upgrade;
 
+use backend::BackendMarker;
 pub use backend::KeepsakeSqlxBackend;
 #[cfg(feature = "mysql")]
 pub use backend::MySqlBackend;
@@ -42,6 +46,9 @@ pub use cache::{LocalRelationCache, LocalRelationCacheConfig};
 pub use cache::{NoopRelationCache, RelationCache};
 pub use keepsake::ActiveRelation;
 #[cfg(feature = "postgres")]
+use rows::{ActiveRelationRow, AppliedKeepsakeRow, AppliedKeepsakeWriteRow, RelationRow};
+pub use support::DovecoteAuditConfig;
+#[cfg(feature = "postgres")]
 pub use timed::TimedKeepsakeRepository;
 #[cfg(feature = "mysql")]
 pub use timed::TimedMySqlKeepsakeRepository;
@@ -49,30 +56,68 @@ pub use timed::TimedMySqlKeepsakeRepository;
 pub use timed::TimedSqliteKeepsakeRepository;
 pub use timed::TimedSqlxKeepsakeRepository;
 pub use types::{
-    AppliedKeepsake, AuditCursor, AuditEventRecord, AuditOutboxCursor, AuditOutboxRecord,
-    FulfilledExpiryCandidate, MembershipCursor, TimedExpiryCandidate,
-};
-
-use backend::BackendMarker;
-#[cfg(feature = "postgres")]
-use rows::{
-    ActiveRelationRow, AppliedKeepsakeRow, AppliedKeepsakeWriteRow, AuditEventRow, RelationRow,
+    AppliedKeepsake, FulfilledExpiryCandidate, MembershipCursor, TimedExpiryCandidate,
 };
 
 #[cfg(all(feature = "migrations", feature = "postgres"))]
 static POSTGRES_MIGRATOR: Migrator = sqlx::migrate!("./migrations/postgres");
 
+#[cfg(all(feature = "migrations", feature = "postgres"))]
+static POSTGRES_V2_MIGRATOR: Migrator = sqlx::migrate!("./migrations/v2/postgres");
+
 #[cfg(all(feature = "migrations", feature = "sqlite"))]
 static SQLITE_MIGRATOR: Migrator = sqlx::migrate!("./migrations/sqlite");
 
+#[cfg(all(feature = "migrations", feature = "sqlite"))]
+static SQLITE_V2_MIGRATOR: Migrator = sqlx::migrate!("./migrations/v2/sqlite");
+
 #[cfg(all(feature = "migrations", feature = "mysql"))]
 static MYSQL_MIGRATOR: Migrator = sqlx::migrate!("./migrations/mysql");
+
+#[cfg(all(feature = "migrations", feature = "mysql"))]
+static MYSQL_V2_MIGRATOR: Migrator = sqlx::migrate!("./migrations/v2/mysql");
 
 #[allow(dead_code)]
 const MAX_BATCH_LIMIT: i64 = 10_000;
 
 /// Result alias for SQL repository operations.
 pub type RepositoryResult<T> = core::result::Result<T, RepositoryError>;
+
+/// Backend-preserving Dovecote enqueue failures.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum DovecoteEnqueueError {
+    /// `PostgreSQL` adapter failure.
+    #[cfg(feature = "postgres")]
+    #[error("PostgreSQL Dovecote enqueue: {0}")]
+    Postgres(#[from] dovecote_sqlx_postgres::EnqueueError),
+    /// `SQLite` adapter failure.
+    #[cfg(feature = "sqlite")]
+    #[error("SQLite Dovecote enqueue: {0}")]
+    Sqlite(#[from] dovecote_sqlx_sqlite::EnqueueError),
+    /// MySQL/MariaDB adapter failure.
+    #[cfg(feature = "mysql")]
+    #[error("MySQL Dovecote enqueue: {0}")]
+    Mysql(#[from] dovecote_sqlx_mysql::EnqueueError),
+}
+
+/// Backend-preserving Dovecote schema-check failures.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum DovecoteSchemaError {
+    /// `PostgreSQL` adapter failure.
+    #[cfg(feature = "postgres")]
+    #[error("PostgreSQL Dovecote schema: {0}")]
+    Postgres(#[from] dovecote_sqlx_postgres::SchemaError),
+    /// `SQLite` adapter failure.
+    #[cfg(feature = "sqlite")]
+    #[error("SQLite Dovecote schema: {0}")]
+    Sqlite(#[from] dovecote_sqlx_sqlite::SchemaError),
+    /// MySQL/MariaDB adapter failure.
+    #[cfg(feature = "mysql")]
+    #[error("MySQL Dovecote schema: {0}")]
+    Mysql(#[from] dovecote_sqlx_mysql::SchemaError),
+}
 
 /// SQL repository errors.
 #[non_exhaustive]
@@ -95,6 +140,25 @@ pub enum RepositoryError {
     #[error(transparent)]
     Keepsake(#[from] keepsake::KeepsakeError),
 
+    /// Dovecote rejected an event before SQL mutation.
+    #[error(transparent)]
+    DovecoteValidation(#[from] dovecote::ValidationError),
+
+    /// Dovecote enqueue failed during a lifecycle operation.
+    #[error(transparent)]
+    DovecoteEnqueue(#[from] DovecoteEnqueueError),
+
+    /// Dovecote schema verification failed.
+    #[error(transparent)]
+    DovecoteSchema(#[from] DovecoteSchemaError),
+
+    /// An occurrence timestamp cannot be represented by Dovecote.
+    #[error("audit timestamp is outside Dovecote's supported range: {detail}")]
+    TimestampOutOfRange {
+        /// Conversion detail.
+        detail: String,
+    },
+
     /// Existing schema metadata belongs to a different backend.
     #[error("schema backend mismatch: expected {expected}, found {actual}")]
     BackendMismatch {
@@ -102,6 +166,20 @@ pub enum RepositoryError {
         expected: &'static str,
         /// Backend found in schema metadata.
         actual: String,
+    },
+
+    /// Importer evidence did not describe a complete, zero-delta scan.
+    #[error("invalid upgrade evidence field: {field}")]
+    InvalidUpgradeEvidence {
+        /// Evidence field that failed its contract.
+        field: &'static str,
+    },
+
+    /// A second complete-history scan disagreed with recorded evidence.
+    #[error("upgrade evidence conflict: {detail}")]
+    UpgradeEvidenceConflict {
+        /// Conflict detail.
+        detail: String,
     },
 
     /// A command tried to mutate a disabled relation.
@@ -167,6 +245,7 @@ where
     #[allow(dead_code)]
     relation_cache: C,
     backend: BackendMarker<B>,
+    audit: support::DovecoteAuditConfig,
 }
 
 impl<B, C> Clone for SqlxKeepsakeRepository<B, C>
@@ -179,6 +258,7 @@ where
             pool: self.pool.clone(),
             relation_cache: self.relation_cache.clone(),
             backend: self.backend,
+            audit: self.audit.clone(),
         }
     }
 }
@@ -202,40 +282,40 @@ pub type MySqlKeepsakeRepository<C = NoopRelationCache> = SqlxKeepsakeRepository
 
 #[cfg(feature = "postgres")]
 impl PostgresKeepsakeRepository<NoopRelationCache> {
-    /// Creates a repository from a Postgres pool.
-    #[must_use]
-    pub const fn new(pool: sqlx::PgPool) -> Self {
-        Self {
+    /// Creates a repository from a Postgres pool and application-owned source.
+    pub fn new(pool: sqlx::PgPool, source: impl Into<String>) -> RepositoryResult<Self> {
+        Ok(Self {
             pool,
             relation_cache: NoopRelationCache,
             backend: BackendMarker::new(),
-        }
+            audit: support::DovecoteAuditConfig::new(source)?,
+        })
     }
 }
 
 #[cfg(feature = "sqlite")]
 impl SqliteKeepsakeRepository<NoopRelationCache> {
-    /// Creates a repository from a `SQLite` pool.
-    #[must_use]
-    pub const fn new(pool: sqlx::SqlitePool) -> Self {
-        Self {
+    /// Creates a repository from a `SQLite` pool and application-owned source.
+    pub fn new(pool: sqlx::SqlitePool, source: impl Into<String>) -> RepositoryResult<Self> {
+        Ok(Self {
             pool,
             relation_cache: NoopRelationCache,
             backend: BackendMarker::new(),
-        }
+            audit: support::DovecoteAuditConfig::new(source)?,
+        })
     }
 }
 
 #[cfg(feature = "mysql")]
 impl MySqlKeepsakeRepository<NoopRelationCache> {
-    /// Creates a repository from a `MySQL` pool.
-    #[must_use]
-    pub const fn new(pool: sqlx::MySqlPool) -> Self {
-        Self {
+    /// Creates a repository from a `MySQL` pool and application-owned source.
+    pub fn new(pool: sqlx::MySqlPool, source: impl Into<String>) -> RepositoryResult<Self> {
+        Ok(Self {
             pool,
             relation_cache: NoopRelationCache,
             backend: BackendMarker::new(),
-        }
+            audit: support::DovecoteAuditConfig::new(source)?,
+        })
     }
 }
 
@@ -265,6 +345,7 @@ where
             pool: self.pool,
             relation_cache: cache,
             backend: self.backend,
+            audit: self.audit,
         }
     }
 
@@ -283,41 +364,152 @@ where
     }
 }
 
-#[cfg(all(feature = "postgres", feature = "migrations"))]
+#[cfg(feature = "postgres")]
 impl<C> PostgresKeepsakeRepository<C>
 where
     C: RelationCache,
 {
+    /// Verifies the Keepsake 2.0 domain schema and the selected Dovecote schema.
+    pub async fn check_schema(&self) -> RepositoryResult<()> {
+        schema::postgres_runtime_schema_check(&self.pool).await?;
+        dovecote_sqlx_postgres::check_schema(&self.pool)
+            .await
+            .map_err(|error| RepositoryError::DovecoteSchema(error.into()))
+    }
+
     /// Runs embedded migrations.
+    #[cfg(feature = "migrations")]
     pub async fn migrate(&self) -> RepositoryResult<()> {
-        schema::postgres_schema_preflight(&self.pool).await?;
+        schema::postgres_clean_schema_preflight(&self.pool).await?;
+        POSTGRES_V2_MIGRATOR.run(&self.pool).await?;
+        Ok(())
+    }
+
+    /// Runs the explicit 1.x upgrade track, preserving legacy audit tables as
+    /// read-only migration material. New 2.0 operations never use this track.
+    #[cfg(feature = "migrations")]
+    pub async fn upgrade_migrate(&self) -> RepositoryResult<()> {
+        schema::postgres_upgrade_schema_preflight(&self.pool).await?;
         POSTGRES_MIGRATOR.run(&self.pool).await?;
+        Ok(())
+    }
+
+    /// Activates the 2.0 runtime after complete-history import and reconciliation.
+    #[cfg(feature = "migrations")]
+    pub async fn activate_upgrade(&self) -> RepositoryResult<()> {
+        schema::postgres_upgrade_schema_preflight(&self.pool).await?;
+        dovecote_sqlx_postgres::check_schema(&self.pool)
+            .await
+            .map_err(|error| RepositoryError::DovecoteSchema(error.into()))?;
+        schema::postgres_upgrade_schema_check(&self.pool).await?;
+        let evidence = sqlx::query_as::<_, upgrade::UpgradeEvidenceRow>("select evidence_schema_version::bigint as evidence_schema_version, provenance, source, source_schema, stream, audit_high_water, outbox_high_water, missing_count, extra_count, state_delta_count, digest_delta_count, active_claim_count, codec_version, complete from keepsake_upgrade_evidence where evidence_id = 1")
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or_else(|| RepositoryError::BackendMismatch { expected: "complete zero-delta upgrade evidence", actual: "no reconciliation evidence".to_owned() })?;
+        upgrade::validate(&evidence, self.audit.source())?;
+        sqlx::query("insert into keepsake_schema_metadata (key, value) values ('api_track', '2') on conflict (key) do update set value = excluded.value")
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 }
 
-#[cfg(all(feature = "sqlite", feature = "migrations"))]
+#[cfg(feature = "sqlite")]
 impl<C> SqliteKeepsakeRepository<C>
 where
     C: RelationCache,
 {
+    /// Verifies the Keepsake 2.0 domain schema and the selected Dovecote schema.
+    pub async fn check_schema(&self) -> RepositoryResult<()> {
+        schema::sqlite_runtime_schema_check(&self.pool).await?;
+        dovecote_sqlx_sqlite::check_schema(&self.pool)
+            .await
+            .map_err(|error| RepositoryError::DovecoteSchema(error.into()))
+    }
+
     /// Runs embedded `SQLite` migrations.
+    #[cfg(feature = "migrations")]
     pub async fn migrate(&self) -> RepositoryResult<()> {
-        schema::sqlite_schema_preflight(&self.pool).await?;
+        schema::sqlite_clean_schema_preflight(&self.pool).await?;
+        SQLITE_V2_MIGRATOR.run(&self.pool).await?;
+        Ok(())
+    }
+
+    /// Runs the explicit 1.x upgrade track and leaves legacy audit tables
+    /// available for reconciliation and rollback.
+    #[cfg(feature = "migrations")]
+    pub async fn upgrade_migrate(&self) -> RepositoryResult<()> {
+        schema::sqlite_upgrade_schema_preflight(&self.pool).await?;
         SQLITE_MIGRATOR.run(&self.pool).await?;
+        Ok(())
+    }
+
+    /// Activates the 2.0 runtime after complete-history import and reconciliation.
+    #[cfg(feature = "migrations")]
+    pub async fn activate_upgrade(&self) -> RepositoryResult<()> {
+        schema::sqlite_upgrade_schema_preflight(&self.pool).await?;
+        dovecote_sqlx_sqlite::check_schema(&self.pool)
+            .await
+            .map_err(|error| RepositoryError::DovecoteSchema(error.into()))?;
+        schema::sqlite_upgrade_schema_check(&self.pool).await?;
+        let evidence = sqlx::query_as::<_, upgrade::UpgradeEvidenceRow>("select evidence_schema_version, provenance, source, source_schema, stream, audit_high_water, outbox_high_water, missing_count, extra_count, state_delta_count, digest_delta_count, active_claim_count, codec_version, complete from keepsake_upgrade_evidence where evidence_id = 1")
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or_else(|| RepositoryError::BackendMismatch { expected: "complete zero-delta upgrade evidence", actual: "no reconciliation evidence".to_owned() })?;
+        upgrade::validate(&evidence, self.audit.source())?;
+        sqlx::query("insert into keepsake_schema_metadata (key, value) values ('api_track', '2') on conflict (key) do update set value = excluded.value")
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 }
 
-#[cfg(all(feature = "mysql", feature = "migrations"))]
+#[cfg(feature = "mysql")]
 impl<C> MySqlKeepsakeRepository<C>
 where
     C: RelationCache,
 {
+    /// Verifies the Keepsake 2.0 domain schema and the selected Dovecote schema.
+    pub async fn check_schema(&self) -> RepositoryResult<()> {
+        schema::mysql_runtime_schema_check(&self.pool).await?;
+        dovecote_sqlx_mysql::check_schema(&self.pool)
+            .await
+            .map_err(|error| RepositoryError::DovecoteSchema(error.into()))
+    }
+
     /// Runs embedded `MySQL` migrations.
+    #[cfg(feature = "migrations")]
     pub async fn migrate(&self) -> RepositoryResult<()> {
-        schema::mysql_schema_preflight(&self.pool).await?;
+        schema::mysql_clean_schema_preflight(&self.pool).await?;
+        MYSQL_V2_MIGRATOR.run(&self.pool).await?;
+        Ok(())
+    }
+
+    /// Runs the explicit 1.x upgrade track and leaves legacy audit tables
+    /// available for reconciliation and rollback.
+    #[cfg(feature = "migrations")]
+    pub async fn upgrade_migrate(&self) -> RepositoryResult<()> {
+        schema::mysql_upgrade_schema_preflight(&self.pool).await?;
         MYSQL_MIGRATOR.run(&self.pool).await?;
+        Ok(())
+    }
+
+    /// Activates the 2.0 runtime after complete-history import and reconciliation.
+    #[cfg(feature = "migrations")]
+    pub async fn activate_upgrade(&self) -> RepositoryResult<()> {
+        schema::mysql_upgrade_schema_preflight(&self.pool).await?;
+        dovecote_sqlx_mysql::check_schema(&self.pool)
+            .await
+            .map_err(|error| RepositoryError::DovecoteSchema(error.into()))?;
+        schema::mysql_upgrade_schema_check(&self.pool).await?;
+        let evidence = sqlx::query_as::<_, upgrade::UpgradeEvidenceRow>("select evidence_schema_version, provenance, source, source_schema, stream, audit_high_water, outbox_high_water, missing_count, extra_count, state_delta_count, digest_delta_count, active_claim_count, codec_version, complete from keepsake_upgrade_evidence where evidence_id = 1")
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or_else(|| RepositoryError::BackendMismatch { expected: "complete zero-delta upgrade evidence", actual: "no reconciliation evidence".to_owned() })?;
+        upgrade::validate(&evidence, self.audit.source())?;
+        sqlx::query("insert into keepsake_schema_metadata (`key`, value) values ('api_track', '2') on duplicate key update value = '2'")
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 }
@@ -334,7 +526,6 @@ fn validate_limit(limit: i64) -> RepositoryResult<i64> {
     }
 }
 
-#[cfg(feature = "migrations")]
 mod schema;
 #[cfg(all(test, feature = "postgres"))]
 mod tests;

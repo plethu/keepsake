@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.0.0 - unreleased
+
+- Moved SQL audit persistence and delivery to Dovecote. Keepsake lifecycle
+  mutations enqueue one validated event in the same backend transaction.
+- Added `AuditEventId`, generated before persistence and reusable across
+  retries, and preserved authoritative occurrence timestamps in the event and
+  CloudEvents `time` field.
+- Removed the maintained Keepsake SQL audit tables, normalized context rows,
+  audit history cursors, outbox paging, and claim/ack/release APIs. Typed audit
+  history is read by decoding Dovecote live or snapshot pages.
+- Added explicit clean-install and historical-upgrade migration tracks. The
+  upgrade track retains old audit tables for reconciliation and rollback and
+  never drops them automatically.
+- Constructors now require an application-owned stable absolute audit source.
+
 ## 1.1.0 - 2026-07-12
 
 - Added `evaluate_active`, a non-breaking evaluator entry point that accepts a

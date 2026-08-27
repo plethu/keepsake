@@ -6,12 +6,14 @@ use keepsake::{
 use sqlx::{MySql, Transaction};
 use uuid::Uuid;
 
-use crate::repository::support::{apply_event, expires_at, revoke_by_subject_event, revoke_event};
+use crate::repository::support::{
+    apply_event, expires_at, replay_event, revoke_by_subject_event, revoke_event,
+};
 use crate::repository::{
     AppliedKeepsake, MySqlKeepsakeRepository, RelationCache, RepositoryError, RepositoryResult,
 };
 
-use super::audit::record_audit_event_tx;
+use super::super::support::dovecote_event;
 use super::rows::{keepsake_from_row, naive_timestamp, relation_from_row};
 
 impl<C> MySqlKeepsakeRepository<C>
@@ -29,7 +31,11 @@ where
             active_keepsake_for_subject_relation_tx(&mut tx, &command.subject, command.relation_id)
                 .await?
         {
-            record_audit_event_tx(&mut tx, &apply_event(command, &existing, true)).await?;
+            let event = replay_event(
+                existing_audit_event_tx(&mut tx, &self.audit, command.audit_id).await?,
+                apply_event(command, &existing, true),
+            );
+            self.enqueue_audit_event_tx(&mut tx, &event).await?;
             tx.commit().await?;
             return Ok(AppliedKeepsake {
                 keepsake: existing,
@@ -69,7 +75,8 @@ where
                 relation_id: command.relation_id,
             },
         )?;
-        record_audit_event_tx(&mut tx, &apply_event(command, &keepsake, false)).await?;
+        self.enqueue_audit_event_tx(&mut tx, &apply_event(command, &keepsake, false))
+            .await?;
         tx.commit().await?;
         Ok(AppliedKeepsake {
             keepsake,
@@ -84,7 +91,8 @@ where
         let mut tx = self.pool.begin().await?;
         let revoked = revoke_tx(&mut tx, command.keepsake_id, command.at).await?;
         if let Some(keepsake) = &revoked {
-            record_audit_event_tx(&mut tx, &revoke_event(command, keepsake)).await?;
+            self.enqueue_audit_event_tx(&mut tx, &revoke_event(command, keepsake))
+                .await?;
         }
         tx.commit().await?;
         Ok(revoked.is_some())
@@ -107,10 +115,47 @@ where
                 .await?;
         let revoked_id = revoked.as_ref().map(Keepsake::id);
         if let Some(keepsake) = &revoked {
-            record_audit_event_tx(&mut tx, &revoke_by_subject_event(command, keepsake)).await?;
+            self.enqueue_audit_event_tx(&mut tx, &revoke_by_subject_event(command, keepsake))
+                .await?;
         }
         tx.commit().await?;
         Ok(revoked_id)
+    }
+}
+
+async fn existing_audit_event_tx(
+    tx: &mut Transaction<'_, MySql>,
+    config: &super::super::support::DovecoteAuditConfig,
+    audit_id: keepsake::AuditEventId,
+) -> RepositoryResult<Option<keepsake::AuditEvent>> {
+    let event_id = format!("keepsake-audit-{}", audit_id.as_uuid());
+    let bytes = sqlx::query_scalar::<_, Option<Vec<u8>>>(
+        "select data from dovecote_events where source = ? and event_id = ?",
+    )
+    .bind(config.source())
+    .bind(event_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    bytes
+        .flatten()
+        .map(|data| serde_json::from_slice(&data).map_err(RepositoryError::from))
+        .transpose()
+}
+
+impl<C> MySqlKeepsakeRepository<C>
+where
+    C: RelationCache,
+{
+    pub(super) async fn enqueue_audit_event_tx(
+        &self,
+        tx: &mut Transaction<'_, MySql>,
+        audit: &keepsake::AuditEvent,
+    ) -> RepositoryResult<()> {
+        let event = dovecote_event(&self.audit, audit)?;
+        dovecote_sqlx_mysql::enqueue(tx, event)
+            .await
+            .map(|_| ())
+            .map_err(|error| RepositoryError::DovecoteEnqueue(error.into()))
     }
 }
 

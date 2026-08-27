@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use super::super::{
     FulfilledExpiryCandidate, KeepsakeRepository, RelationCache, RepositoryResult,
-    audit::record_audit_event_tx, support::expiry_event, validate_limit,
+    support::expiry_event, validate_limit,
 };
 
 impl<C> KeepsakeRepository<C>
@@ -132,7 +132,7 @@ where
         .execute(&mut *tx)
         .await?;
         for candidate in satisfied_candidates {
-            record_audit_event_tx(
+            self.enqueue_audit_event_tx(
                 &mut tx,
                 &expiry_event(
                     now,
