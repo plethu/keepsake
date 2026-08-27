@@ -109,5 +109,11 @@ jobs:
           restore-keys: |
             database-gates-
 
+      - name: Allow Dovecote trigger creation on the disposable MySQL service
+        run: >-
+          docker run --rm --network host mysql:8.4 mysql
+          -h127.0.0.1 -P53306 -uroot -pkeepsake-root
+          -e "SET GLOBAL log_bin_trust_function_creators = 1"
+
       - name: Run database gates
         run: mise run test-db

@@ -29,6 +29,12 @@ the exact payload bytes plus `payload_codec`, `payload_sha256`, and explicit
 in the application's migration runner. Do not enable a bridge feature until
 both schemas are present.
 
+Dovecote's MySQL/MariaDB schema creates validation triggers. The migration
+account needs trigger DDL authority; with MySQL binary logging enabled, an
+administrator may also need to enable `log_bin_trust_function_creators` for
+schema installation. Ordinary Keepsake and bridge operations do not require
+that server setting after the schema is installed.
+
 Before activation, stop and fence every legacy writer and publisher. Hold the
 legacy audit and outbox tables read-only while the final reconciliation runs
 and through the rollback window. `finalize_upgrade_reconciliation()` cannot
