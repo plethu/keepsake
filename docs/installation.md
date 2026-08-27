@@ -2,21 +2,18 @@
 
 Keepsake 2.0 has two persistence boundaries. Keepsake owns relation and
 entitlement state. [Dovecote](https://github.com/plethu/dovecote) owns
-immutable audit events and their at-least-once deliveries. Dovecote is currently
-used from a local checkout; install both schemas before serving requests.
+immutable audit events and their at-least-once deliveries. Dovecote is published
+on crates.io; install both schemas before serving requests.
 
-For Postgres, use a local Dovecote checkout while its crates are pre-release:
+For Postgres:
 
 ```toml
 [dependencies]
 keepsake = "2"
 keepsake-sqlx = "2"
-dovecote-sqlx-postgres = { path = "../carrier/crates/dovecote-sqlx-postgres" }
+dovecote-sqlx-postgres = "0.1"
 sqlx = { version = "0.9", features = ["postgres", "runtime-tokio", "tls-rustls"] }
 ```
-
-After Dovecote 0.1 is published, replace that path dependency with
-`dovecote-sqlx-postgres = "0.1"`.
 
 The normal setup is deliberately small:
 
@@ -39,18 +36,15 @@ duplicate publication setting in the normal constructor.
 
 ## SQLite
 
-Select SQLite explicitly and use the local `dovecote-sqlx-sqlite` adapter:
+Select SQLite explicitly and use the `dovecote-sqlx-sqlite` adapter:
 
 ```toml
 [dependencies]
 keepsake = "2"
 keepsake-sqlx = { version = "2", default-features = false, features = ["sqlite", "migrations"] }
-dovecote-sqlx-sqlite = { path = "../carrier/crates/dovecote-sqlx-sqlite" }
+dovecote-sqlx-sqlite = "0.1"
 sqlx = { version = "0.9", default-features = false, features = ["sqlite", "runtime-tokio", "tls-rustls"] }
 ```
-
-After Dovecote 0.1 is published, replace that path dependency with
-`dovecote-sqlx-sqlite = "0.1"`.
 
 Construct `SqliteKeepsakeRepository` with a `sqlx::SqlitePool` and an absolute
 source. Lifecycle writes use Dovecote's `BEGIN IMMEDIATE` boundary, so one
@@ -60,18 +54,15 @@ boundary.
 
 ## MySQL
 
-For MySQL, select the matching backend and use the local Dovecote adapter:
+For MySQL, select the matching backend and use the Dovecote adapter:
 
 ```toml
 [dependencies]
 keepsake = "2"
 keepsake-sqlx = { version = "2", default-features = false, features = ["mysql", "migrations"] }
-dovecote-sqlx-mysql = { path = "../carrier/crates/dovecote-sqlx-mysql" }
+dovecote-sqlx-mysql = "0.1"
 sqlx = { version = "0.9", default-features = false, features = ["mysql", "runtime-tokio", "tls-rustls"] }
 ```
-
-After Dovecote 0.1 is published, replace that path dependency with
-`dovecote-sqlx-mysql = "0.1"`.
 
 Construct `MySqlKeepsakeRepository` with a `sqlx::MySqlPool` and an absolute
 source. MySQL lifecycle commands use InnoDB row locks; configure lock-wait

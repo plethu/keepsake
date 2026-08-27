@@ -36,12 +36,13 @@ those relations later.
 
 ```sh
 cargo add keepsake@2 keepsake-sqlx@2
+cargo add dovecote-sqlx-postgres@0.1
 cargo add sqlx --features postgres,runtime-tokio,tls-rustls
 ```
 
-Dovecote and its SQLx adapters are not published yet. Until then, add the
-matching adapter as a local path dependency; the [installation guide](docs/installation.md)
-shows the path and the replacement to use after Dovecote 0.1 is published.
+Dovecote 0.1 and its SQLx adapters are published on crates.io. Add the adapter
+for the backend you use; the [installation guide](docs/installation.md) covers
+SQLite and MySQL as well as Postgres.
 
 Run the embedded migration with a `sqlx::PgPool`:
 

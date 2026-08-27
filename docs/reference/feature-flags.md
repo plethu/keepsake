@@ -79,11 +79,11 @@ or MySQL, disable default features so Postgres is not enabled implicitly:
 ```toml
 [dependencies]
 keepsake-sqlx = { version = "2", default-features = false, features = ["sqlite", "migrations"] }
-dovecote-sqlx-sqlite = { path = "../carrier/crates/dovecote-sqlx-sqlite" }
+dovecote-sqlx-sqlite = "0.1"
 ```
 
-Dovecote is pre-release and is not published yet. Replace the local path with
-`dovecote-sqlx-sqlite = "0.1"` after Dovecote 0.1 is published.
+Dovecote 0.1 is published on crates.io; use the matching adapter for the
+selected backend.
 
 Disable `migrations` when your service vendors the SQL into a separate
 migration framework. Disable `fulfillment-counters` when fulfillment state is

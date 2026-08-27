@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.0.0 - unreleased
+## 2.0.0 - 2026-08-27
 
 - Moved SQL audit persistence and delivery to Dovecote. Keepsake lifecycle
   mutations enqueue one validated event in the same backend transaction.
@@ -14,6 +14,16 @@
   upgrade track retains old audit tables for reconciliation and rollback and
   never drops them automatically.
 - Constructors now require an application-owned stable absolute audit source.
+
+## 1.2.0 - 2026-08-27
+
+- Added backend-specific, opt-in Dovecote migration bridge features.
+- Added forward-only bridge bookkeeping migrations while preserving every
+  historical migration artifact unchanged.
+- Added atomic dual-write commands, persisted source/event identity and exact
+  payload ledgers, and bounded high-water history import/reconciliation.
+- Added bridge publisher identity and acknowledgement APIs with database-time
+  claim fencing, exact replay idempotency, and typed ownership/conflict errors.
 
 ## 1.1.0 - 2026-07-12
 
