@@ -86,6 +86,13 @@ echo "== keepsake-sqlx feature matrix =="
 )
 
 echo
+echo "== SQLite migration compatibility =="
+(
+  cd "$repo_root"
+  "$repo_root/scripts/check-sqlite-migration-compatibility.sh"
+)
+
+echo
 echo "== cargo test =="
 (
   cd "$repo_root"

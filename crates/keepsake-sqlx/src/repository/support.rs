@@ -35,7 +35,7 @@ pub(super) fn parse_state(value: String) -> RepositoryResult<LifecycleState> {
 /// Only the text-store backends keep UUIDs as strings; Postgres decodes the
 /// native `uuid` type directly.
 #[cfg(any(feature = "mysql", feature = "sqlite"))]
-pub(super) fn parse_uuid(value: &str) -> RepositoryResult<Uuid> {
+pub fn parse_uuid(value: &str) -> RepositoryResult<Uuid> {
     Ok(Uuid::parse_str(value).map_err(|error| sqlx::Error::Decode(Box::new(error)))?)
 }
 

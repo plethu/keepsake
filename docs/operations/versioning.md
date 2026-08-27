@@ -15,6 +15,11 @@ onward, semver applies to the public Rust API and to schema expectations in
 Pin `keepsake` and `keepsake-sqlx` to the same release. Apply matching
 migrations before deploying code that depends on new schema.
 
+The 1.2 Dovecote bridge is an additive, opt-in migration feature. Its bridge
+migrations and ledger can be removed only after cutover, reconciliation, and
+the application's rollback window are complete; the legacy audit/outbox
+migrations remain immutable.
+
 ## Upgrade checklist
 
 - Read the changelog for API changes, new migration files, changed indexes, and

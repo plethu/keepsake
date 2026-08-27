@@ -126,8 +126,26 @@ pub async fn mysql_pool() -> TestResult<MySqlPool> {
 }
 
 pub async fn reset_schema(pool: &MySqlPool) -> Result<(), sqlx::Error> {
-    pool.execute("set foreign_key_checks = 0").await?;
+    // Keep the session-scoped foreign-key setting and every DDL statement on
+    // one connection. Bridge and legacy suites may run against the same
+    // disposable database in either order.
+    let mut connection = pool.acquire().await?;
+    (&mut *connection)
+        .execute("set foreign_key_checks = 0")
+        .await?;
     for query in [
+        "drop trigger if exists dovecote_events_row_id_positive_insert",
+        "drop trigger if exists dovecote_events_row_id_positive_update",
+        "drop table if exists dovecote_deliveries",
+        "drop table if exists dovecote_events",
+        "drop table if exists dovecote_schema",
+        "drop table if exists keepsake_upgrade_evidence",
+        // The bridge claim table references the ledger's legacy outbox rows;
+        // clear bridge children first so this legacy-only fixture reset also
+        // works after a bridge suite ran against the same database.
+        "drop table if exists keepsake_dovecote_bridge_claims",
+        "drop table if exists keepsake_dovecote_bridge_ledger",
+        "drop table if exists keepsake_dovecote_bridge_config",
         "drop table if exists keepsake_audit_outbox",
         "drop table if exists keepsake_audit_context_attributes",
         "drop table if exists keepsake_audit_events",
@@ -138,8 +156,10 @@ pub async fn reset_schema(pool: &MySqlPool) -> Result<(), sqlx::Error> {
         "drop table if exists keepsake_schema_metadata",
         "drop table if exists _sqlx_migrations",
     ] {
-        pool.execute(query).await?;
+        (&mut *connection).execute(query).await?;
     }
-    pool.execute("set foreign_key_checks = 1").await?;
+    (&mut *connection)
+        .execute("set foreign_key_checks = 1")
+        .await?;
     Ok(())
 }

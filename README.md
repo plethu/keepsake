@@ -14,7 +14,12 @@ The core crate is persistence-agnostic and synchronous. The `keepsake-sqlx`
 adapter stores state through SQLx with migrations and query helpers. Postgres is
 the default backend; SQLite and MySQL are available behind feature flags.
 
-## Where it fits
+I'd written this pattern ad-hoc across production services in compliance-heavy
+domains, where auditability and determinism are requirements. keepsake is the
+consolidated version, so you pull in one implementation instead of re-deriving
+the same rules in every project.
+
+## Boundaries
 
 Use the crate directly for a Rust service backed by Postgres, SQLite, or MySQL.
 For other stacks, the schema, indexes, and lifecycle rules are documented so you
@@ -74,13 +79,6 @@ Lifecycle semantics are always on. Idempotency, duplicate-active prevention,
 deterministic ordering, opaque subjects, and indexed read paths are part of the
 contract. An optional relation-definition cache is available; caching active
 state is left to the application.
-
-## Why it exists
-
-I'd written this pattern ad-hoc across production services in compliance-heavy
-domains, where auditability and determinism are requirements. keepsake is the
-consolidated version, so you pull in one implementation instead of re-deriving
-the same rules in every project.
 
 ## License
 

@@ -35,6 +35,19 @@ pub use repository::{
     NoopRelationCache, RelationCache, RepositoryError, RepositoryResult, SqlxKeepsakeRepository,
     TimedExpiryCandidate, TimedSqlxKeepsakeRepository,
 };
+#[cfg(any(
+    feature = "dovecote-postgres",
+    feature = "dovecote-mysql",
+    feature = "dovecote-sqlite"
+))]
+pub use repository::{
+    BridgeClaimToken, BridgeConfigError, BridgeDeliveryClaim, BridgeError, BridgeImportOptions,
+    BridgeImportReport, BridgePublisherIdentity, BridgeRowOutcome, DEFAULT_DOVECOTE_STREAM,
+    DOVECOTE_EVENT_TYPE, DOVECOTE_PAYLOAD_CODEC, DOVECOTE_PAYLOAD_ORIGIN_BRIDGE_EXACT,
+    DOVECOTE_PAYLOAD_ORIGIN_LEGACY_OUTBOX_REENCODED, DOVECOTE_PAYLOAD_ORIGIN_RECONSTRUCTED_V1,
+    DovecoteBridgeConfig, DovecoteBridgeRepository, LegacyAuditEventV1,
+    encode_reconstructed_audit_v1, reconstruct_audit_event_v1,
+};
 #[cfg(feature = "postgres")]
 pub use repository::{
     KeepsakeRepository, PostgresBackend, PostgresKeepsakeRepository, TimedKeepsakeRepository,

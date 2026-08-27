@@ -111,7 +111,7 @@ pub(super) fn outbox_record_from_sqlite_row(
     })
 }
 
-pub(super) fn parse_timestamp(value: &str) -> RepositoryResult<DateTime<Utc>> {
+pub fn parse_timestamp(value: &str) -> RepositoryResult<DateTime<Utc>> {
     Ok(DateTime::parse_from_rfc3339(value)
         .map_err(|error| sqlx::Error::Decode(Box::new(error)))?
         .with_timezone(&Utc))
@@ -122,6 +122,6 @@ pub(super) fn optional_timestamp(value: Option<String>) -> RepositoryResult<Opti
     value.as_deref().map(parse_timestamp).transpose()
 }
 
-pub(super) fn format_timestamp(value: DateTime<Utc>) -> String {
+pub fn format_timestamp(value: DateTime<Utc>) -> String {
     value.to_rfc3339_opts(SecondsFormat::Micros, true)
 }

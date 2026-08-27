@@ -11,6 +11,18 @@ use sqlx::migrate::Migrator;
 mod audit;
 mod backend;
 mod cache;
+#[cfg(any(
+    feature = "dovecote-postgres",
+    feature = "dovecote-mysql",
+    feature = "dovecote-sqlite"
+))]
+mod dovecote_bridge;
+#[cfg(feature = "dovecote-mysql")]
+mod dovecote_bridge_mysql;
+#[cfg(feature = "dovecote-postgres")]
+mod dovecote_bridge_postgres;
+#[cfg(feature = "dovecote-sqlite")]
+mod dovecote_bridge_sqlite;
 #[cfg(feature = "postgres")]
 mod expiry;
 #[cfg(feature = "postgres")]
@@ -29,6 +41,15 @@ mod sqlite;
 mod support;
 mod timed;
 mod types;
+#[cfg(all(
+    feature = "migrations",
+    any(
+        feature = "dovecote-postgres",
+        feature = "dovecote-mysql",
+        feature = "dovecote-sqlite"
+    )
+))]
+mod upgrade;
 
 pub use backend::KeepsakeSqlxBackend;
 #[cfg(feature = "mysql")]
@@ -40,6 +61,22 @@ pub use backend::SqliteBackend;
 #[cfg(feature = "cache")]
 pub use cache::{LocalRelationCache, LocalRelationCacheConfig};
 pub use cache::{NoopRelationCache, RelationCache};
+#[cfg(any(
+    feature = "dovecote-postgres",
+    feature = "dovecote-mysql",
+    feature = "dovecote-sqlite"
+))]
+pub use dovecote_bridge::{
+    BridgeClaimToken, BridgeConfigError, BridgeDeliveryClaim, BridgeError, BridgeImportOptions,
+    BridgeImportReport, BridgePublisherIdentity, BridgeRowOutcome,
+    DEFAULT_STREAM as DEFAULT_DOVECOTE_STREAM, DovecoteBridgeConfig, DovecoteBridgeRepository,
+    LEGACY_EVENT_TYPE as DOVECOTE_EVENT_TYPE, LegacyAuditEventV1,
+    PAYLOAD_CODEC as DOVECOTE_PAYLOAD_CODEC,
+    PAYLOAD_ORIGIN_BRIDGE_EXACT as DOVECOTE_PAYLOAD_ORIGIN_BRIDGE_EXACT,
+    PAYLOAD_ORIGIN_LEGACY_OUTBOX_REENCODED as DOVECOTE_PAYLOAD_ORIGIN_LEGACY_OUTBOX_REENCODED,
+    PAYLOAD_ORIGIN_RECONSTRUCTED_V1 as DOVECOTE_PAYLOAD_ORIGIN_RECONSTRUCTED_V1,
+    encode_reconstructed_audit_v1, reconstruct_audit_event_v1,
+};
 pub use keepsake::ActiveRelation;
 #[cfg(feature = "postgres")]
 pub use timed::TimedKeepsakeRepository;
@@ -67,6 +104,89 @@ static SQLITE_MIGRATOR: Migrator = sqlx::migrate!("./migrations/sqlite");
 
 #[cfg(all(feature = "migrations", feature = "mysql"))]
 static MYSQL_MIGRATOR: Migrator = sqlx::migrate!("./migrations/mysql");
+
+#[cfg(feature = "migrations")]
+#[allow(dead_code)]
+fn legacy_migrator(migrator: &Migrator, bridge_version: i64) -> Migrator {
+    Migrator::with_migrations(
+        migrator
+            .migrations
+            .iter()
+            .filter(|migration| migration.version != bridge_version)
+            .cloned()
+            .collect(),
+    )
+}
+
+#[cfg(feature = "migrations")]
+#[allow(dead_code)]
+async fn legacy_migrator_for_pool<DB>(
+    pool: &Pool<DB>,
+    migrator: &Migrator,
+    bridge_version: i64,
+) -> Result<Migrator, sqlx::Error>
+where
+    DB: sqlx::Database,
+    i64: sqlx::Decode<'static, DB> + sqlx::Type<DB>,
+    for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    for<'r> (i64,): sqlx::FromRow<'r, DB::Row>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
+{
+    let applied = match sqlx::query_scalar::<DB, i64>("select version from _sqlx_migrations")
+        .fetch_all(pool)
+        .await
+    {
+        Ok(applied) => applied,
+        Err(error) if missing_migration_table(&error) => {
+            return Ok(legacy_migrator(migrator, bridge_version));
+        }
+        Err(error) => return Err(error),
+    };
+    let bridge_applied = applied.contains(&bridge_version);
+    if !bridge_applied {
+        return Ok(legacy_migrator(migrator, bridge_version));
+    }
+
+    // The feature-disabled binary must continue to recognize the known bridge
+    // migration during rollback. Keep SQLx's ordinary validation, checksum,
+    // locking, and unknown-version handling intact.
+    Ok(Migrator::with_migrations(migrator.migrations.to_vec()))
+}
+
+#[cfg(feature = "migrations")]
+fn missing_migration_table(error: &sqlx::Error) -> bool {
+    error.as_database_error().is_some_and(|database_error| {
+        let message = database_error.message().to_ascii_lowercase();
+        (matches!(
+            database_error.code().as_deref(),
+            Some("42P01" | "42S02" | "1146")
+        ) && message.contains("sqlx_migrations"))
+            || message.contains("no such table: _sqlx_migrations")
+    })
+}
+// The classifier ends before the migration compatibility test module.
+
+#[cfg(all(
+    test,
+    feature = "sqlite",
+    feature = "migrations",
+    feature = "dovecote-sqlite"
+))]
+mod migration_compatibility_tests {
+    use super::{SQLITE_MIGRATOR, legacy_migrator_for_pool};
+
+    #[tokio::test]
+    async fn feature_disabled_path_accepts_an_applied_bridge_migration()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await?;
+        SQLITE_MIGRATOR.run(&pool).await?;
+
+        let compatibility = legacy_migrator_for_pool(&pool, &SQLITE_MIGRATOR, 6).await?;
+        assert!(compatibility.version_exists(6));
+        compatibility.run(&pool).await?;
+        Ok(())
+    }
+}
 
 #[allow(dead_code)]
 const MAX_BATCH_LIMIT: i64 = 10_000;
@@ -291,7 +411,13 @@ where
     /// Runs embedded migrations.
     pub async fn migrate(&self) -> RepositoryResult<()> {
         schema::postgres_schema_preflight(&self.pool).await?;
+        #[cfg(feature = "dovecote-postgres")]
         POSTGRES_MIGRATOR.run(&self.pool).await?;
+        #[cfg(not(feature = "dovecote-postgres"))]
+        legacy_migrator_for_pool(&self.pool, &POSTGRES_MIGRATOR, 7)
+            .await?
+            .run(&self.pool)
+            .await?;
         Ok(())
     }
 }
@@ -304,7 +430,13 @@ where
     /// Runs embedded `SQLite` migrations.
     pub async fn migrate(&self) -> RepositoryResult<()> {
         schema::sqlite_schema_preflight(&self.pool).await?;
+        #[cfg(feature = "dovecote-sqlite")]
         SQLITE_MIGRATOR.run(&self.pool).await?;
+        #[cfg(not(feature = "dovecote-sqlite"))]
+        legacy_migrator_for_pool(&self.pool, &SQLITE_MIGRATOR, 6)
+            .await?
+            .run(&self.pool)
+            .await?;
         Ok(())
     }
 }
@@ -317,7 +449,13 @@ where
     /// Runs embedded `MySQL` migrations.
     pub async fn migrate(&self) -> RepositoryResult<()> {
         schema::mysql_schema_preflight(&self.pool).await?;
+        #[cfg(feature = "dovecote-mysql")]
         MYSQL_MIGRATOR.run(&self.pool).await?;
+        #[cfg(not(feature = "dovecote-mysql"))]
+        legacy_migrator_for_pool(&self.pool, &MYSQL_MIGRATOR, 6)
+            .await?
+            .run(&self.pool)
+            .await?;
         Ok(())
     }
 }

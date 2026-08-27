@@ -101,11 +101,11 @@ pub(super) fn fulfilled_expiry_candidate_from_row(
     })
 }
 
-pub(super) const fn naive_timestamp(value: DateTime<Utc>) -> NaiveDateTime {
+pub const fn naive_timestamp(value: DateTime<Utc>) -> NaiveDateTime {
     value.naive_utc()
 }
 
-pub(super) const fn utc_timestamp(value: NaiveDateTime) -> DateTime<Utc> {
+pub const fn utc_timestamp(value: NaiveDateTime) -> DateTime<Utc> {
     DateTime::from_naive_utc_and_offset(value, Utc)
 }
 

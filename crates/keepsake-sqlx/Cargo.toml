@@ -1,6 +1,6 @@
 [package]
 name = "keepsake-sqlx"
-version = "1.1.0"
+version = "1.2.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -21,6 +21,11 @@ sqlite = ["sqlx/sqlite", "sqlx/chrono", "sqlx/json"]
 mysql = ["sqlx/mysql", "sqlx/chrono", "sqlx/json"]
 migrations = ["sqlx/migrate"]
 fulfillment-counters = []
+dovecote-bridge = ["dovecote-postgres", "dovecote-mysql", "dovecote-sqlite"]
+dovecote-postgres = ["postgres", "dep:dovecote", "dep:dovecote-sqlx-postgres", "dep:sha2", "dep:time"]
+dovecote-mysql = ["mysql", "dep:dovecote", "dep:dovecote-sqlx-mysql", "dep:sha2", "dep:time"]
+dovecote-sqlite = ["sqlite", "dep:dovecote", "dep:dovecote-sqlx-sqlite", "dep:sha2", "dep:time"]
+dovecote-sqlite-tests = ["sqlite-tests", "dovecote-sqlite"]
 postgres-tests = ["postgres", "cache", "fulfillment-counters", "migrations"]
 sqlite-tests = ["sqlite", "cache", "fulfillment-counters", "migrations"]
 mysql-tests = ["mysql", "cache", "fulfillment-counters", "migrations"]
@@ -34,9 +39,23 @@ serde_json.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
+sha2 = { workspace = true, optional = true }
+dovecote = { path = "../../../carrier/crates/dovecote", version = "0.1.0", optional = true }
+dovecote-sqlx-postgres = { path = "../../../carrier/crates/dovecote-sqlx-postgres", version = "0.1.0", optional = true }
+dovecote-sqlx-mysql = { path = "../../../carrier/crates/dovecote-sqlx-mysql", version = "0.1.0", optional = true }
+dovecote-sqlx-sqlite = { path = "../../../carrier/crates/dovecote-sqlx-sqlite", version = "0.1.0", optional = true }
+time = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio.workspace = true
+
+[[test]]
+name = "dovecote_bridge_sqlite_stage1"
+required-features = ["sqlite", "migrations", "dovecote-sqlite"]
+
+[[test]]
+name = "dovecote_bridge_sqlite_stage2"
+required-features = ["sqlite", "migrations"]
 
 [lints]
 workspace = true

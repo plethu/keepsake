@@ -24,6 +24,11 @@ When a change touches SQLx, migrations, or database queries, also run:
 mise run test-db
 ```
 
+This serialized database gate runs the ordinary PostgreSQL and MySQL adapter
+suites followed by each backend's opt-in Dovecote bridge suite. Set
+`TEST_DB_UP=0` when CI or another runner already provides the disposable
+services.
+
 The structural Rust checks are documented in
 [`tools/ast-grep/README.md`](tools/ast-grep/README.md). Run them on their own
 with `mise run lint-structure`.

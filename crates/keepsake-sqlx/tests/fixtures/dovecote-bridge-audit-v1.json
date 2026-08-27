@@ -1,0 +1,1 @@
+{"event_type":"apply","at":"2026-01-01T00:00:00Z","actor":{"kind":"system","id":"bridge"},"keepsake_id":"00000000-0000-0000-0000-000000000001","subject":{"kind":"account","id":"acct-1"},"relation_id":"00000000-0000-0000-0000-000000000002","decision":{"type":"applied","duplicate_prevented":false},"context":{"attributes":{}}}

@@ -30,12 +30,18 @@ test-db: test-db-all
 test-db-postgres:
     if [[ "{{ test_db_up }}" == "1" ]]; then just db-up-postgres; fi
     DATABASE_URL="{{ database_url }}" cargo test -p keepsake-sqlx --test postgres --features postgres-tests -- --ignored --test-threads=1
+    DATABASE_URL="{{ database_url }}" cargo test -p keepsake-sqlx --test dovecote_bridge_postgres --features postgres-tests,dovecote-postgres -- --ignored --test-threads=1
 
 test-db-mysql:
     if [[ "{{ test_db_up }}" == "1" ]]; then just db-up-mysql; fi
     MYSQL_DATABASE_URL="{{ mysql_database_url }}" cargo test -p keepsake-sqlx --test mysql --features mysql-tests -- --ignored --test-threads=1
+    MYSQL_DATABASE_URL="{{ mysql_database_url }}" cargo test -p keepsake-sqlx --test dovecote_bridge_mysql --features mysql-tests,dovecote-mysql -- --ignored --test-threads=1
 
-test-db-all: test-db-postgres test-db-mysql
+# Keep all database suites serialized: every target resets the disposable
+# database before its ignored integration tests run.
+test-db-all:
+    just test-db-postgres
+    just test-db-mysql
 
 check:
     scripts/check-project-gates.sh

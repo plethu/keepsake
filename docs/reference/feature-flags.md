@@ -71,6 +71,10 @@ semantics.
 | `migrations` | Yes | Exposes embedded SQLx migrations through `KeepsakeRepository::migrate()`. |
 | `cache` | Yes | Exposes opt-in relation-definition caching through repository cache helpers. |
 | `fulfillment-counters` | Yes | Exposes simple built-in counter projection writes. |
+| `dovecote-postgres` | No | Opts the Postgres adapter into the temporary 1.2 Dovecote dual-write and history-import bridge. |
+| `dovecote-sqlite` | No | Opts the SQLite adapter into the temporary 1.2 Dovecote dual-write and history-import bridge. |
+| `dovecote-mysql` | No | Opts the MySQL adapter into the temporary 1.2 Dovecote dual-write and history-import bridge. |
+| `dovecote-bridge` | No | Convenience feature enabling all three backend bridge features. |
 
 Enable the backend or backends used by the application. When selecting SQLite
 or MySQL, disable default features so Postgres is not enabled implicitly:
@@ -84,6 +88,14 @@ Disable `migrations` when your service vendors the SQL into a separate
 migration framework. Disable `fulfillment-counters` when fulfillment state is
 owned entirely by views, materialized views, event projections, or service
 lookups.
+
+The Dovecote bridge features are opt-in and backend-specific. They add the
+versioned Dovecote adapters only for the selected backend; a normal 1.2 build
+has the same legacy-only dependencies and constructors as 1.1. Configure a
+stable absolute producer source before calling `with_dovecote_bridge`; the
+default stream is `keepsake-audit`. The bridge is temporary migration machinery
+and does not change ownership of the legacy publisher or mark Dovecote rows
+delivered until an explicit cutover/import state says so.
 
 The `cache` feature is inert until configured with
 `KeepsakeRepository::with_local_relation_cache` or an application-provided

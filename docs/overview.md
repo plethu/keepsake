@@ -36,10 +36,10 @@ Pass lifecycle inputs explicitly. Callers provide `now`, relation definitions,
 current state, and any fulfillment snapshot. Retries, expiry workers, tests,
 and audit records all use the same values.
 
-## When To Use It
+## Boundaries
 
-Use Keepsake when relation state needs retry-safe writes, queryable active
-state, and deterministic expiry or revoke behavior. Good fits include tags,
+Keepsake is for relation state that needs retry-safe writes, queryable active
+state, and deterministic expiry or revoke behavior. Examples include tags,
 sanctions, entitlements, holds, risk flags, feature gates, and similar
 workflows.
 

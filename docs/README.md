@@ -24,6 +24,7 @@ API reference: [docs.rs/keepsake](https://docs.rs/keepsake) and
 - [Fulfillment projections](guides/fulfillment-projections.md)
 - [Expiry jobs](guides/expiry-jobs.md)
 - [Audit sinks](guides/audit-sinks.md)
+- [Dovecote migration bridge](guides/dovecote-bridge.md)
 - [Observability](guides/observability.md)
 
 ## Reference

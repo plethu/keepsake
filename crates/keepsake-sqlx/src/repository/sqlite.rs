@@ -1,8 +1,8 @@
-mod audit;
+pub mod audit;
 mod expiry;
 #[cfg(feature = "fulfillment-counters")]
 mod fulfillment;
-mod lifecycle;
+pub mod lifecycle;
 mod query;
 mod relation;
-mod rows;
+pub mod rows;

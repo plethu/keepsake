@@ -20,6 +20,31 @@ The initial v0 migration creates:
 - simple fulfillment counter projections;
 - append-only audit rows with deterministic context attribute rows.
 
+Keepsake 1.2.0 adds only forward bridge migrations (`0007` for PostgreSQL,
+`0006` for SQLite/MySQL). They create bridge configuration and identity-ledger
+tables; historical migrations remain byte-for-byte immutable. The ledger keeps
+the exact payload bytes plus `payload_codec`, `payload_sha256`, and explicit
+`payload_origin` (`bridge_exact`, `legacy_outbox_reencoded`, or
+`reconstructed_v1`). Apply the matching Dovecote adapter migration separately
+in the application's migration runner. Do not enable a bridge feature until
+both schemas are present.
+
+Before activation, stop and fence every legacy writer and publisher. Hold the
+legacy audit and outbox tables read-only while the final reconciliation runs
+and through the rollback window. `finalize_upgrade_reconciliation()` cannot
+acquire an application-wide writer fence; it rejects source or Dovecote drift,
+but a deployment must provide the external fence and read-only precondition.
+
+The bridge worker owns expiry fencing: it clears only claims whose lease has
+expired according to database time and reports a still-live claim as blocked.
+Operators do not need to clear claims manually, and must not copy an active
+legacy claim into Dovecote. A bridge-aware publisher must use
+`claim_delivery`, persist its opaque returned generation, and pass that
+generation to `acknowledge_delivery`; the operation updates both delivery
+representations atomically. The generation is stored in an additive bridge
+table because the historical outbox schema has no token. It rotates on every
+reclaim, including an identical worker and expiry timestamp.
+
 The v0.2 lifecycle migration adds check constraints that keep the SQL record
 shape aligned with the core `KeepsakeRecord` conversion rules:
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0 - 2026-08-27
+
+- Added backend-specific, opt-in Dovecote migration bridge features.
+- Added forward-only bridge bookkeeping migrations while preserving every
+  historical migration artifact unchanged.
+- Added atomic dual-write commands, persisted source/event identity and exact
+  payload ledgers, and bounded high-water history import/reconciliation.
+- Added bridge publisher identity and acknowledgement APIs with database-time
+  claim fencing, exact replay idempotency, and typed ownership/conflict errors.
+
 ## 1.1.0 - 2026-07-12
 
 - Added `evaluate_active`, a non-breaking evaluator entry point that accepts a

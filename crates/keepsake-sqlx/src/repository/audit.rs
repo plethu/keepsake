@@ -233,6 +233,13 @@ pub(super) async fn record_audit_event_tx(
     tx: &mut Transaction<'_, Postgres>,
     event: &AuditEvent,
 ) -> RepositoryResult<i64> {
+    Ok(record_audit_event_and_outbox_tx(tx, event).await?.0)
+}
+
+pub(super) async fn record_audit_event_and_outbox_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &AuditEvent,
+) -> RepositoryResult<(i64, i64)> {
     let decision = serde_json::to_value(&event.decision)?;
     let audit_event_id = sqlx::query_scalar::<_, i64>(
         r"
@@ -255,10 +262,10 @@ pub(super) async fn record_audit_event_tx(
     .fetch_one(&mut **tx)
     .await?;
 
-    record_audit_outbox_tx(tx, audit_event_id, event).await?;
+    let outbox_id = record_audit_outbox_tx(tx, audit_event_id, event).await?;
 
     if event.context.attributes.is_empty() {
-        return Ok(audit_event_id);
+        return Ok((audit_event_id, outbox_id));
     }
 
     let keys = event.context.attributes.keys().cloned().collect::<Vec<_>>();
@@ -281,23 +288,24 @@ pub(super) async fn record_audit_event_tx(
     .execute(&mut **tx)
     .await?;
 
-    Ok(audit_event_id)
+    Ok((audit_event_id, outbox_id))
 }
 
 async fn record_audit_outbox_tx(
     tx: &mut Transaction<'_, Postgres>,
     audit_event_id: i64,
     event: &AuditEvent,
-) -> RepositoryResult<()> {
-    sqlx::query(
+) -> RepositoryResult<i64> {
+    let id = sqlx::query_scalar::<_, i64>(
         r"
-        insert into keepsake_audit_outbox (audit_event_id, payload)
-        values ($1, $2)
+        insert into keepsake_audit_outbox (audit_event_id, event_type, payload)
+        values ($1, 'keepsake.audit_event_recorded', $2)
+        returning id
         ",
     )
     .bind(audit_event_id)
     .bind(serde_json::to_value(event)?)
-    .execute(&mut **tx)
+    .fetch_one(&mut **tx)
     .await?;
-    Ok(())
+    Ok(id)
 }

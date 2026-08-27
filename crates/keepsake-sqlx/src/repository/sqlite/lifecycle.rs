@@ -137,7 +137,7 @@ where
     }
 }
 
-pub(super) async fn relation_for_update_tx(
+pub async fn relation_for_update_tx(
     tx: &mut Transaction<'_, Sqlite>,
     relation_id: RelationId,
 ) -> RepositoryResult<RelationDefinition> {
@@ -154,7 +154,7 @@ pub(super) async fn relation_for_update_tx(
     relation_from_row(&row)
 }
 
-pub(super) async fn active_keepsake_for_subject_relation_tx(
+pub async fn active_keepsake_for_subject_relation_tx(
     tx: &mut Transaction<'_, Sqlite>,
     subject: &SubjectRef,
     relation_id: RelationId,
@@ -175,7 +175,7 @@ pub(super) async fn active_keepsake_for_subject_relation_tx(
     row.as_ref().map(keepsake_from_row).transpose()
 }
 
-pub(super) async fn keepsake_by_id_tx(
+pub async fn keepsake_by_id_tx(
     tx: &mut Transaction<'_, Sqlite>,
     keepsake_id: Uuid,
 ) -> RepositoryResult<Option<Keepsake>> {
@@ -193,7 +193,7 @@ pub(super) async fn keepsake_by_id_tx(
     row.as_ref().map(keepsake_from_row).transpose()
 }
 
-pub(super) async fn revoke_tx(
+pub async fn revoke_tx(
     tx: &mut Transaction<'_, Sqlite>,
     keepsake_id: Uuid,
     at: DateTime<Utc>,
@@ -214,7 +214,7 @@ pub(super) async fn revoke_tx(
     row.as_ref().map(keepsake_from_row).transpose()
 }
 
-pub(super) async fn revoke_by_subject_tx(
+pub async fn revoke_by_subject_tx(
     tx: &mut Transaction<'_, Sqlite>,
     subject: &SubjectRef,
     relation_id: RelationId,

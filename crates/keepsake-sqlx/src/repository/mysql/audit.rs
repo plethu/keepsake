@@ -220,6 +220,13 @@ pub(super) async fn record_audit_event_tx(
     tx: &mut Transaction<'_, MySql>,
     event: &AuditEvent,
 ) -> RepositoryResult<i64> {
+    Ok(record_audit_event_and_outbox_tx(tx, event).await?.0)
+}
+
+pub async fn record_audit_event_and_outbox_tx(
+    tx: &mut Transaction<'_, MySql>,
+    event: &AuditEvent,
+) -> RepositoryResult<(i64, i64)> {
     let result = sqlx::query(
         r"
         insert into keepsake_audit_events
@@ -242,10 +249,10 @@ pub(super) async fn record_audit_event_tx(
     let audit_event_id = i64::try_from(result.last_insert_id())
         .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
 
-    record_audit_outbox_tx(tx, audit_event_id, event).await?;
+    let outbox_id = record_audit_outbox_tx(tx, audit_event_id, event).await?;
 
     if event.context.attributes.is_empty() {
-        return Ok(audit_event_id);
+        return Ok((audit_event_id, outbox_id));
     }
 
     let mut builder = sqlx::QueryBuilder::<MySql>::new(
@@ -258,25 +265,26 @@ pub(super) async fn record_audit_event_tx(
     });
     builder.build().execute(&mut **tx).await?;
 
-    Ok(audit_event_id)
+    Ok((audit_event_id, outbox_id))
 }
 
 pub(super) async fn record_audit_outbox_tx(
     tx: &mut Transaction<'_, MySql>,
     audit_event_id: i64,
     event: &AuditEvent,
-) -> RepositoryResult<()> {
-    sqlx::query(
+) -> RepositoryResult<i64> {
+    let result = sqlx::query(
         r"
-        insert into keepsake_audit_outbox (audit_event_id, payload)
-        values (?, ?)
+        insert into keepsake_audit_outbox (audit_event_id, event_type, payload)
+        values (?, 'keepsake.audit_event_recorded', ?)
         ",
     )
     .bind(audit_event_id)
     .bind(serde_json::to_value(event)?)
     .execute(&mut **tx)
     .await?;
-    Ok(())
+    i64::try_from(result.last_insert_id())
+        .map_err(|error| sqlx::Error::Decode(Box::new(error)).into())
 }
 
 pub(super) async fn hydrate_audit_records(
