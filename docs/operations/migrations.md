@@ -24,6 +24,12 @@ repo.check_schema().await?;
 unknown tables, create inert legacy audit tables, or silently guess which
 schema the operator intended.
 
+Dovecote's MySQL/MariaDB schema creates validation triggers. The migration
+account needs trigger DDL authority; with MySQL binary logging enabled, an
+administrator may also need to enable `log_bin_trust_function_creators` for
+schema installation. Ordinary Keepsake operations do not require that server
+setting after the schema is installed.
+
 ## Existing 1.x installation
 
 Use this path only when the database already contains the published Keepsake
