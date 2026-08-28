@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 3.0.0 - 2026-08-28
 
-- **Breaking SQLx API:** Keepsake SQLx is moving to the tenant-scoped 3.0
+- **Breaking SQLx API:** Keepsake SQLx moved to the tenant-scoped 3.0
   repository contract. PostgreSQL, MySQL, and SQLite clean installs use the
   tenant-aware v3 baseline; the v2 upgrade requires an explicit operator
   mapping, with no inferred tenant.
