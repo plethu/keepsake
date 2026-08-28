@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::audit::AuditEventId;
 use crate::error::Result;
-use crate::model::{ActorRef, KeepsakeId, RelationId, RelationSpec, SubjectRef};
+use crate::model::{ActorRef, KeepsakeId, RelationId, RelationSpec, SubjectRef, TenantId};
 
 /// Metadata attached to a command for audit and observation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +55,8 @@ impl CommandContext {
 /// Applies a relation to a subject.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApplyKeepsake {
+    /// Tenant that owns the new keepsake.
+    pub tenant_id: TenantId,
     /// Caller-supplied keepsake id.
     pub id: KeepsakeId,
     /// Subject to receive the relation.
@@ -75,12 +77,14 @@ impl ApplyKeepsake {
     /// Creates an apply command with a generated id.
     #[must_use]
     pub fn new(
+        tenant_id: TenantId,
         subject: SubjectRef,
         relation_id: RelationId,
         at: DateTime<Utc>,
         context: CommandContext,
     ) -> Self {
         Self {
+            tenant_id,
             id: Uuid::now_v7(),
             subject,
             relation_id,
@@ -93,11 +97,16 @@ impl ApplyKeepsake {
 
     /// Creates an apply command for a typed relation spec.
     #[must_use]
-    pub fn for_spec<Spec>(subject: SubjectRef, at: DateTime<Utc>, context: CommandContext) -> Self
+    pub fn for_spec<Spec>(
+        tenant_id: TenantId,
+        subject: SubjectRef,
+        at: DateTime<Utc>,
+        context: CommandContext,
+    ) -> Self
     where
         Spec: RelationSpec,
     {
-        Self::new(subject, Spec::ID, at, context)
+        Self::new(tenant_id, subject, Spec::ID, at, context)
     }
 
     /// Adds opaque application metadata.
@@ -118,6 +127,8 @@ impl ApplyKeepsake {
 /// Revokes an active keepsake.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RevokeKeepsake {
+    /// Tenant that owns the keepsake.
+    pub tenant_id: TenantId,
     /// Keepsake id.
     pub keepsake_id: KeepsakeId,
     /// Command timestamp.
@@ -131,8 +142,14 @@ pub struct RevokeKeepsake {
 impl RevokeKeepsake {
     /// Creates a revoke command.
     #[must_use]
-    pub fn new(keepsake_id: KeepsakeId, at: DateTime<Utc>, context: CommandContext) -> Self {
+    pub fn new(
+        tenant_id: TenantId,
+        keepsake_id: KeepsakeId,
+        at: DateTime<Utc>,
+        context: CommandContext,
+    ) -> Self {
         Self {
+            tenant_id,
             keepsake_id,
             at,
             context,
@@ -155,6 +172,8 @@ impl RevokeKeepsake {
 /// The active uniqueness invariant guarantees at most one matching keepsake.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RevokeBySubject {
+    /// Tenant containing the subject and relation.
+    pub tenant_id: TenantId,
     /// Subject holding the relation.
     pub subject: SubjectRef,
     /// Relation definition id.
@@ -171,12 +190,14 @@ impl RevokeBySubject {
     /// Creates a revoke-by-subject command.
     #[must_use]
     pub fn new(
+        tenant_id: TenantId,
         subject: SubjectRef,
         relation_id: RelationId,
         at: DateTime<Utc>,
         context: CommandContext,
     ) -> Self {
         Self {
+            tenant_id,
             subject,
             relation_id,
             at,
@@ -194,11 +215,16 @@ impl RevokeBySubject {
 
     /// Creates a revoke-by-subject command for a typed relation spec.
     #[must_use]
-    pub fn for_spec<Spec>(subject: SubjectRef, at: DateTime<Utc>, context: CommandContext) -> Self
+    pub fn for_spec<Spec>(
+        tenant_id: TenantId,
+        subject: SubjectRef,
+        at: DateTime<Utc>,
+        context: CommandContext,
+    ) -> Self
     where
         Spec: RelationSpec,
     {
-        Self::new(subject, Spec::ID, at, context)
+        Self::new(tenant_id, subject, Spec::ID, at, context)
     }
 }
 
@@ -240,6 +266,7 @@ mod tests {
     #[test]
     fn apply_builder_attaches_metadata() -> crate::Result<()> {
         let command = ApplyKeepsake::new(
+            crate::TenantId::new("tenant-a")?,
             SubjectRef::new("account", "acct_123")?,
             Uuid::nil(),
             Utc::now(),
@@ -259,6 +286,7 @@ mod tests {
         let at = Utc::now();
         let context = CommandContext::new(ActorRef::new("system", "worker")?);
         let apply = ApplyKeepsake::for_spec::<TrustedTag>(
+            crate::TenantId::new("tenant-a")?,
             SubjectRef::new("account", "acct_123")?,
             at,
             context.clone(),
@@ -268,7 +296,8 @@ mod tests {
         assert_eq!(apply.at, at);
         assert_eq!(apply.context, context);
 
-        let revoke = RevokeKeepsake::new(apply.id, at, apply.context.clone());
+        let revoke =
+            RevokeKeepsake::new(apply.tenant_id.clone(), apply.id, at, apply.context.clone());
         assert_eq!(revoke.keepsake_id, apply.id);
         assert_eq!(revoke.at, at);
         assert_eq!(revoke.context, apply.context);
@@ -281,13 +310,20 @@ mod tests {
         let subject = SubjectRef::new("account", "acct_123")?;
         let context = CommandContext::new(ActorRef::new("user", "moderator")?);
 
-        let by_id = RevokeBySubject::new(subject.clone(), Uuid::nil(), at, context.clone());
+        let tenant_id = crate::TenantId::new("tenant-a")?;
+        let by_id = RevokeBySubject::new(
+            tenant_id.clone(),
+            subject.clone(),
+            Uuid::nil(),
+            at,
+            context.clone(),
+        );
         assert_eq!(by_id.subject, subject);
         assert_eq!(by_id.relation_id, Uuid::nil());
         assert_eq!(by_id.at, at);
         assert_eq!(by_id.context, context);
 
-        let by_spec = RevokeBySubject::for_spec::<TrustedTag>(subject, at, context);
+        let by_spec = RevokeBySubject::for_spec::<TrustedTag>(tenant_id, subject, at, context);
         assert_eq!(by_spec.relation_id, TrustedTag::ID);
         Ok(())
     }

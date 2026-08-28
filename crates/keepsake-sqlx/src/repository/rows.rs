@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use keepsake::{
     ActiveRelation, ExpiryPolicy, Keepsake, KeepsakeRecord, RelationDefinition, RelationKey,
-    SubjectRef,
+    SubjectRef, TenantId,
 };
 use sqlx::FromRow;
 use uuid::Uuid;
@@ -13,6 +13,7 @@ use super::support::parse_state;
 
 #[derive(Debug, FromRow)]
 pub(super) struct RelationRow {
+    tenant_id: String,
     id: Uuid,
     kind: String,
     key: String,
@@ -22,8 +23,10 @@ pub(super) struct RelationRow {
 
 impl RelationRow {
     pub(super) fn try_into_relation(self) -> RepositoryResult<RelationDefinition> {
+        let tenant_id = TenantId::new(self.tenant_id)?;
         let expiry = serde_json::from_value::<ExpiryPolicy>(self.expiry_policy)?;
         Ok(RelationDefinition::new(
+            tenant_id,
             self.id,
             RelationKey::new(self.kind, self.key)?,
             self.enabled,
@@ -34,6 +37,7 @@ impl RelationRow {
 
 #[derive(Debug, FromRow)]
 pub(super) struct AppliedKeepsakeRow {
+    tenant_id: String,
     id: Uuid,
     subject_kind: String,
     subject_id: String,
@@ -50,6 +54,7 @@ pub(super) struct AppliedKeepsakeRow {
 impl AppliedKeepsakeRow {
     pub(super) fn try_into_keepsake(self) -> RepositoryResult<Keepsake> {
         row_into_keepsake(KeepsakeRow {
+            tenant_id: self.tenant_id,
             id: self.id,
             subject_kind: self.subject_kind,
             subject_id: self.subject_id,
@@ -67,6 +72,7 @@ impl AppliedKeepsakeRow {
 
 #[derive(Debug, FromRow)]
 pub(super) struct AppliedKeepsakeWriteRow {
+    tenant_id: String,
     id: Uuid,
     subject_kind: String,
     subject_id: String,
@@ -85,6 +91,7 @@ impl AppliedKeepsakeWriteRow {
     pub(super) fn try_into_parts(self) -> RepositoryResult<(Keepsake, bool)> {
         let duplicate_prevented = self.duplicate_prevented;
         let keepsake = row_into_keepsake(KeepsakeRow {
+            tenant_id: self.tenant_id,
             id: self.id,
             subject_kind: self.subject_kind,
             subject_id: self.subject_id,
@@ -103,6 +110,7 @@ impl AppliedKeepsakeWriteRow {
 
 #[derive(Debug, FromRow)]
 pub(super) struct ActiveRelationRow {
+    tenant_id: String,
     id: Uuid,
     subject_kind: String,
     subject_id: String,
@@ -125,6 +133,7 @@ impl ActiveRelationRow {
     pub(super) fn try_into_active_relation(self) -> RepositoryResult<ActiveRelation> {
         let relation_expiry = serde_json::from_value::<ExpiryPolicy>(self.relation_expiry_policy)?;
         let keepsake = row_into_keepsake(KeepsakeRow {
+            tenant_id: self.tenant_id.clone(),
             id: self.id,
             subject_kind: self.subject_kind,
             subject_id: self.subject_id,
@@ -138,6 +147,7 @@ impl ActiveRelationRow {
             metadata: self.metadata,
         })?;
         let relation = RelationDefinition::new(
+            TenantId::new(self.tenant_id)?,
             self.relation_definition_id,
             RelationKey::new(self.relation_kind, self.relation_key)?,
             self.relation_enabled,
@@ -148,6 +158,7 @@ impl ActiveRelationRow {
 }
 
 struct KeepsakeRow {
+    tenant_id: String,
     id: Uuid,
     subject_kind: String,
     subject_id: String,
@@ -165,6 +176,7 @@ fn row_into_keepsake(row: KeepsakeRow) -> RepositoryResult<Keepsake> {
     let expiry = serde_json::from_value::<ExpiryPolicy>(row.expiry_policy)?;
     let metadata = serde_json::from_value::<BTreeMap<String, String>>(row.metadata)?;
     Ok(KeepsakeRecord {
+        tenant_id: TenantId::new(row.tenant_id)?,
         id: row.id,
         subject: SubjectRef::new(row.subject_kind, row.subject_id)?,
         relation_id: row.relation_id,

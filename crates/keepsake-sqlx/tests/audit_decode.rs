@@ -5,7 +5,7 @@ use std::error::Error;
 use chrono::{DateTime, Utc};
 use keepsake::{
     ActorRef, AuditContext, AuditDecision, AuditEvent, AuditEventId, AuditEventType, KeepsakeId,
-    RelationId, SubjectRef,
+    RelationId, SubjectRef, TenantId,
 };
 use keepsake_sqlx::{AuditEventDecodeError, DovecoteAuditConfig, decode_audit_event};
 
@@ -13,6 +13,7 @@ type TestResult<T> = Result<T, Box<dyn Error>>;
 
 fn audit_event() -> TestResult<AuditEvent> {
     Ok(AuditEvent {
+        tenant_id: TenantId::new("tenant-test")?,
         id: AuditEventId::from_uuid(uuid::Uuid::nil()),
         event_type: AuditEventType::Apply,
         at: DateTime::parse_from_rfc3339("2023-11-14T22:13:20.123456Z")?.with_timezone(&Utc),
@@ -53,17 +54,37 @@ fn stored_event(
     .into_stored()?)
 }
 
-fn valid_stored(
+fn paged_event(
+    tenant_id: dovecote::TenantId,
+    event: dovecote::StoredEvent,
+    occurred_at: time::OffsetDateTime,
+) -> TestResult<dovecote::PagedEvent> {
+    Ok(dovecote::PagedEvent::new(
+        tenant_id,
+        dovecote::RowId::new(1)?,
+        event,
+        occurred_at,
+        dovecote::DeliverySnapshot::pending(occurred_at, dovecote::AttemptCount::new(0)?, None)?,
+    )?)
+}
+
+fn valid_paged(
     config: &DovecoteAuditConfig,
     event: &AuditEvent,
-) -> TestResult<dovecote::StoredEvent> {
-    stored_event(
+) -> TestResult<dovecote::PagedEvent> {
+    let occurred_at = event_time(event)?;
+    let stored = stored_event(
         &format!("keepsake-audit-{}", event.id.as_uuid()),
         config.source(),
         config.stream(),
         config.event_type(),
-        event_time(event)?,
+        occurred_at,
         serde_json::to_vec(event)?,
+    )?;
+    paged_event(
+        dovecote::TenantId::new(event.tenant_id.as_str())?,
+        stored,
+        occurred_at,
     )
 }
 
@@ -71,9 +92,9 @@ fn valid_stored(
 fn decoder_projects_a_current_event() -> TestResult<()> {
     let config = DovecoteAuditConfig::new("https://tests.invalid/keepsake")?;
     let event = audit_event()?;
-    let stored = valid_stored(&config, &event)?;
+    let paged = valid_paged(&config, &event)?;
 
-    assert_eq!(decode_audit_event(&config, &stored)?, event);
+    assert_eq!(decode_audit_event(&config, &paged)?, event);
     Ok(())
 }
 
@@ -135,8 +156,9 @@ fn decoder_validates_the_complete_current_envelope() -> TestResult<()> {
             occurred_at,
             payload.clone(),
         )?;
+        let paged = paged_event(dovecote::TenantId::new("tenant-test")?, stored, occurred_at)?;
         assert!(matches!(
-            decode_audit_event(&config, &stored),
+            decode_audit_event(&config, &paged),
             Err(AuditEventDecodeError::InvalidEnvelope { field: actual }) if actual == field
         ));
     }
@@ -156,10 +178,44 @@ fn decoder_reports_both_migrated_identity_shapes() -> TestResult<()> {
             event_time(&event)?,
             br#"{"legacy":true}"#.to_vec(),
         )?;
+        let paged = paged_event(
+            dovecote::TenantId::new("tenant-test")?,
+            stored,
+            event_time(&event)?,
+        )?;
         assert!(matches!(
-            decode_audit_event(&config, &stored),
+            decode_audit_event(&config, &paged),
             Err(AuditEventDecodeError::LegacyEvent { event_id: id }) if id == event_id
         ));
     }
+    Ok(())
+}
+
+#[test]
+fn decoder_rejects_storage_payload_tenant_mismatch() -> TestResult<()> {
+    let config = DovecoteAuditConfig::new("https://tests.invalid/keepsake")?;
+    let event = audit_event()?;
+    let occurred_at = event_time(&event)?;
+    let stored = stored_event(
+        &format!("keepsake-audit-{}", event.id.as_uuid()),
+        config.source(),
+        config.stream(),
+        config.event_type(),
+        occurred_at,
+        serde_json::to_vec(&event)?,
+    )?;
+    let paged = paged_event(
+        dovecote::TenantId::new("tenant-other")?,
+        stored,
+        occurred_at,
+    )?;
+
+    assert!(matches!(
+        decode_audit_event(&config, &paged),
+        Err(AuditEventDecodeError::TenantMismatch {
+            storage_tenant,
+            payload_tenant,
+        }) if storage_tenant == "tenant-other" && payload_tenant == "tenant-test"
+    ));
     Ok(())
 }

@@ -4,12 +4,13 @@ use chrono::{DateTime, Utc};
 use keepsake::{ExpiryCause, ExpiryPolicy, FulfillmentSnapshot};
 use uuid::Uuid;
 
+use super::super::PostgresBackend;
 use super::super::{
-    FulfilledExpiryCandidate, KeepsakeRepository, RelationCache, RepositoryResult,
+    FulfilledExpiryCandidate, RelationCache, RepositoryResult, TenantSqlxKeepsakeRepository,
     support::expiry_event, validate_limit,
 };
 
-impl<C> KeepsakeRepository<C>
+impl<C> TenantSqlxKeepsakeRepository<'_, PostgresBackend, C>
 where
     C: RelationCache,
 {
@@ -23,11 +24,12 @@ where
             r"
             select key, value
             from keepsake_fulfillment_counters
-            where keepsake_id = $1
+            where tenant_id = $1 and keepsake_id = $2
             ",
         )
+        .bind(self.tenant_id.as_str())
         .bind(keepsake_id)
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool)
         .await?
         .into_iter()
         .collect::<BTreeMap<_, _>>();
@@ -36,11 +38,12 @@ where
             r"
             select item, complete
             from keepsake_fulfillment_checklist
-            where keepsake_id = $1
+            where tenant_id = $1 and keepsake_id = $2
             ",
         )
+        .bind(self.tenant_id.as_str())
         .bind(keepsake_id)
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool)
         .await?
         .into_iter()
         .collect::<BTreeMap<_, _>>();
@@ -62,16 +65,18 @@ where
             r"
             select k.id as keepsake_id, k.relation_id, k.subject_kind, k.subject_id, k.expiry_policy
             from keepsakes k
-            join keepsake_relation_definitions r on r.id = k.relation_id
-            where k.state = 'applied'
+            join keepsake_relation_definitions r
+              on r.tenant_id = k.tenant_id and r.id = k.relation_id
+            where k.tenant_id = $1 and k.state = 'applied'
               and r.enabled
               and k.expiry_policy->>'type' = 'when_fulfilled'
             order by k.relation_id, k.subject_kind, k.subject_id, k.id
-            limit $1
+            limit $2
             ",
         )
+        .bind(self.tenant_id.as_str())
         .bind(limit)
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool)
         .await?;
         Ok(rows)
     }
@@ -94,12 +99,15 @@ where
         while satisfied_ids.len() < target {
             let remaining = i64::try_from(target - satisfied_ids.len())
                 .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
-            let candidates = due_fulfilled_expiry_tx(&mut tx, after.as_ref(), remaining).await?;
+            let candidates =
+                due_fulfilled_expiry_tx(&mut tx, &self.tenant_id, after.as_ref(), remaining)
+                    .await?;
             if candidates.is_empty() {
                 break;
             }
             after = candidates.last().map(FulfilledExpiryCursor::from);
-            let ids = satisfied_fulfillment_ids_tx(&mut tx, candidates.clone()).await?;
+            let ids =
+                satisfied_fulfillment_ids_tx(&mut tx, &self.tenant_id, candidates.clone()).await?;
             let id_set = ids.iter().copied().collect::<BTreeSet<_>>();
             satisfied_candidates.extend(
                 candidates
@@ -117,16 +125,18 @@ where
         let result = sqlx::query(
             r"
             update keepsakes
-            set state = 'expired', fulfilled_at = $2, updated_at = $2
-            where id = any($1)
+            set state = 'expired', fulfilled_at = $3, updated_at = $3
+            where tenant_id = $1 and id = any($2)
               and state = 'applied'
               and exists (
                 select 1
                 from keepsake_relation_definitions r
-                where r.id = keepsakes.relation_id and r.enabled
+                where r.tenant_id = keepsakes.tenant_id
+                  and r.id = keepsakes.relation_id and r.enabled
               )
             ",
         )
+        .bind(self.tenant_id.as_str())
         .bind(&satisfied_ids)
         .bind(now)
         .execute(&mut *tx)
@@ -137,6 +147,7 @@ where
                 &expiry_event(
                     now,
                     ExpiryCause::Fulfilled,
+                    self.tenant_id.clone(),
                     candidate.keepsake_id,
                     candidate.relation_id,
                     candidate.subject_kind,
@@ -160,18 +171,19 @@ where
         sqlx::query(
             r"
             insert into keepsake_fulfillment_counters
-                (keepsake_id, key, value, observed_at)
-            values ($1, $2, $3, $4)
-            on conflict (keepsake_id, key) do update set
+                (tenant_id, keepsake_id, key, value, observed_at)
+            values ($1, $2, $3, $4, $5)
+            on conflict (tenant_id, keepsake_id, key) do update set
                 value = excluded.value,
                 observed_at = excluded.observed_at
             ",
         )
+        .bind(self.tenant_id.as_str())
         .bind(keepsake_id)
         .bind(key)
         .bind(value)
         .bind(observed_at)
-        .execute(&self.pool)
+        .execute(self.pool)
         .await?;
         Ok(())
     }
@@ -192,19 +204,20 @@ where
         let (value,) = sqlx::query_as::<_, (i64,)>(
             r"
             insert into keepsake_fulfillment_counters
-                (keepsake_id, key, value, observed_at)
-            values ($1, $2, $3, $4)
-            on conflict (keepsake_id, key) do update set
+                (tenant_id, keepsake_id, key, value, observed_at)
+            values ($1, $2, $3, $4, $5)
+            on conflict (tenant_id, keepsake_id, key) do update set
                 value = keepsake_fulfillment_counters.value + excluded.value,
                 observed_at = excluded.observed_at
             returning value
             ",
         )
+        .bind(self.tenant_id.as_str())
         .bind(keepsake_id)
         .bind(key)
         .bind(delta)
         .bind(observed_at)
-        .fetch_one(&self.pool)
+        .fetch_one(self.pool)
         .await?;
         Ok(value)
     }
@@ -221,18 +234,19 @@ where
         sqlx::query(
             r"
             insert into keepsake_fulfillment_checklist
-                (keepsake_id, item, complete, observed_at)
-            values ($1, $2, $3, $4)
-            on conflict (keepsake_id, item) do update set
+                (tenant_id, keepsake_id, item, complete, observed_at)
+            values ($1, $2, $3, $4, $5)
+            on conflict (tenant_id, keepsake_id, item) do update set
                 complete = excluded.complete,
                 observed_at = excluded.observed_at
             ",
         )
+        .bind(self.tenant_id.as_str())
         .bind(keepsake_id)
         .bind(item)
         .bind(complete)
         .bind(observed_at)
-        .execute(&self.pool)
+        .execute(self.pool)
         .await?;
         Ok(())
     }
@@ -241,6 +255,7 @@ where
 #[cfg(feature = "fulfillment-counters")]
 async fn satisfied_fulfillment_ids_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant_id: &keepsake::TenantId,
     candidates: Vec<FulfilledExpiryCandidate>,
 ) -> RepositoryResult<Vec<Uuid>> {
     let candidate_ids = candidates
@@ -255,9 +270,10 @@ async fn satisfied_fulfillment_ids_tx(
         r"
             select keepsake_id, key, value
             from keepsake_fulfillment_counters
-            where keepsake_id = any($1)
+            where tenant_id = $1 and keepsake_id = any($2)
             ",
     )
+    .bind(tenant_id.as_str())
     .bind(&candidate_ids)
     .fetch_all(&mut **tx)
     .await?;
@@ -273,9 +289,10 @@ async fn satisfied_fulfillment_ids_tx(
         r"
             select keepsake_id, item, complete
             from keepsake_fulfillment_checklist
-            where keepsake_id = any($1)
+            where tenant_id = $1 and keepsake_id = any($2)
             ",
     )
+    .bind(tenant_id.as_str())
     .bind(&candidate_ids)
     .fetch_all(&mut **tx)
     .await?;
@@ -311,6 +328,7 @@ async fn satisfied_fulfillment_ids_tx(
 #[cfg(feature = "fulfillment-counters")]
 async fn due_fulfilled_expiry_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant_id: &keepsake::TenantId,
     after: Option<&FulfilledExpiryCursor>,
     limit: i64,
 ) -> RepositoryResult<Vec<FulfilledExpiryCandidate>> {
@@ -318,20 +336,22 @@ async fn due_fulfilled_expiry_tx(
         r"
         select k.id as keepsake_id, k.relation_id, k.subject_kind, k.subject_id, k.expiry_policy
         from keepsakes k
-        join keepsake_relation_definitions r on r.id = k.relation_id
-        where k.state = 'applied'
+        join keepsake_relation_definitions r
+          on r.tenant_id = k.tenant_id and r.id = k.relation_id
+        where k.tenant_id = $1 and k.state = 'applied'
           and r.enabled
           and k.expiry_policy->>'type' = 'when_fulfilled'
           and (
-            $2::uuid is null
-            or (k.relation_id, k.subject_kind, k.subject_id, k.id) > ($2, $3::text, $4::text, $5::uuid)
+            $3::uuid is null
+            or (k.relation_id, k.subject_kind, k.subject_id, k.id) > ($3, $4::text, $5::text, $6::uuid)
           )
         order by k.relation_id, k.subject_kind, k.subject_id, k.id
-        limit $1
+        limit $2
         for update of k skip locked
         for share of r
         ",
     )
+    .bind(tenant_id.as_str())
     .bind(limit)
     .bind(after.map(|cursor| cursor.relation_id))
     .bind(after.map(|cursor| cursor.subject_kind.as_str()))

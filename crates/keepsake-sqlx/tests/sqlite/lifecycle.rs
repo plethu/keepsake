@@ -88,6 +88,7 @@ async fn sqlite_revoke_by_subject_revokes_active_keepsake() -> TestResult<()> {
     let subject = SubjectRef::new("account", "sqlite_acct_revoke_subject")?;
     let applied = repo
         .apply(&ApplyKeepsake::new(
+            SqliteHarness::tenant(),
             subject.clone(),
             relation.id,
             backend_cases::ts("2026-01-01T00:01:00Z")?,
@@ -97,6 +98,7 @@ async fn sqlite_revoke_by_subject_revokes_active_keepsake() -> TestResult<()> {
 
     let revoked = repo
         .revoke_by_subject(&RevokeBySubject::new(
+            SqliteHarness::tenant(),
             subject.clone(),
             relation.id,
             backend_cases::ts("2026-01-01T00:02:00Z")?,
@@ -110,6 +112,7 @@ async fn sqlite_revoke_by_subject_revokes_active_keepsake() -> TestResult<()> {
     // Idempotent: a second revoke finds nothing active and records no event.
     let again = repo
         .revoke_by_subject(&RevokeBySubject::new(
+            SqliteHarness::tenant(),
             subject,
             relation.id,
             backend_cases::ts("2026-01-01T00:03:00Z")?,

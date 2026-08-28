@@ -5,12 +5,45 @@ pub type Result<T> = core::result::Result<T, KeepsakeError>;
 
 /// Errors returned by the core model contracts.
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum KeepsakeError {
     /// A caller supplied an empty identifier.
     #[error("{field} must not be empty")]
     EmptyIdentifier {
         /// Field name.
         field: &'static str,
+    },
+
+    /// A tenant identifier exceeded the storage contract's byte limit.
+    #[error("tenant_id is {actual} UTF-8 bytes; maximum is {max}")]
+    TenantIdTooLong {
+        /// Maximum permitted UTF-8 byte length.
+        max: usize,
+        /// Supplied UTF-8 byte length.
+        actual: usize,
+    },
+
+    /// A tenant identifier contained a Unicode control character.
+    #[error("tenant_id contains forbidden control character U+{code_point:04X}")]
+    TenantIdControlCharacter {
+        /// Unicode scalar value of the rejected character.
+        code_point: u32,
+    },
+
+    /// A tenant identifier contained a Unicode noncharacter.
+    #[error("tenant_id contains forbidden noncharacter U+{code_point:04X}")]
+    TenantIdNoncharacter {
+        /// Unicode scalar value of the rejected character.
+        code_point: u32,
+    },
+
+    /// Two values from different tenants were combined.
+    #[error("tenant mismatch: expected {expected}, got {actual}")]
+    TenantMismatch {
+        /// Tenant required by the owning scope.
+        expected: crate::TenantId,
+        /// Tenant carried by the value being checked.
+        actual: crate::TenantId,
     },
 
     /// A fulfillment policy cannot be satisfied because its threshold is invalid.

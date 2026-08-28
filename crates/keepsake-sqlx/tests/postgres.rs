@@ -16,3 +16,5 @@ mod relations;
 mod schema;
 #[path = "postgres/support.rs"]
 mod support;
+#[path = "postgres/tenancy.rs"]
+mod tenancy;

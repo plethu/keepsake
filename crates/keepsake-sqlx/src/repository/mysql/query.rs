@@ -7,13 +7,13 @@ use keepsake::{
 use sqlx::{MySql, QueryBuilder};
 
 use crate::repository::{
-    MembershipCursor, MySqlKeepsakeRepository, RelationCache, RepositoryError, RepositoryResult,
-    validate_limit,
+    MembershipCursor, MySqlBackend, RelationCache, RepositoryError, RepositoryResult,
+    TenantSqlxKeepsakeRepository, validate_limit,
 };
 
 use super::rows::{keepsake_from_row, relation_definition_from_active_row};
 
-impl<C> MySqlKeepsakeRepository<C>
+impl<C> TenantSqlxKeepsakeRepository<'_, MySqlBackend, C>
 where
     C: RelationCache,
 {
@@ -24,16 +24,17 @@ where
     ) -> RepositoryResult<Vec<Keepsake>> {
         let rows = sqlx::query(
             r"
-            select id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
+            select tenant_id, id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
                 expires_at, fulfilled_at, revoked_at, metadata
             from keepsakes
-            where subject_kind = ? and subject_id = ? and state = 'applied'
+            where tenant_id = ? and subject_kind = ? and subject_id = ? and state = 'applied'
             order by relation_id, id
             ",
         )
+        .bind(self.tenant_id.as_str().as_bytes())
         .bind(subject.kind())
         .bind(subject.id())
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool)
         .await?;
         rows.iter().map(keepsake_from_row).collect()
     }
@@ -43,18 +44,16 @@ where
         &self,
         subject: &SubjectRef,
     ) -> RepositoryResult<Vec<ActiveRelation>> {
-        let rows = active_relation_rows_for_subject(&self.pool, subject).await?;
+        let rows = active_relation_rows_for_subject(self.pool, &self.tenant_id, subject).await?;
         let mut active = Vec::with_capacity(rows.len());
         for (keepsake, relation) in rows {
-            self.relation_cache.store(&relation).await;
+            self.relation_cache.store(&self.tenant_id, &relation).await;
             active.push(ActiveRelation::new(keepsake, relation)?);
         }
         Ok(active)
     }
 
     /// Returns active keepsakes for a subject, filtered by relation ids.
-    ///
-    /// Missing and duplicate requested ids are ignored.
     pub async fn active_relations_for_subject_by_ids(
         &self,
         subject: &SubjectRef,
@@ -63,11 +62,12 @@ where
         if relation_ids.is_empty() {
             return Ok(Vec::new());
         }
-
         let relation_ids = relation_ids.iter().copied().collect::<BTreeSet<_>>();
         let mut query = QueryBuilder::<MySql>::new(ACTIVE_RELATION_SELECT);
         query
-            .push(" where k.subject_kind = ")
+            .push(" where k.tenant_id = ")
+            .push_bind(self.tenant_id.as_str().as_bytes())
+            .push(" and k.subject_kind = ")
             .push_bind(subject.kind())
             .push(" and k.subject_id = ")
             .push_bind(subject.id())
@@ -79,14 +79,11 @@ where
             }
         }
         query.push(") order by k.relation_id, k.id");
-
-        let rows = query.build().fetch_all(&self.pool).await?;
+        let rows = query.build().fetch_all(self.pool).await?;
         self.active_relations_from_rows(&rows).await
     }
 
     /// Returns active keepsakes for a subject, filtered by relation keys.
-    ///
-    /// Missing and duplicate requested keys are ignored.
     pub async fn active_relations_for_subject_by_keys(
         &self,
         subject: &SubjectRef,
@@ -95,14 +92,15 @@ where
         if keys.is_empty() {
             return Ok(Vec::new());
         }
-
         let keys = keys
             .iter()
             .map(|key| (key.kind(), key.name()))
             .collect::<BTreeSet<_>>();
         let mut query = QueryBuilder::<MySql>::new(ACTIVE_RELATION_SELECT);
         query
-            .push(" where k.subject_kind = ")
+            .push(" where k.tenant_id = ")
+            .push_bind(self.tenant_id.as_str().as_bytes())
+            .push(" and k.subject_kind = ")
             .push_bind(subject.kind())
             .push(" and k.subject_id = ")
             .push_bind(subject.id())
@@ -119,8 +117,7 @@ where
             }
         }
         query.push(") order by k.relation_id, k.id");
-
-        let rows = query.build().fetch_all(&self.pool).await?;
+        let rows = query.build().fetch_all(self.pool).await?;
         self.active_relations_from_rows(&rows).await
     }
 
@@ -144,10 +141,10 @@ where
         let limit = validate_limit(limit)?;
         let rows = sqlx::query(
             r"
-            select id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
+            select tenant_id, id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
                 expires_at, fulfilled_at, revoked_at, metadata
             from keepsakes
-            where relation_id = ?
+            where tenant_id = ? and relation_id = ?
               and state = 'applied'
               and (
                 ? is null
@@ -157,13 +154,14 @@ where
             limit ?
             ",
         )
+        .bind(self.tenant_id.as_str().as_bytes())
         .bind(relation_id.to_string())
         .bind(after.map(|cursor| cursor.subject_kind.as_str()))
         .bind(after.map(|cursor| cursor.subject_kind.as_str()))
         .bind(after.map(|cursor| cursor.subject_id.as_str()))
         .bind(after.map(|cursor| cursor.keepsake_id.to_string()))
         .bind(limit)
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool)
         .await?;
         rows.iter().map(keepsake_from_row).collect()
     }
@@ -175,14 +173,14 @@ where
         let mut active = Vec::with_capacity(rows.len());
         for row in rows {
             let relation = relation_definition_from_active_row(row)?;
-            self.relation_cache.store(&relation).await;
+            self.relation_cache.store(&self.tenant_id, &relation).await;
             active.push(ActiveRelation::new(keepsake_from_row(row)?, relation)?);
         }
         Ok(active)
     }
 }
 
-impl<C> ActiveRelationSource for MySqlKeepsakeRepository<C>
+impl<C> ActiveRelationSource for TenantSqlxKeepsakeRepository<'_, MySqlBackend, C>
 where
     C: RelationCache,
 {
@@ -190,25 +188,37 @@ where
 
     async fn active_relations_for_subject<'a>(
         &'a self,
+        tenant_id: &'a keepsake::TenantId,
         subject: &'a SubjectRef,
     ) -> RepositoryResult<Vec<ActiveRelation>> {
+        if tenant_id != &self.tenant_id {
+            return Err(RepositoryError::TenantScopeMismatch);
+        }
         self.active_relations_for_subject(subject).await
     }
 
     async fn active_relations_for_subject_by_ids<'a>(
         &'a self,
+        tenant_id: &'a keepsake::TenantId,
         subject: &'a SubjectRef,
         relation_ids: &'a [RelationId],
     ) -> RepositoryResult<Vec<ActiveRelation>> {
+        if tenant_id != &self.tenant_id {
+            return Err(RepositoryError::TenantScopeMismatch);
+        }
         self.active_relations_for_subject_by_ids(subject, relation_ids)
             .await
     }
 
     async fn active_relations_for_subject_by_keys<'a>(
         &'a self,
+        tenant_id: &'a keepsake::TenantId,
         subject: &'a SubjectRef,
         keys: &'a [RelationKey],
     ) -> RepositoryResult<Vec<ActiveRelation>> {
+        if tenant_id != &self.tenant_id {
+            return Err(RepositoryError::TenantScopeMismatch);
+        }
         self.active_relations_for_subject_by_keys(subject, keys)
             .await
     }
@@ -216,11 +226,13 @@ where
 
 pub(super) async fn active_relation_rows_for_subject(
     pool: &sqlx::MySqlPool,
+    tenant_id: &keepsake::TenantId,
     subject: &SubjectRef,
 ) -> RepositoryResult<Vec<(Keepsake, RelationDefinition)>> {
     let rows = sqlx::query(
         r"
         select
+            k.tenant_id,
             k.id,
             k.subject_kind,
             k.subject_id,
@@ -232,22 +244,24 @@ pub(super) async fn active_relation_rows_for_subject(
             k.fulfilled_at,
             k.revoked_at,
             k.metadata,
+            r.tenant_id,
             r.id as relation_definition_id,
             r.kind as relation_kind,
             r.`key` as relation_key,
             r.enabled as relation_enabled,
             r.expiry_policy as relation_expiry_policy
         from keepsakes k
-        join keepsake_relation_definitions r on r.id = k.relation_id
-        where k.subject_kind = ? and k.subject_id = ? and k.state = 'applied'
+        join keepsake_relation_definitions r
+          on r.tenant_id = k.tenant_id and r.id = k.relation_id
+        where k.tenant_id = ? and k.subject_kind = ? and k.subject_id = ? and k.state = 'applied'
         order by k.relation_id, k.id
         ",
     )
+    .bind(tenant_id.as_str().as_bytes())
     .bind(subject.kind())
     .bind(subject.id())
     .fetch_all(pool)
     .await?;
-
     rows.iter()
         .map(|row| {
             Ok((
@@ -260,6 +274,7 @@ pub(super) async fn active_relation_rows_for_subject(
 
 const ACTIVE_RELATION_SELECT: &str = r"
     select
+        k.tenant_id,
         k.id,
         k.subject_kind,
         k.subject_id,
@@ -271,11 +286,13 @@ const ACTIVE_RELATION_SELECT: &str = r"
         k.fulfilled_at,
         k.revoked_at,
         k.metadata,
+        r.tenant_id,
         r.id as relation_definition_id,
         r.kind as relation_kind,
         r.`key` as relation_key,
         r.enabled as relation_enabled,
         r.expiry_policy as relation_expiry_policy
     from keepsakes k
-    join keepsake_relation_definitions r on r.id = k.relation_id
+    join keepsake_relation_definitions r
+      on r.tenant_id = k.tenant_id and r.id = k.relation_id
 ";

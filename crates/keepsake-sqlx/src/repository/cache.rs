@@ -1,4 +1,4 @@
-use keepsake::{RelationDefinition, RelationId, RelationKey};
+use keepsake::{RelationDefinition, RelationId, RelationKey, TenantId};
 
 #[cfg(feature = "cache")]
 use std::collections::BTreeMap;
@@ -12,16 +12,24 @@ use std::time::{Duration, Instant};
 #[async_trait::async_trait]
 pub trait RelationCache: Send + Sync + Debug {
     /// Gets a cached relation by stable id.
-    async fn get_by_id(&self, relation_id: RelationId) -> Option<RelationDefinition>;
+    async fn get_by_id(
+        &self,
+        tenant_id: &TenantId,
+        relation_id: RelationId,
+    ) -> Option<RelationDefinition>;
 
     /// Gets a cached relation by natural relation key.
-    async fn get_by_key(&self, key: &RelationKey) -> Option<RelationDefinition>;
+    async fn get_by_key(
+        &self,
+        tenant_id: &TenantId,
+        key: &RelationKey,
+    ) -> Option<RelationDefinition>;
 
     /// Stores or refreshes a relation definition.
-    async fn store(&self, relation: &RelationDefinition);
+    async fn store(&self, tenant_id: &TenantId, relation: &RelationDefinition);
 
     /// Removes cached entries for a relation id.
-    async fn remove_by_id(&self, relation_id: RelationId);
+    async fn remove_by_id(&self, tenant_id: &TenantId, relation_id: RelationId);
 }
 
 /// Relation cache implementation that never stores entries.
@@ -30,17 +38,25 @@ pub struct NoopRelationCache;
 
 #[async_trait::async_trait]
 impl RelationCache for NoopRelationCache {
-    async fn get_by_id(&self, _relation_id: RelationId) -> Option<RelationDefinition> {
+    async fn get_by_id(
+        &self,
+        _tenant_id: &TenantId,
+        _relation_id: RelationId,
+    ) -> Option<RelationDefinition> {
         None
     }
 
-    async fn get_by_key(&self, _key: &RelationKey) -> Option<RelationDefinition> {
+    async fn get_by_key(
+        &self,
+        _tenant_id: &TenantId,
+        _key: &RelationKey,
+    ) -> Option<RelationDefinition> {
         None
     }
 
-    async fn store(&self, _relation: &RelationDefinition) {}
+    async fn store(&self, _tenant_id: &TenantId, _relation: &RelationDefinition) {}
 
-    async fn remove_by_id(&self, _relation_id: RelationId) {}
+    async fn remove_by_id(&self, _tenant_id: &TenantId, _relation_id: RelationId) {}
 }
 
 /// Configuration for local in-process relation definition caching.
@@ -86,38 +102,52 @@ impl LocalRelationCache {
 #[cfg(feature = "cache")]
 #[async_trait::async_trait]
 impl RelationCache for LocalRelationCache {
-    async fn get_by_id(&self, relation_id: RelationId) -> Option<RelationDefinition> {
+    async fn get_by_id(
+        &self,
+        tenant_id: &TenantId,
+        relation_id: RelationId,
+    ) -> Option<RelationDefinition> {
         self.state
             .read()
             .ok()
-            .and_then(|state| state.by_id.get(&relation_id).cloned())
+            .and_then(|state| state.by_id.get(&(tenant_id.clone(), relation_id)).cloned())
             .and_then(CacheEntry::fresh_relation)
     }
 
-    async fn get_by_key(&self, key: &RelationKey) -> Option<RelationDefinition> {
+    async fn get_by_key(
+        &self,
+        tenant_id: &TenantId,
+        key: &RelationKey,
+    ) -> Option<RelationDefinition> {
         self.state
             .read()
             .ok()
-            .and_then(|state| state.by_key.get(key).cloned())
+            .and_then(|state| state.by_key.get(&(tenant_id.clone(), key.clone())).cloned())
             .and_then(CacheEntry::fresh_relation)
     }
 
-    async fn store(&self, relation: &RelationDefinition) {
+    async fn store(&self, tenant_id: &TenantId, relation: &RelationDefinition) {
         let entry = CacheEntry {
             relation: relation.clone(),
             expires_at: Instant::now() + self.config.ttl,
         };
         if let Ok(mut state) = self.state.write() {
-            state.by_id.insert(relation.id, entry.clone());
-            state.by_key.insert(relation.key.clone(), entry);
+            state
+                .by_id
+                .insert((tenant_id.clone(), relation.id), entry.clone());
+            state
+                .by_key
+                .insert((tenant_id.clone(), relation.key.clone()), entry);
         }
     }
 
-    async fn remove_by_id(&self, relation_id: RelationId) {
+    async fn remove_by_id(&self, tenant_id: &TenantId, relation_id: RelationId) {
         if let Ok(mut state) = self.state.write()
-            && let Some(entry) = state.by_id.remove(&relation_id)
+            && let Some(entry) = state.by_id.remove(&(tenant_id.clone(), relation_id))
         {
-            state.by_key.remove(&entry.relation.key);
+            state
+                .by_key
+                .remove(&(tenant_id.clone(), entry.relation.key));
         }
     }
 }
@@ -125,8 +155,8 @@ impl RelationCache for LocalRelationCache {
 #[cfg(feature = "cache")]
 #[derive(Debug, Default)]
 struct LocalRelationCacheState {
-    by_id: BTreeMap<RelationId, CacheEntry>,
-    by_key: BTreeMap<RelationKey, CacheEntry>,
+    by_id: BTreeMap<(TenantId, RelationId), CacheEntry>,
+    by_key: BTreeMap<(TenantId, RelationKey), CacheEntry>,
 }
 
 #[cfg(feature = "cache")]
@@ -153,6 +183,7 @@ mod tests {
     #[test]
     fn cache_entry_expires_after_ttl() -> keepsake::Result<()> {
         let relation = RelationDefinition::enabled(
+            keepsake::TenantId::new("tenant-test")?,
             Uuid::nil(),
             RelationKey::new("tag", "trusted")?,
             ExpiryPolicy::ManualOnly,

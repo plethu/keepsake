@@ -7,13 +7,15 @@ use crate::error::{KeepsakeError, Result};
 use crate::policy::ExpiryPolicy;
 
 use super::{ExpiryCause, Keepsake, KeepsakeLifecycle, LifecycleState};
-use crate::model::{KeepsakeId, RelationId, SubjectRef};
+use crate::model::{KeepsakeId, RelationId, SubjectRef, TenantId};
 
 type SerdeResult<T, E> = core::result::Result<T, E>;
 
 /// Flat storage and serde boundary record for keepsakes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeepsakeRecord {
+    /// Tenant that owns this keepsake.
+    pub tenant_id: TenantId,
     /// Stable keepsake id.
     pub id: KeepsakeId,
     /// Application-owned subject reference.
@@ -104,6 +106,7 @@ impl TryFrom<KeepsakeRecord> for Keepsake {
         };
 
         Ok(Self {
+            tenant_id: record.tenant_id,
             id: record.id,
             subject: record.subject,
             relation_id: record.relation_id,
@@ -118,6 +121,7 @@ impl TryFrom<KeepsakeRecord> for Keepsake {
 impl From<&Keepsake> for KeepsakeRecord {
     fn from(keepsake: &Keepsake) -> Self {
         Self {
+            tenant_id: keepsake.tenant_id().clone(),
             id: keepsake.id,
             subject: keepsake.subject.clone(),
             relation_id: keepsake.relation_id,

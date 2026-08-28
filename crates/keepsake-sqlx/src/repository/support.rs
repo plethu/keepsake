@@ -90,15 +90,28 @@ pub enum AuditEventDecodeError {
         /// Legacy outer Dovecote event identity.
         event_id: String,
     },
+
+    /// The tenant stored with the Dovecote page disagreed with the tenant in
+    /// the typed audit payload.
+    #[error(
+        "Keepsake audit event tenant does not match storage: storage={storage_tenant}, payload={payload_tenant}"
+    )]
+    TenantMismatch {
+        /// Tenant recorded by Dovecote storage.
+        storage_tenant: String,
+        /// Tenant declared by the typed audit payload.
+        payload_tenant: String,
+    },
 }
 
-/// Decodes and validates one Dovecote event emitted by Keepsake 2.0.
+/// Decodes and validates one Dovecote page event emitted by Keepsake 3.0.
 ///
 /// This projection is backend-independent: callers can pass an event from a
 /// live or snapshot Dovecote page regardless of which `SQLx` adapter produced
-/// it. Source, stream, type, JSON content, event identity, and occurrence time
-/// are all checked before the typed value is returned. Historical identities
-/// (`keepsake-outbox-N` and `keepsake-audit-legacy-N`) return
+/// it. The page carries the storage tenant, which is checked against the JSON
+/// payload before the typed value is returned. Source, stream, type, JSON
+/// content, event identity, and occurrence time are also checked. Historical
+/// identities (`keepsake-outbox-N` and `keepsake-audit-legacy-N`) return
 /// [`AuditEventDecodeError::LegacyEvent`] because v1 payloads do not carry the
 /// current event identity and require an application-specific legacy decoder.
 ///
@@ -106,10 +119,11 @@ pub enum AuditEventDecodeError {
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use chrono::{TimeZone, Utc};
 /// use keepsake::{ActorRef, AuditContext, AuditDecision, AuditEvent, AuditEventId,
-///     AuditEventType, SubjectRef};
+///     AuditEventType, SubjectRef, TenantId};
 /// use keepsake_sqlx::{decode_audit_event, DovecoteAuditConfig};
 ///
 /// let event = AuditEvent {
+///     tenant_id: TenantId::new("tenant-a")?,
 ///     id: AuditEventId::from_uuid(uuid::Uuid::nil()),
 ///     event_type: AuditEventType::Apply,
 ///     at: Utc.timestamp_opt(1_700_000_000, 0).single().ok_or("timestamp")?,
@@ -121,24 +135,37 @@ pub enum AuditEventDecodeError {
 ///     context: AuditContext::default(),
 /// };
 /// let config = DovecoteAuditConfig::new("https://example.invalid/keepsake")?;
+/// let occurred_at = time::OffsetDateTime::from_unix_timestamp(event.at.timestamp())?;
 /// let stored = dovecote::NewEvent::builder(
 ///     dovecote::StreamName::new(config.stream())?,
 ///     dovecote::EventId::new(format!("keepsake-audit-{}", event.id.as_uuid()))?,
 ///     dovecote::EventSource::new(config.source())?,
 ///     dovecote::EventType::new(config.event_type())?,
 /// )
-/// .time(time::OffsetDateTime::from_unix_timestamp(event.at.timestamp())?)
+/// .time(occurred_at)
 /// .datacontenttype(dovecote::ContentType::new("application/json")?)
 /// .data(dovecote::EventData::json(serde_json::to_vec(&event)?)?)
 /// .build()?.into_stored()?;
-/// assert_eq!(decode_audit_event(&config, &stored)?, event);
+/// let paged = dovecote::PagedEvent::new(
+///     dovecote::TenantId::new("tenant-a")?,
+///     dovecote::RowId::new(1)?,
+///     stored,
+///     occurred_at,
+///     dovecote::DeliverySnapshot::pending(
+///         occurred_at,
+///         dovecote::AttemptCount::new(0)?,
+///         None,
+///     )?,
+/// )?;
+/// assert_eq!(decode_audit_event(&config, &paged)?, event);
 /// # Ok(())
 /// # }
 /// ```
 pub fn decode_audit_event(
     config: &DovecoteAuditConfig,
-    event: &dovecote::StoredEvent,
+    page: &dovecote::PagedEvent,
 ) -> Result<AuditEvent, AuditEventDecodeError> {
+    let event = page.event();
     if event.source().as_str() != config.source() {
         return Err(AuditEventDecodeError::InvalidEnvelope { field: "source" });
     }
@@ -172,6 +199,12 @@ pub fn decode_audit_event(
 
     let value: serde_json::Value = serde_json::from_slice(payload.as_bytes())?;
     let decoded: AuditEvent = serde_json::from_value(value)?;
+    if page.tenant_id().as_str() != decoded.tenant_id.as_str() {
+        return Err(AuditEventDecodeError::TenantMismatch {
+            storage_tenant: page.tenant_id().as_str().to_owned(),
+            payload_tenant: decoded.tenant_id.as_str().to_owned(),
+        });
+    }
     let expected_id = format!("keepsake-audit-{}", decoded.id.as_uuid());
     if event.id().as_str() != expected_id {
         return Err(AuditEventDecodeError::InvalidEnvelope {
@@ -280,6 +313,15 @@ pub(super) fn dovecote_event(
     .map_err(RepositoryError::DovecoteValidation)
 }
 
+/// Converts Keepsake's domain-owned tenant value at the Dovecote adapter
+/// boundary. The two crates intentionally do not share a public identity type.
+pub(super) fn dovecote_tenant_id(
+    tenant_id: &keepsake::TenantId,
+) -> RepositoryResult<dovecote::TenantId> {
+    dovecote::TenantId::new(tenant_id.as_str().to_owned())
+        .map_err(RepositoryError::DovecoteValidation)
+}
+
 fn chrono_to_dovecote(value: DateTime<Utc>) -> RepositoryResult<time::OffsetDateTime> {
     let nanos = value.timestamp_subsec_nanos();
     time::OffsetDateTime::from_unix_timestamp(value.timestamp())
@@ -297,6 +339,7 @@ pub(super) fn apply_event(
     duplicate_prevented: bool,
 ) -> AuditEvent {
     AuditEvent {
+        tenant_id: command.tenant_id.clone(),
         id: command.audit_id,
         event_type: if duplicate_prevented {
             AuditEventType::DuplicateApply
@@ -353,6 +396,7 @@ fn revoke_audit_event(
     keepsake: &Keepsake,
 ) -> AuditEvent {
     AuditEvent {
+        tenant_id: keepsake.tenant_id().clone(),
         id,
         event_type: AuditEventType::Revoke,
         at,
@@ -382,12 +426,14 @@ pub(super) fn revoke_by_subject_event(
 pub(super) fn expiry_event(
     at: DateTime<Utc>,
     cause: ExpiryCause,
+    tenant_id: keepsake::TenantId,
     keepsake_id: KeepsakeId,
     relation_id: RelationId,
     subject_kind: impl Into<String>,
     subject_id: impl Into<String>,
 ) -> RepositoryResult<AuditEvent> {
     Ok(AuditEvent {
+        tenant_id,
         id: AuditEventId::deterministic(
             format!("keepsake-expiry:{keepsake_id}:{at}:{cause:?}").as_bytes(),
         ),

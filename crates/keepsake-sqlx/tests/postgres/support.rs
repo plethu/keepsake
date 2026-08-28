@@ -7,11 +7,13 @@ pub use keepsake::{
     ActiveRelationSource, ActorRef, ApplyKeepsake, CommandContext, DynActiveRelationSource,
     ExpiryPolicy, FulfillmentPolicy, FulfillmentSnapshot, LifecycleState, RelationDefinition,
     RelationId, RelationKey, RelationSpec, RevokeBySubject, RevokeKeepsake, StaticRelationKey,
-    SubjectRef,
+    SubjectRef, TenantId,
 };
 #[cfg(feature = "cache")]
 pub use keepsake_sqlx::LocalRelationCacheConfig;
-pub use keepsake_sqlx::{KeepsakeRepository, MembershipCursor, RelationCache, RepositoryError};
+pub use keepsake_sqlx::{
+    KeepsakeRepository, MembershipCursor, RelationCache, RepositoryError, TenantKeepsakeRepository,
+};
 pub use sqlx::{PgPool, Postgres, Transaction, postgres::PgPoolOptions};
 pub use uuid::Uuid;
 
@@ -75,18 +77,27 @@ pub enum TestError {
 pub async fn repo() -> TestResult<KeepsakeRepository> {
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
+    reset_schema(&pool).await?;
     let repo = KeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/postgres")?;
     repo.migrate().await?;
     reset_database(&pool).await?;
     Ok(repo)
 }
 
-pub async fn timed_relation(
-    repo: &KeepsakeRepository,
+pub fn test_tenant() -> TenantId {
+    TenantId::new("tenant-test").unwrap_or_else(|_| unreachable!("static test tenant is valid"))
+}
+
+pub async fn timed_relation<C>(
+    repo: &TenantKeepsakeRepository<'_, C>,
     key_prefix: &str,
     expires_at: &str,
-) -> TestResult<RelationDefinition> {
+) -> TestResult<RelationDefinition>
+where
+    C: RelationCache,
+{
     let relation = RelationDefinition::new(
+        repo.tenant_id().clone(),
         Uuid::now_v7(),
         RelationKey::new("tag", unique_key(key_prefix))?,
         true,
@@ -98,7 +109,7 @@ pub async fn timed_relation(
 }
 
 pub async fn upsert_relation<C>(
-    repo: &KeepsakeRepository<C>,
+    repo: &TenantKeepsakeRepository<'_, C>,
     relation: &RelationDefinition,
 ) -> TestResult<RelationDefinition>
 where
@@ -110,7 +121,7 @@ where
 }
 
 pub async fn set_relation_enabled<C>(
-    repo: &KeepsakeRepository<C>,
+    repo: &TenantKeepsakeRepository<'_, C>,
     relation_id: Uuid,
     enabled: bool,
 ) -> TestResult<bool>
@@ -122,13 +133,17 @@ where
         .await?)
 }
 
-pub async fn apply_at(
-    repo: &KeepsakeRepository,
+pub async fn apply_at<C>(
+    repo: &TenantKeepsakeRepository<'_, C>,
     subject: &SubjectRef,
     relation_id: Uuid,
     applied_at: &str,
-) -> TestResult<keepsake_sqlx::AppliedKeepsake> {
+) -> TestResult<keepsake_sqlx::AppliedKeepsake>
+where
+    C: RelationCache,
+{
     let command = ApplyKeepsake::new(
+        repo.tenant_id().clone(),
         subject.clone(),
         relation_id,
         ts(applied_at)?,
@@ -137,12 +152,20 @@ pub async fn apply_at(
     Ok(repo.apply(&command).await?)
 }
 
-pub async fn revoke_at(
-    repo: &KeepsakeRepository,
+pub async fn revoke_at<C>(
+    repo: &TenantKeepsakeRepository<'_, C>,
     keepsake_id: Uuid,
     revoked_at: &str,
-) -> TestResult<bool> {
-    let command = RevokeKeepsake::new(keepsake_id, ts(revoked_at)?, test_context("worker")?);
+) -> TestResult<bool>
+where
+    C: RelationCache,
+{
+    let command = RevokeKeepsake::new(
+        repo.tenant_id().clone(),
+        keepsake_id,
+        ts(revoked_at)?,
+        test_context("worker")?,
+    );
     Ok(repo.revoke(&command).await?)
 }
 
@@ -158,6 +181,7 @@ pub fn unique_key(prefix: &str) -> String {
 
 pub fn spawn_apply(
     repo: KeepsakeRepository,
+    tenant_id: TenantId,
     subject: SubjectRef,
     relation_id: Uuid,
     applied_at: DateTime<Utc>,
@@ -165,20 +189,22 @@ pub fn spawn_apply(
 {
     tokio::spawn(async move {
         let command = ApplyKeepsake::new(
+            tenant_id.clone(),
             subject,
             relation_id,
             applied_at,
             CommandContext::new(ActorRef::new("test", "worker")?),
         );
-        repo.apply(&command).await
+        repo.for_tenant(tenant_id).apply(&command).await
     })
 }
 
 pub fn spawn_expire_due(
     repo: KeepsakeRepository,
+    tenant_id: TenantId,
     due_at: DateTime<Utc>,
 ) -> tokio::task::JoinHandle<Result<u64, keepsake_sqlx::RepositoryError>> {
-    tokio::spawn(async move { repo.expire_due_timed(due_at, 2).await })
+    tokio::spawn(async move { repo.for_tenant(tenant_id).expire_due_timed(due_at, 2).await })
 }
 
 pub fn test_context(actor_id: &str) -> TestResult<CommandContext> {

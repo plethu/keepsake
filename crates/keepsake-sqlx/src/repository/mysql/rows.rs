@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use keepsake::{
-    ExpiryPolicy, Keepsake, KeepsakeRecord, RelationDefinition, RelationKey, SubjectRef,
+    ExpiryPolicy, Keepsake, KeepsakeRecord, RelationDefinition, RelationKey, SubjectRef, TenantId,
 };
 use sqlx::Row;
 
@@ -10,11 +10,19 @@ use sqlx::Row;
 use crate::repository::FulfilledExpiryCandidate;
 use crate::repository::support::{parse_state, parse_uuid};
 use crate::repository::{RepositoryResult, TimedExpiryCandidate};
+
+fn tenant_from_row(row: &sqlx::mysql::MySqlRow) -> RepositoryResult<TenantId> {
+    let bytes: Vec<u8> = row.try_get("tenant_id")?;
+    let value = String::from_utf8(bytes).map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
+    Ok(TenantId::new(value)?)
+}
+
 pub(super) fn relation_from_row(
     row: &sqlx::mysql::MySqlRow,
 ) -> RepositoryResult<RelationDefinition> {
     let expiry = serde_json::from_value::<ExpiryPolicy>(row.try_get("expiry_policy")?)?;
     Ok(RelationDefinition::new(
+        tenant_from_row(row)?,
         parse_uuid(row.try_get("id")?)?,
         RelationKey::new(
             row.try_get::<String, _>("kind")?,
@@ -29,6 +37,7 @@ pub(super) fn keepsake_from_row(row: &sqlx::mysql::MySqlRow) -> RepositoryResult
     let metadata = serde_json::from_value::<BTreeMap<String, String>>(row.try_get("metadata")?)?;
     let expiry = serde_json::from_value::<ExpiryPolicy>(row.try_get("expiry_policy")?)?;
     Ok(KeepsakeRecord {
+        tenant_id: tenant_from_row(row)?,
         id: parse_uuid(row.try_get("id")?)?,
         subject: SubjectRef::new(
             row.try_get::<String, _>("subject_kind")?,
@@ -51,6 +60,7 @@ pub(super) fn relation_definition_from_active_row(
 ) -> RepositoryResult<RelationDefinition> {
     let expiry = serde_json::from_value::<ExpiryPolicy>(row.try_get("relation_expiry_policy")?)?;
     Ok(RelationDefinition::new(
+        tenant_from_row(row)?,
         parse_uuid(row.try_get("relation_definition_id")?)?,
         RelationKey::new(
             row.try_get::<String, _>("relation_kind")?,

@@ -9,10 +9,12 @@ Postgres database where Keepsake and Dovecote store lifecycle and audit rows.
 ```rust
 use keepsake_sqlx::KeepsakeRepository;
 
-let repo = KeepsakeRepository::new(pool, "https://accounts.example.test/keepsake")?;
-repo.migrate().await?;
+let root = KeepsakeRepository::new(pool, "https://accounts.example.test/keepsake")?;
+root.migrate().await?;
 // Install the matching Dovecote schema before serving requests.
-repo.check_schema().await?;
+root.check_schema().await?;
+let tenant = keepsake::TenantId::new("account-group-a")?;
+let repo = root.for_tenant(tenant.clone());
 ```
 
 Define the relation in code. The `relation_spec!` macro creates a typed
@@ -41,6 +43,7 @@ timed_repo.upsert_relation_spec::<TrustedTag>().await?;
 
 let subject = SubjectRef::new("account", "acct_123")?;
 let command = ApplyKeepsake::for_spec::<TrustedTag>(
+    tenant,
     subject,
     now,
     CommandContext::new(ActorRef::new("system", "worker")?),

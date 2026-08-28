@@ -19,6 +19,7 @@ async fn sqlite_timed_expiry_writes_typed_dovecote_event() -> TestResult<()> {
     .await?;
     let applied = repo
         .apply(&keepsake::ApplyKeepsake::new(
+            SqliteHarness::tenant(),
             keepsake::SubjectRef::new("account", "sqlite_acct_timed")?,
             relation.id,
             ts("2026-01-01T00:01:00Z")?,
@@ -64,6 +65,7 @@ async fn sqlite_fulfilled_expiry_uses_counter_snapshot_and_audits() -> TestResul
     .await?;
     let applied = repo
         .apply(&keepsake::ApplyKeepsake::new(
+            SqliteHarness::tenant(),
             keepsake::SubjectRef::new("account", "sqlite_acct_steps")?,
             relation.id,
             ts("2026-01-01T00:01:00Z")?,

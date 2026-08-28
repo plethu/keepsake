@@ -13,6 +13,7 @@ async fn sqlite_lifecycle_events_are_typed_dovecote_rows() -> TestResult<()> {
     let apply_at = ts("2026-01-01T00:01:00.123456Z")?;
     let apply_id = AuditEventId::deterministic(b"sqlite-apply");
     let command = ApplyKeepsake::new(
+        SqliteHarness::tenant(),
         subject.clone(),
         relation.id,
         apply_at,
@@ -26,6 +27,7 @@ async fn sqlite_lifecycle_events_are_typed_dovecote_rows() -> TestResult<()> {
     let revoke_id = AuditEventId::deterministic(b"sqlite-revoke");
     repo.revoke_by_subject(
         &RevokeBySubject::new(
+            SqliteHarness::tenant(),
             subject,
             relation.id,
             ts("2026-01-01T00:02:00Z")?,
@@ -95,6 +97,7 @@ async fn sqlite_exact_replay_is_idempotent_and_changed_content_conflicts() -> Te
     let relation = upsert_relation::<SqliteHarness>(&repo, ExpiryPolicy::ManualOnly).await?;
     let id = AuditEventId::deterministic(b"sqlite-replay");
     let command = ApplyKeepsake::new(
+        SqliteHarness::tenant(),
         SubjectRef::new("account", "sqlite_replay")?,
         relation.id,
         ts("2026-01-01T00:01:00Z")?,
@@ -111,6 +114,7 @@ async fn sqlite_exact_replay_is_idempotent_and_changed_content_conflicts() -> Te
     );
 
     let changed = ApplyKeepsake::new(
+        SqliteHarness::tenant(),
         command.subject.clone(),
         relation.id,
         command.at,

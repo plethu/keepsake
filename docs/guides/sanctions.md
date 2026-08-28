@@ -34,6 +34,7 @@ let timed_repo = repo.at(now);
 timed_repo.upsert_relation_spec::<Mute24hSanction>().await?;
 
 let command = ApplyKeepsake::for_spec::<Mute24hSanction>(
+    repo.tenant_id().clone(),
     subject,
     now,
     CommandContext::new(ActorRef::new("user", "moderator_123")?),

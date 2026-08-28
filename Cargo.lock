@@ -336,11 +336,10 @@ checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
 name = "dovecote"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "base64",
  "mime",
- "serde",
  "serde_json",
  "thiserror",
  "time",
@@ -349,7 +348,7 @@ dependencies = [
 
 [[package]]
 name = "dovecote-sqlx-mysql"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "dovecote",
  "getrandom 0.4.3",
@@ -360,7 +359,7 @@ dependencies = [
 
 [[package]]
 name = "dovecote-sqlx-postgres"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "dovecote",
  "getrandom 0.4.3",
@@ -371,7 +370,7 @@ dependencies = [
 
 [[package]]
 name = "dovecote-sqlx-sqlite"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "dovecote",
  "getrandom 0.4.3",
@@ -775,7 +774,7 @@ dependencies = [
 
 [[package]]
 name = "keepsake"
-version = "2.1.0"
+version = "3.0.0"
 dependencies = [
  "chrono",
  "serde",
@@ -786,7 +785,7 @@ dependencies = [
 
 [[package]]
 name = "keepsake-sqlx"
-version = "2.1.0"
+version = "3.0.0"
 dependencies = [
  "async-trait",
  "chrono",

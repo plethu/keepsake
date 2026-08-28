@@ -1,7 +1,9 @@
 #[path = "../support/backend_cases.rs"]
 pub mod backend_cases;
 
-use keepsake_sqlx::{MySqlKeepsakeRepository, RepositoryError};
+use keepsake_sqlx::{
+    MySqlBackend, MySqlKeepsakeRepository, RepositoryError, TenantSqlxKeepsakeRepository,
+};
 use sqlx::{Executor, MySqlPool, mysql::MySqlPoolOptions};
 use uuid::Uuid;
 
@@ -14,20 +16,23 @@ pub struct MySqlHarness;
 #[async_trait::async_trait]
 impl BackendHarness for MySqlHarness {
     const BACKEND: &'static str = "mysql";
+    const TENANT: &'static str = "mysql-test-tenant";
 
     type Pool = MySqlPool;
-    type Repo = MySqlKeepsakeRepository;
+    type Repo = TenantSqlxKeepsakeRepository<'static, MySqlBackend>;
 
     async fn repo() -> TestResult<(Self::Repo, Self::Pool)> {
         let pool = mysql_pool().await?;
         reset_schema(&pool).await?;
-        let repo =
-            MySqlKeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/mysql")?;
-        repo.migrate().await?;
+        let root = Box::leak(Box::new(MySqlKeepsakeRepository::new(
+            pool.clone(),
+            "https://tests.invalid/keepsake/mysql",
+        )?));
+        root.migrate().await?;
         sqlx::raw_sql(dovecote_sqlx_mysql::MIGRATIONS[0].sql())
             .execute(&pool)
             .await?;
-        Ok((repo, pool))
+        Ok((root.for_tenant(Self::tenant()), pool))
     }
 
     async fn backend_marker(pool: &Self::Pool) -> Result<String, sqlx::Error> {

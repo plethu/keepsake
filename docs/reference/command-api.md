@@ -12,7 +12,7 @@ when the command needs them.
 | Actor | Use the application identity that caused the lifecycle change. |
 | Idempotency key | Add one when a caller may retry the same command after an uncertain result. |
 | Metadata | Add deterministic application context needed for audit, not request-local noise. |
-| Timestamp | Pass the operation timestamp explicitly, or bind it once with `repo.at(now)`. |
+| Timestamp | Pass the operation timestamp explicitly, or bind it once with a tenant-scoped `repo.at(now)`. |
 
 Use `ApplyKeepsake::for_spec::<Spec>` when the relation is a typed
 `RelationSpec`; use `ApplyKeepsake::new` when the relation id is dynamic. Pass

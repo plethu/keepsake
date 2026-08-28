@@ -6,7 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::error::{KeepsakeError, Result};
 use crate::policy::ExpiryPolicy;
 
-use super::{Keepsake, RelationId, validate_not_empty};
+use super::{Keepsake, RelationId, TenantId, validate_not_empty};
 
 /// Human-meaningful relation identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -168,6 +168,8 @@ const fn assert_valid_static_relation_component(value: &str) {
 /// Configured relation definition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RelationDefinition {
+    /// Tenant that owns this relation definition.
+    pub tenant_id: TenantId,
     /// Stable relation id.
     pub id: RelationId,
     /// Human-meaningful relation identity.
@@ -181,6 +183,7 @@ pub struct RelationDefinition {
 impl RelationDefinition {
     /// Builds a validated relation definition.
     pub fn new(
+        tenant_id: TenantId,
         id: RelationId,
         key: RelationKey,
         enabled: bool,
@@ -188,6 +191,7 @@ impl RelationDefinition {
     ) -> Result<Self> {
         expiry.validate()?;
         Ok(Self {
+            tenant_id,
             id,
             key,
             enabled,
@@ -196,21 +200,32 @@ impl RelationDefinition {
     }
 
     /// Builds an enabled relation definition.
-    pub fn enabled(id: RelationId, key: RelationKey, expiry: ExpiryPolicy) -> Result<Self> {
-        Self::new(id, key, true, expiry)
+    pub fn enabled(
+        tenant_id: TenantId,
+        id: RelationId,
+        key: RelationKey,
+        expiry: ExpiryPolicy,
+    ) -> Result<Self> {
+        Self::new(tenant_id, id, key, true, expiry)
     }
 
     /// Builds a disabled relation definition.
-    pub fn disabled(id: RelationId, key: RelationKey, expiry: ExpiryPolicy) -> Result<Self> {
-        Self::new(id, key, false, expiry)
+    pub fn disabled(
+        tenant_id: TenantId,
+        id: RelationId,
+        key: RelationKey,
+        expiry: ExpiryPolicy,
+    ) -> Result<Self> {
+        Self::new(tenant_id, id, key, false, expiry)
     }
 
     /// Builds a relation definition from a typed relation spec.
-    pub fn from_spec<Spec>(at: DateTime<Utc>) -> Result<Self>
+    pub fn from_spec<Spec>(tenant_id: TenantId, at: DateTime<Utc>) -> Result<Self>
     where
         Spec: RelationSpec,
     {
         Self::new(
+            tenant_id,
             Spec::ID,
             Spec::KEY.to_relation_key()?,
             Spec::ENABLED,
@@ -231,6 +246,12 @@ pub struct ActiveRelation {
 impl ActiveRelation {
     /// Builds an active relation and validates the membership relation id.
     pub fn new(keepsake: Keepsake, relation: RelationDefinition) -> Result<Self> {
+        if keepsake.tenant_id() != &relation.tenant_id {
+            return Err(KeepsakeError::TenantMismatch {
+                expected: relation.tenant_id,
+                actual: keepsake.tenant_id().clone(),
+            });
+        }
         if keepsake.relation_id() != relation.id {
             return Err(KeepsakeError::ActiveRelationMismatch {
                 keepsake_relation_id: keepsake.relation_id(),

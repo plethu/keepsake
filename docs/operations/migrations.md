@@ -1,5 +1,40 @@
 # Migrations
 
+## Tenant-aware Keepsake 3 migration
+
+The core tenant contract is a breaking API boundary and is not satisfied by
+adding a `tenant_id` field only in application code. The coordinated Keepsake
+3 SQLx and tenant-capable Dovecote release must install non-null tenant
+columns, tenant-prefixed indexes, tenant-aware uniqueness, and matching
+foreign-key invariants. Every read, mutation, expiry sweep, audit event, and
+delivery operation must bind the tenant explicitly.
+
+Published 1.x and 2.x migrations remain immutable. A v2-to-v3 upgrade must
+first stop or fence writers, inventory all rows, and supply an explicit
+operator-reviewed mapping from each existing row to a tenant. The migration
+must refuse incomplete mappings and must never invent a default tenant. Keep
+the mapping and reconciliation evidence with the deployment record.
+
+Relation definitions are tenant-owned in the new contract, so their natural
+key uniqueness is scoped by tenant. Clean installs use the backend-specific
+baselines under `migrations/v3/{postgres,mysql,sqlite}/`.
+
+For an existing Keepsake 2 database on any supported backend, call
+`prepare_tenant_upgrade`, apply an operator-reviewed mapping to every nullable
+`tenant_id` column, and then call `activate_tenant_upgrade`. The SQL artifacts
+are under `migrations/upgrade/v2_to_v3/{postgres,mysql,sqlite}/`. Activation
+refuses incomplete mappings and changes the domain keys and active indexes to
+tenant-leading composite forms; it never invents a tenant. MySQL separate
+databases and SQLite file-per-tenant deployments provide the clearest physical
+boundaries for regulated workloads; use shared schemas only with equivalent
+operational controls and verified tenant isolation tests.
+
+Do not enable tenant-aware writers until the Keepsake and Dovecote schema
+checks pass, cross-tenant isolation tests pass on the selected backend, and
+rollback/backup procedures have been rehearsed. The current 2.x clean baseline
+and historical upgrade paths below describe the pre-tenant schema and remain
+valid for existing installations.
+
 Keepsake 2.0 has an explicit clean-install track and an explicit historical
 upgrade track. The tracks share the domain schema but are not interchangeable.
 The clean track contains no Keepsake audit or outbox tables: Dovecote owns that
@@ -7,7 +42,7 @@ schema and must be installed separately with the selected SQLx adapter.
 
 ## New installation
 
-1. Install the Keepsake 2.0 clean baseline with `repo.migrate()`.
+1. Install the Keepsake 3.0 clean baseline with `repo.migrate()`.
 2. Install the matching Dovecote schema with its backend adapter.
 3. Construct the repository with an application-owned absolute source URI.
 4. Call `repo.check_schema()` before accepting writes.
@@ -18,6 +53,8 @@ repo.migrate().await?;
 // Dovecote's migration is installed by dovecote-sqlx-postgres (or the
 // matching SQLite/MySQL adapter).
 repo.check_schema().await?;
+let tenant = keepsake::TenantId::new("account-group-a")?;
+let account = repo.for_tenant(tenant);
 ```
 
 `migrate()` refuses a database marked as the legacy track. It does not drop
@@ -116,9 +153,10 @@ The recommended rolling sequence is:
 
 At-least-once cutover can produce one transport duplicate: a legacy publisher
 may publish before acknowledgement and Dovecote may publish after cutover.
-Both carry the same CloudEvents `(source, id)`, so consumers must deduplicate
-that identity. Deployments without consumer deduplication must use the
-maintenance-window path.
+Both carry the same tenant-scoped Dovecote `(tenant_id, source, event_id)`, so
+consumers must preserve tenant routing and deduplicate that identity.
+Deployments without consumer deduplication must use the maintenance-window
+path.
 
 ## Historical migration rules
 
@@ -139,8 +177,22 @@ DATABASE_URL=postgres://... cargo test -p keepsake-sqlx --test postgres --featur
 MYSQL_DATABASE_URL=mysql://... cargo test -p keepsake-sqlx --test mysql --features mysql-tests catalog_check_rejects_changed_column_index_and_constraint -- --ignored --test-threads=1
 ```
 
+The PostgreSQL ignored tests acquire a database-scoped advisory lock on their
+first schema reset and hold that session until the test process exits. This
+means overlapping PostgreSQL `cargo test` or `just test-db-postgres` commands
+against the same URL wait for one another instead of resetting each other's
+fixtures. Keep `--test-threads=1` so the destructive reset and migration-track
+selection remain ordered within each process; a crashed process releases the
+PostgreSQL session lock automatically.
+
 The same ignored backend targets include `upgrade_track_activates_after_importer_evidence`;
-run that test separately against PostgreSQL 17.11, MySQL 8.4/Innovation 26.7,
-and MariaDB 11.8. It exercises the historical upgrade migrations, additive
-Dovecote installation, importer evidence, activation, and the final catalog
-check.
+run that test separately against PostgreSQL 17.11 and MySQL 8.4/Innovation
+26.7. It exercises the historical upgrade migrations, additive Dovecote
+installation, importer evidence, activation, and the final catalog check.
+
+MariaDB 11.8 supports the clean v3 baseline and the tenant-aware runtime
+schema. The published 1.x MySQL migration bytes are immutable and contain a
+conditional generated column over `CHAR(36)` identifiers, which MariaDB cannot
+replay. Existing MariaDB installations on that historical track must use an
+operator-owned export/rebuild into the forward v3 baseline; do not edit or
+re-run the published migration files on MariaDB.

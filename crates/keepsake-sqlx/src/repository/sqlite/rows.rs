@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use keepsake::{
-    ExpiryPolicy, Keepsake, KeepsakeRecord, RelationDefinition, RelationKey, SubjectRef,
+    ExpiryPolicy, Keepsake, KeepsakeRecord, RelationDefinition, RelationKey, SubjectRef, TenantId,
 };
 use sqlx::Row;
 
@@ -15,6 +15,7 @@ pub(super) fn relation_from_row(
 ) -> RepositoryResult<RelationDefinition> {
     let expiry = serde_json::from_str::<ExpiryPolicy>(row.try_get("expiry_policy")?)?;
     Ok(RelationDefinition::new(
+        TenantId::new(row.try_get::<String, _>("tenant_id")?)?,
         parse_uuid(row.try_get("id")?)?,
         RelationKey::new(
             row.try_get::<String, _>("kind")?,
@@ -29,6 +30,7 @@ pub(super) fn keepsake_from_row(row: &sqlx::sqlite::SqliteRow) -> RepositoryResu
     let metadata = serde_json::from_str::<BTreeMap<String, String>>(row.try_get("metadata")?)?;
     let expiry = serde_json::from_str::<ExpiryPolicy>(row.try_get("expiry_policy")?)?;
     Ok(KeepsakeRecord {
+        tenant_id: TenantId::new(row.try_get::<String, _>("tenant_id")?)?,
         id: parse_uuid(row.try_get("id")?)?,
         subject: SubjectRef::new(
             row.try_get::<String, _>("subject_kind")?,
@@ -51,6 +53,7 @@ pub(super) fn relation_definition_from_active_row(
 ) -> RepositoryResult<RelationDefinition> {
     let expiry = serde_json::from_str::<ExpiryPolicy>(row.try_get("relation_expiry_policy")?)?;
     Ok(RelationDefinition::new(
+        TenantId::new(row.try_get::<String, _>("tenant_id")?)?,
         parse_uuid(row.try_get("relation_definition_id")?)?,
         RelationKey::new(
             row.try_get::<String, _>("relation_kind")?,

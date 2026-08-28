@@ -159,6 +159,7 @@ mod tests {
 
     fn relation(expiry: ExpiryPolicy) -> TestResult<RelationDefinition> {
         Ok(RelationDefinition::new(
+            crate::TenantId::new("tenant-a")?,
             Uuid::nil(),
             RelationKey::new("tag", "vip")?,
             true,

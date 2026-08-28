@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use keepsake::{
     ActorRef, ApplyKeepsake, CommandContext, ExpiryPolicy, FulfillmentPolicy, RelationDefinition,
-    RelationKey, SubjectRef,
+    RelationKey, SubjectRef, TenantId,
 };
 use keepsake_sqlx::RepositoryError;
 use uuid::Uuid;
@@ -31,9 +31,14 @@ pub enum TestError {
 #[async_trait::async_trait]
 pub trait BackendHarness {
     const BACKEND: &'static str;
+    const TENANT: &'static str;
 
     type Pool: Send + Sync;
     type Repo: Send + Sync;
+
+    fn tenant() -> TenantId {
+        TenantId::new(Self::TENANT).unwrap_or_else(|_| unreachable!("test tenant is valid"))
+    }
 
     async fn repo() -> TestResult<(Self::Repo, Self::Pool)>;
     async fn backend_marker(pool: &Self::Pool) -> Result<String, sqlx::Error>;
@@ -105,6 +110,7 @@ where
     H: BackendHarness,
 {
     let relation = RelationDefinition::enabled(
+        H::tenant(),
         Uuid::now_v7(),
         RelationKey::new("tag", format!("{}-{}", H::BACKEND, Uuid::now_v7()))?,
         expiry,
@@ -131,6 +137,7 @@ where
     let relation = upsert_relation::<H>(&repo, ExpiryPolicy::ManualOnly).await?;
     let subject = SubjectRef::new("account", format!("{}_acct_123", H::BACKEND))?;
     let command = ApplyKeepsake::new(
+        H::tenant(),
         subject.clone(),
         relation.id,
         ts("2026-01-01T00:01:00Z")?,
@@ -141,6 +148,7 @@ where
     let second = H::apply(
         &repo,
         &ApplyKeepsake::new(
+            H::tenant(),
             subject.clone(),
             relation.id,
             ts("2026-01-01T00:02:00Z")?,
@@ -170,6 +178,7 @@ where
         H::apply(
             &repo,
             &ApplyKeepsake::new(
+                H::tenant(),
                 subject.clone(),
                 relation_id,
                 ts("2026-01-01T00:01:00Z")?,
@@ -216,6 +225,7 @@ where
     let applied = H::apply(
         &repo,
         &ApplyKeepsake::new(
+            H::tenant(),
             subject,
             relation.id,
             ts("2026-01-01T00:01:00Z")?,
@@ -252,6 +262,7 @@ where
     let applied = H::apply(
         &repo,
         &ApplyKeepsake::new(
+            H::tenant(),
             subject,
             relation.id,
             ts("2026-01-01T00:01:00Z")?,
@@ -286,6 +297,7 @@ where
 {
     let (repo, _pool) = H::repo().await?;
     let disabled_relation = RelationDefinition::enabled(
+        H::tenant(),
         Uuid::from_u128(1),
         RelationKey::new("tag", format!("{}-disabled-first", H::BACKEND))?,
         ExpiryPolicy::WhenFulfilled {
@@ -296,6 +308,7 @@ where
         },
     )?;
     let enabled_relation = RelationDefinition::enabled(
+        H::tenant(),
         Uuid::from_u128(2),
         RelationKey::new("tag", format!("{}-enabled-second", H::BACKEND))?,
         ExpiryPolicy::WhenFulfilled {
@@ -315,6 +328,7 @@ where
     let disabled = H::apply(
         &repo,
         &ApplyKeepsake::new(
+            H::tenant(),
             disabled_subject.clone(),
             disabled_relation.id,
             ts("2026-01-01T00:02:00Z")?,
@@ -325,6 +339,7 @@ where
     let enabled = H::apply(
         &repo,
         &ApplyKeepsake::new(
+            H::tenant(),
             enabled_subject.clone(),
             enabled_relation.id,
             ts("2026-01-01T00:02:00Z")?,
@@ -368,6 +383,7 @@ where
 {
     let (repo, _pool) = H::repo().await?;
     let unfulfilled_relation = RelationDefinition::enabled(
+        H::tenant(),
         Uuid::from_u128(1),
         RelationKey::new("tag", format!("{}-unfulfilled-first", H::BACKEND))?,
         ExpiryPolicy::WhenFulfilled {
@@ -378,6 +394,7 @@ where
         },
     )?;
     let fulfilled_relation = RelationDefinition::enabled(
+        H::tenant(),
         Uuid::from_u128(2),
         RelationKey::new("tag", format!("{}-fulfilled-second", H::BACKEND))?,
         ExpiryPolicy::WhenFulfilled {
@@ -398,6 +415,7 @@ where
     let _unfulfilled = H::apply(
         &repo,
         &ApplyKeepsake::new(
+            H::tenant(),
             unfulfilled_subject.clone(),
             unfulfilled_relation.id,
             ts("2026-01-01T00:02:00Z")?,
@@ -408,6 +426,7 @@ where
     let fulfilled = H::apply(
         &repo,
         &ApplyKeepsake::new(
+            H::tenant(),
             fulfilled_subject.clone(),
             fulfilled_relation.id,
             ts("2026-01-01T00:02:00Z")?,

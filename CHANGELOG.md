@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- **Breaking SQLx API:** Keepsake SQLx is moving to the tenant-scoped 3.0
+  repository contract. PostgreSQL, MySQL, and SQLite clean installs use the
+  tenant-aware v3 baseline; the v2 upgrade requires an explicit operator
+  mapping, with no inferred tenant.
+- **Breaking core API:** added mandatory, validated domain-owned `TenantId`
+  values to Keepsake identities, commands, audit events, and provider query
+  boundaries. In-memory provider keys and lookups now remain tenant-scoped;
+  the matching SQLx/Dovecote migration and adapter track is required before
+  deploying tenant-aware persistence.
+
 ## 2.1.0 - 2026-08-28
 
 - Fixed MySQL relation upserts with an enabled relation cache so natural-key

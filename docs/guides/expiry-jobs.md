@@ -6,6 +6,8 @@ that worker from cron, a queue worker, or a service loop outside request paths.
 Keep the worker loop small and repeatable:
 
 ```rust
+let tenant = keepsake::TenantId::new("account-group-a")?;
+let repo = repo.for_tenant(tenant);
 let repo = repo.at(chrono::Utc::now());
 let expired = repo.expire_due_timed(500).await?;
 ```

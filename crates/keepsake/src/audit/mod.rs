@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::evaluation::DecisionKind;
-use crate::model::{ActorRef, ExpiryCause, KeepsakeId, RelationId, SubjectRef};
+use crate::model::{ActorRef, ExpiryCause, KeepsakeId, RelationId, SubjectRef, TenantId};
 
 #[cfg(any(test, feature = "test"))]
 mod memory;
@@ -20,6 +20,8 @@ pub use memory::{InMemoryAuditError, InMemoryAuditSink};
 /// Durable audit event.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditEvent {
+    /// Tenant that owns the audited keepsake.
+    pub tenant_id: TenantId,
     /// Stable identity of this audit occurrence.
     ///
     /// The identity is generated before persistence and must be reused when a

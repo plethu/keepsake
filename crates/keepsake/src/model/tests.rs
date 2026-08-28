@@ -28,6 +28,7 @@ fn ts(value: &str) -> TimestampResult<DateTime<Utc>> {
 
 fn record(expiry: ExpiryPolicy, state: LifecycleState) -> TestResult<KeepsakeRecord> {
     Ok(KeepsakeRecord {
+        tenant_id: TenantId::new("tenant-a")?,
         id: Uuid::nil(),
         subject: SubjectRef::new("user", "u_1")?,
         relation_id: Uuid::from_u128(1),
@@ -44,8 +45,15 @@ fn record(expiry: ExpiryPolicy, state: LifecycleState) -> TestResult<KeepsakeRec
 #[test]
 fn relation_definition_enabled_and_disabled_helpers_set_state() -> TestResult<()> {
     let key = RelationKey::new("tag", "trusted")?;
-    let enabled = RelationDefinition::enabled(Uuid::nil(), key.clone(), ExpiryPolicy::ManualOnly)?;
-    let disabled = RelationDefinition::disabled(Uuid::nil(), key, ExpiryPolicy::ManualOnly)?;
+    let tenant = TenantId::new("tenant-a")?;
+    let enabled = RelationDefinition::enabled(
+        tenant.clone(),
+        Uuid::nil(),
+        key.clone(),
+        ExpiryPolicy::ManualOnly,
+    )?;
+    let disabled =
+        RelationDefinition::disabled(tenant, Uuid::nil(), key, ExpiryPolicy::ManualOnly)?;
 
     assert!(enabled.enabled);
     assert!(!disabled.enabled);
@@ -62,6 +70,31 @@ fn relation_key_components_validate_independently() {
         RelationName::new(" ").map_err(|error| error.to_string()),
         Err("relation.name must not be empty".to_owned())
     );
+}
+
+#[test]
+fn tenant_id_is_validated_and_round_trips() -> TestResult<()> {
+    let tenant = TenantId::new("tenant-a")?;
+    assert_eq!(tenant.as_str(), "tenant-a");
+    assert_eq!(tenant.to_string(), "tenant-a");
+    assert!(TenantId::new(" ").is_err());
+    assert!(matches!(
+        TenantId::new("x".repeat(256)),
+        Err(KeepsakeError::TenantIdTooLong { .. })
+    ));
+    assert!(matches!(
+        TenantId::new("tenant\u{7f}"),
+        Err(KeepsakeError::TenantIdControlCharacter { .. })
+    ));
+    assert!(matches!(
+        TenantId::new("tenant\u{fdd0}"),
+        Err(KeepsakeError::TenantIdNoncharacter { .. })
+    ));
+
+    let encoded = serde_json::to_string(&tenant)?;
+    assert_eq!(serde_json::from_str::<TenantId>(&encoded)?, tenant);
+    assert!(serde_json::from_str::<TenantId>(r#""""#).is_err());
+    Ok(())
 }
 
 #[test]
@@ -96,6 +129,7 @@ crate::relation_spec! {
 #[test]
 fn relation_definition_can_be_built_from_spec() -> TestResult<()> {
     let definition = RelationDefinition::from_spec::<TrustedTag>(
+        TenantId::new("tenant-a")?,
         DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
             .map(|timestamp| timestamp.with_timezone(&Utc))?,
     )?;
@@ -112,7 +146,8 @@ fn relation_definition_can_be_built_from_spec() -> TestResult<()> {
 fn relation_spec_macro_supports_disabled_timed_specs() -> TestResult<()> {
     let at = DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
         .map(|timestamp| timestamp.with_timezone(&Utc))?;
-    let definition = RelationDefinition::from_spec::<DisabledTimedSanction>(at)?;
+    let definition =
+        RelationDefinition::from_spec::<DisabledTimedSanction>(TenantId::new("tenant-a")?, at)?;
 
     assert_eq!(
         definition.id,
@@ -128,6 +163,7 @@ fn relation_spec_macro_supports_disabled_timed_specs() -> TestResult<()> {
 #[test]
 fn applied_keepsake_exposes_common_accessors() -> TestResult<()> {
     let relation = RelationDefinition::enabled(
+        TenantId::new("tenant-a")?,
         Uuid::from_u128(1),
         RelationKey::new("tag", "trusted")?,
         ExpiryPolicy::At {
@@ -165,6 +201,7 @@ fn applied_keepsake_exposes_common_accessors() -> TestResult<()> {
 #[test]
 fn active_relation_validates_relation_match_and_active_state() -> TestResult<()> {
     let relation = RelationDefinition::enabled(
+        TenantId::new("tenant-a")?,
         Uuid::from_u128(1),
         RelationKey::new("tag", "trusted")?,
         ExpiryPolicy::ManualOnly,
@@ -182,6 +219,7 @@ fn active_relation_validates_relation_match_and_active_state() -> TestResult<()>
     assert_eq!(active.relation(), &relation);
 
     let wrong_relation = RelationDefinition::enabled(
+        TenantId::new("tenant-a")?,
         Uuid::from_u128(3),
         RelationKey::new("tag", "admin")?,
         ExpiryPolicy::ManualOnly,
@@ -197,6 +235,35 @@ fn active_relation_validates_relation_match_and_active_state() -> TestResult<()>
     assert!(matches!(
         ActiveRelation::new(revoked, relation),
         Err(KeepsakeError::InactiveActiveRelation { .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn active_relation_rejects_cross_tenant_values() -> TestResult<()> {
+    let relation = RelationDefinition::enabled(
+        TenantId::new("tenant-a")?,
+        Uuid::from_u128(1),
+        RelationKey::new("tag", "trusted")?,
+        ExpiryPolicy::ManualOnly,
+    )?;
+    let other_relation = RelationDefinition::enabled(
+        TenantId::new("tenant-b")?,
+        Uuid::from_u128(1),
+        RelationKey::new("tag", "trusted")?,
+        ExpiryPolicy::ManualOnly,
+    )?;
+    let keepsake = Keepsake::applied(
+        Uuid::from_u128(2),
+        SubjectRef::new("user", "u_1")?,
+        &relation,
+        ts("2026-01-01T00:00:00Z")?,
+        BTreeMap::new(),
+    )?;
+
+    assert!(matches!(
+        ActiveRelation::new(keepsake, other_relation),
+        Err(KeepsakeError::TenantMismatch { .. })
     ));
     Ok(())
 }

@@ -133,6 +133,13 @@ mod mysql_normalization_tests {
             )
             .is_some()
         );
+        for marker in [
+            "constraint keepsakes_state_check check",
+            "constraint keepsakes_expiry_policy_projection check",
+            "constraint keepsakes_lifecycle_timestamps check",
+        ] {
+            assert!(artifact_check_expression(super::MYSQL_V3_CLEAN_ARTIFACT, marker).is_some());
+        }
         assert!(
             artifact_check_expression(
                 super::MYSQL_UPGRADE_ARTIFACT,
@@ -146,6 +153,28 @@ mod mysql_normalization_tests {
         ] {
             assert!(artifact_check_expression(super::MYSQL_CLEAN_ARTIFACT, marker).is_some());
             assert!(artifact_check_expression(super::MYSQL_UPGRADE_ARTIFACT, marker).is_some());
+        }
+    }
+
+    #[test]
+    fn v3_mysql_identifier_shape_is_mariadb_compatible() {
+        let clean = super::normalize_sql(super::MYSQL_V3_CLEAN_ARTIFACT);
+        assert!(!clean.contains(" id char(36)"));
+        assert!(!clean.contains(" relation_id char(36)"));
+        assert!(!clean.contains(" keepsake_id char(36)"));
+        assert_eq!(clean.matches("varchar(36)").count(), 6);
+
+        let activation = super::normalize_sql(super::MYSQL_V3_UPGRADE_ACTIVATE_ARTIFACT);
+        for fragment in [
+            "modify id varchar(36) not null",
+            "modify id varchar(36) not null, modify relation_id varchar(36) not null",
+            "modify active_relation_key varchar(36) generated always",
+            "modify keepsake_id varchar(36) not null",
+        ] {
+            assert!(
+                activation.contains(fragment),
+                "missing activation fragment: {fragment}"
+            );
         }
     }
 
@@ -196,6 +225,26 @@ mod mysql_normalization_tests {
         assert!(!super::mysql_is_generated_extra("DEFAULT_GENERATED"));
         assert!(super::mysql_is_generated_extra("STORED GENERATED"));
     }
+
+    #[test]
+    fn v3_referential_actions_reject_update_cascade() {
+        assert!(super::mysql_v3_referential_action_matches(
+            "NO ACTION",
+            "NO ACTION"
+        ));
+        assert!(super::mysql_v3_referential_action_matches(
+            "NO ACTION",
+            "RESTRICT"
+        ));
+        assert!(!super::mysql_v3_referential_action_matches(
+            "NO ACTION",
+            "CASCADE"
+        ));
+        assert!(!super::mysql_v3_referential_action_matches(
+            "CASCADE",
+            "NO ACTION"
+        ));
+    }
 }
 
 #[cfg(all(test, feature = "postgres"))]
@@ -223,11 +272,61 @@ mod postgres_artifact_tests {
             assert!(artifact_check_expression(super::PG_UPGRADE_ARTIFACT, marker).is_some());
         }
     }
+
+    #[test]
+    fn v3_postgres_tenant_contract_requires_nonempty_c_collated_columns() {
+        let clean = super::normalize_sql(super::PG_V3_CLEAN_ARTIFACT);
+        assert_eq!(
+            clean
+                .matches("tenant_id text collate \"c\" not null")
+                .count(),
+            4
+        );
+        let activation = super::normalize_sql(super::PG_V3_UPGRADE_ACTIVATE_ARTIFACT);
+        assert_eq!(
+            activation
+                .matches("alter column tenant_id type text collate \"c\"")
+                .count(),
+            4
+        );
+        let prepare = super::normalize_sql(super::PG_V3_UPGRADE_PREPARE_ARTIFACT);
+        assert_eq!(
+            prepare
+                .matches("add column tenant_id text collate \"c\"")
+                .count(),
+            4
+        );
+        for marker in [
+            "keepsake_relation_definitions_tenant_nonempty",
+            "keepsakes_tenant_nonempty",
+            "keepsake_fulfillment_counter_tenant_nonempty",
+            "keepsake_fulfillment_checklist_tenant_nonempty",
+        ] {
+            let marker = format!("constraint {marker} check");
+            assert!(artifact_check_expression(super::PG_V3_CLEAN_ARTIFACT, &marker).is_some());
+            assert!(
+                artifact_check_expression(super::PG_V3_UPGRADE_ACTIVATE_ARTIFACT, &marker)
+                    .is_some()
+            );
+        }
+    }
 }
 
 #[cfg(feature = "postgres")]
 const PG_CLEAN_ARTIFACT: &str =
     include_str!("../../migrations/v2/postgres/2000_clean_baseline.sql");
+
+#[cfg(all(test, feature = "postgres"))]
+const PG_V3_CLEAN_ARTIFACT: &str =
+    include_str!("../../migrations/v3/postgres/3000_clean_baseline.sql");
+
+#[cfg(all(test, feature = "postgres"))]
+const PG_V3_UPGRADE_ACTIVATE_ARTIFACT: &str =
+    include_str!("../../migrations/upgrade/v2_to_v3/postgres/activate.sql");
+
+#[cfg(all(test, feature = "postgres"))]
+const PG_V3_UPGRADE_PREPARE_ARTIFACT: &str =
+    include_str!("../../migrations/upgrade/v2_to_v3/postgres/prepare.sql");
 
 #[cfg(feature = "postgres")]
 const PG_UPGRADE_ARTIFACT: &str = concat!(
@@ -243,6 +342,14 @@ const PG_UPGRADE_ARTIFACT: &str = concat!(
 #[cfg(feature = "mysql")]
 const MYSQL_CLEAN_ARTIFACT: &str =
     include_str!("../../migrations/v2/mysql/2000_clean_baseline.sql");
+
+#[cfg(feature = "mysql")]
+const MYSQL_V3_CLEAN_ARTIFACT: &str =
+    include_str!("../../migrations/v3/mysql/3000_clean_baseline.sql");
+
+#[cfg(all(test, feature = "mysql"))]
+const MYSQL_V3_UPGRADE_ACTIVATE_ARTIFACT: &str =
+    include_str!("../../migrations/upgrade/v2_to_v3/mysql/activate.sql");
 
 #[cfg(feature = "mysql")]
 const MYSQL_UPGRADE_ARTIFACT: &str = concat!(
@@ -616,6 +723,139 @@ pub(super) async fn sqlite_upgrade_schema_check(pool: &sqlx::SqlitePool) -> Repo
 }
 
 #[cfg(feature = "sqlite")]
+#[allow(clippy::too_many_lines)]
+async fn sqlite_v3_domain_shape_check(pool: &sqlx::SqlitePool) -> RepositoryResult<()> {
+    use sqlx::Row;
+
+    for table in [
+        "keepsake_relation_definitions",
+        "keepsakes",
+        "keepsake_fulfillment_counters",
+        "keepsake_fulfillment_checklist",
+    ] {
+        let columns = match table {
+            "keepsake_relation_definitions" => {
+                sqlx::query("pragma table_info(keepsake_relation_definitions)")
+                    .fetch_all(pool)
+                    .await?
+            }
+            "keepsakes" => {
+                sqlx::query("pragma table_info(keepsakes)")
+                    .fetch_all(pool)
+                    .await?
+            }
+            "keepsake_fulfillment_counters" => {
+                sqlx::query("pragma table_info(keepsake_fulfillment_counters)")
+                    .fetch_all(pool)
+                    .await?
+            }
+            "keepsake_fulfillment_checklist" => {
+                sqlx::query("pragma table_info(keepsake_fulfillment_checklist)")
+                    .fetch_all(pool)
+                    .await?
+            }
+            _ => unreachable!("table list is static"),
+        };
+        let tenant = columns
+            .iter()
+            .find(|row| row.try_get::<String, _>("name").ok().as_deref() == Some("tenant_id"))
+            .ok_or_else(|| mismatch(format!("{table} lacks tenant_id")))?;
+        if tenant.try_get::<i64, _>("notnull")? != 1 {
+            return Err(mismatch(format!("{table}.tenant_id is nullable")));
+        }
+        let definition = sqlx::query_scalar::<_, Option<String>>(
+            "select sql from sqlite_master where type = 'table' and name = ?",
+        )
+        .bind(table)
+        .fetch_optional(pool)
+        .await?
+        .flatten()
+        .ok_or_else(|| mismatch(format!("missing v3 table {table}")))?;
+        if !compact_sql(&definition).contains("length(cast(tenant_idasblob))>0") {
+            return Err(mismatch(format!(
+                "{table}.tenant_id is not non-empty constrained"
+            )));
+        }
+    }
+
+    for index in [
+        "keepsake_relation_definitions_tenant_key",
+        "keepsakes_one_active_relation_per_subject",
+        "keepsakes_active_subject_lookup",
+        "keepsakes_active_relation_membership",
+        "keepsakes_due_timed_expiry",
+        "keepsakes_due_fulfilled_expiry",
+        "keepsake_fulfillment_counter_scan",
+        "keepsake_fulfillment_checklist_scan",
+    ] {
+        let sql = sqlx::query_scalar::<_, Option<String>>(
+            "select sql from sqlite_master where type = 'index' and name = ?",
+        )
+        .bind(index)
+        .fetch_optional(pool)
+        .await?
+        .flatten()
+        .ok_or_else(|| mismatch(format!("missing v3 index {index}")))?;
+        if !compact_sql(&sql).contains("(tenant_id,") {
+            return Err(mismatch(format!("v3 index {index} is not tenant-leading")));
+        }
+    }
+
+    for trigger in [
+        "keepsakes_clean_invariants_insert",
+        "keepsakes_clean_invariants_update",
+    ] {
+        let sql = sqlx::query_scalar::<_, Option<String>>(
+            "select sql from sqlite_master where type = 'trigger' and name = ?",
+        )
+        .bind(trigger)
+        .fetch_optional(pool)
+        .await?
+        .flatten()
+        .ok_or_else(|| mismatch(format!("missing v3 trigger {trigger}")))?;
+        let compact = compact_sql(&sql);
+        if !compact.contains("raise(abort,'keepsakes_clean_invariants')") {
+            return Err(mismatch(format!("v3 trigger {trigger} definition differs")));
+        }
+    }
+
+    for (table, message) in [
+        (
+            "keepsakes",
+            "keepsakes relation foreign key is not tenant-composite",
+        ),
+        (
+            "keepsake_fulfillment_counters",
+            "counter foreign key is not tenant-composite",
+        ),
+        (
+            "keepsake_fulfillment_checklist",
+            "checklist foreign key is not tenant-composite",
+        ),
+    ] {
+        let foreign_keys = match table {
+            "keepsakes" => sqlx::query("pragma foreign_key_list(keepsakes)"),
+            "keepsake_fulfillment_counters" => {
+                sqlx::query("pragma foreign_key_list(keepsake_fulfillment_counters)")
+            }
+            "keepsake_fulfillment_checklist" => {
+                sqlx::query("pragma foreign_key_list(keepsake_fulfillment_checklist)")
+            }
+            _ => unreachable!("table list is static"),
+        }
+        .fetch_all(pool)
+        .await?;
+        if !foreign_keys.iter().any(|row| {
+            row.try_get::<String, _>("from").ok().as_deref() == Some("tenant_id")
+                && row.try_get::<String, _>("to").ok().as_deref() == Some("tenant_id")
+        }) {
+            return Err(mismatch(message));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "sqlite")]
 pub(super) async fn sqlite_runtime_schema_check(pool: &sqlx::SqlitePool) -> RepositoryResult<()> {
     let metadata_exists = sqlx::query_scalar::<_, i64>(
         "select count(*) from sqlite_master where type = 'table' and name = 'keepsake_schema_metadata'",
@@ -644,6 +884,10 @@ pub(super) async fn sqlite_runtime_schema_check(pool: &sqlx::SqlitePool) -> Repo
     .fetch_optional(pool)
     .await?
     .flatten();
+    if track.as_deref() == Some("3") {
+        sqlite_v3_domain_shape_check(pool).await?;
+        return Ok(());
+    }
     if track.as_deref() != Some("2") {
         return Err(RepositoryError::BackendMismatch {
             expected: "2.0 active schema",
@@ -681,6 +925,7 @@ pub(super) async fn sqlite_clean_schema_preflight(pool: &sqlx::SqlitePool) -> Re
     .await?
     .flatten();
     match track.as_deref() {
+        Some("3") => sqlite_v3_domain_shape_check(pool).await,
         Some("2") => {
             let has_legacy = sqlx::query_scalar::<_, i64>(
                 "select count(*) from sqlite_master where type = 'table' and name = 'keepsake_audit_events'",
@@ -694,14 +939,17 @@ pub(super) async fn sqlite_clean_schema_preflight(pool: &sqlx::SqlitePool) -> Re
                     actual: "activated upgrade track".to_owned(),
                 });
             }
-            sqlite_domain_shape_check(pool, false).await
+            Err(RepositoryError::BackendMismatch {
+                expected: "3.0 clean track",
+                actual: "2.0 clean track; run the explicit tenant upgrade route".to_owned(),
+            })
         }
         Some(actual) => Err(RepositoryError::BackendMismatch {
-            expected: "2.0 clean track",
+            expected: "3.0 clean track",
             actual: actual.to_owned(),
         }),
         None => Err(RepositoryError::BackendMismatch {
-            expected: "2.0 clean track",
+            expected: "3.0 clean track",
             actual: "legacy schema; call upgrade_migrate".to_owned(),
         }),
     }
@@ -733,6 +981,19 @@ pub(super) async fn sqlite_upgrade_schema_preflight(
         return Err(RepositoryError::BackendMismatch {
             expected: "legacy upgrade track",
             actual: "2.0 clean track".to_owned(),
+        });
+    }
+    let has_v3 = sqlx::query_scalar::<_, Option<String>>(
+        "select value from keepsake_schema_metadata where key = 'api_track'",
+    )
+    .fetch_optional(pool)
+    .await?
+    .flatten()
+    .is_some_and(|value| value == "3");
+    if has_v3 {
+        return Err(RepositoryError::BackendMismatch {
+            expected: "legacy upgrade track",
+            actual: "3.0 clean track".to_owned(),
         });
     }
     sqlite_schema_preflight(pool).await
@@ -1469,8 +1730,20 @@ fn mysql_catalog_check_matches(
     name: &str,
     actual: &str,
     expected: &str,
+    maria_db: bool,
 ) -> bool {
     let actual = normalize_check_expression(actual);
+    if maria_db && name == "keepsakes_expiry_policy_projection" {
+        // MariaDB deparses redundant boolean grouping around AND/OR terms.
+        // Keep this equivalent form explicit so the verifier remains strict
+        // about the expression while accepting the server's canonical output.
+        return actual
+            == "(json_unquote(json_extract(expiry_policy,'$.type'))=any(array['manual_only','at','when_fulfilled'])and(json_unquote(json_extract(expiry_policy,'$.type'))='at'andexpires_atisnotnullandcast(replace(replace(json_unquote(json_extract(expiry_policy,'$.timestamp')),'t',''),'z','')asdatetime(6))=expires_atorjson_unquote(json_extract(expiry_policy,'$.type'))=any(array['manual_only','when_fulfilled'])andexpires_atisnull))istrue";
+    }
+    if maria_db && name == "keepsakes_lifecycle_timestamps" && !activated_upgrade {
+        return actual
+            == "(state='applied'andrevoked_atisnullandfulfilled_atisnullorstate='revoked'andrevoked_atisnotnullandfulfilled_atisnullorstate='expired'andrevoked_atisnulland(json_unquote(json_extract(expiry_policy,'$.type'))='at'andexpires_atisnotnullandfulfilled_atisnullorjson_unquote(json_extract(expiry_policy,'$.type'))='when_fulfilled'andfulfilled_atisnotnullandexpires_atisnull))istrue";
+    }
     if name == "keepsakes_expiry_policy_projection" {
         return actual
             == "((json_unquote(json_extract(expiry_policy,'$.type'))=any(array['manual_only','at','when_fulfilled']))and(((json_unquote(json_extract(expiry_policy,'$.type'))='at')and(expires_atisnotnull)and(cast(replace(replace(json_unquote(json_extract(expiry_policy,'$.timestamp')),'t',''),'z','')asdatetime(6))=expires_at))or((json_unquote(json_extract(expiry_policy,'$.type'))=any(array['manual_only','when_fulfilled']))and(expires_atisnull))))istrue";
@@ -1811,19 +2084,391 @@ pub(super) async fn postgres_runtime_schema_check(pool: &sqlx::PgPool) -> Reposi
     .fetch_optional(pool)
     .await?
     .flatten();
-    if track.as_deref() != Some("2") {
+    match track.as_deref() {
+        Some("3") => postgres_v3_runtime_schema_check(pool).await,
+        Some("2") => Err(RepositoryError::BackendMismatch {
+            expected: "3.0 active schema",
+            actual: "schema is still on the 2.0 API track; run the explicit tenant upgrade route"
+                .to_owned(),
+        }),
+        Some(actual) => Err(RepositoryError::BackendMismatch {
+            expected: "3.0 active schema",
+            actual: format!("unsupported Keepsake API track {actual}"),
+        }),
+        None => Err(RepositoryError::BackendMismatch {
+            expected: "3.0 active schema",
+            actual: "schema is not activated for the 3.0 API".to_owned(),
+        }),
+    }
+}
+
+#[cfg(feature = "postgres")]
+async fn postgres_v3_runtime_schema_check(pool: &sqlx::PgPool) -> RepositoryResult<()> {
+    let expected_tables = [
+        "keepsake_relation_definitions",
+        "keepsakes",
+        "keepsake_fulfillment_counters",
+        "keepsake_fulfillment_checklist",
+    ];
+    let table_count = sqlx::query_scalar::<_, i64>(
+        "select count(*) from information_schema.tables where table_schema = 'public' and table_name = any($1)",
+    )
+    .bind(expected_tables.as_slice())
+    .fetch_one(pool)
+    .await?;
+    let tenant_column_count = sqlx::query_scalar::<_, i64>(
+        "select count(*) from information_schema.columns where table_schema = 'public' and table_name = any($1) and column_name = 'tenant_id'",
+    )
+    .bind(expected_tables.as_slice())
+    .fetch_one(pool)
+    .await?;
+    let tenant_collation_count = sqlx::query_scalar::<_, i64>(
+        "select count(*) from information_schema.columns where table_schema = 'public' and table_name = any($1) and column_name = 'tenant_id' and collation_name = 'C'",
+    )
+    .bind(expected_tables.as_slice())
+    .fetch_one(pool)
+    .await?;
+    if table_count != 4 || tenant_column_count != 4 || tenant_collation_count != 4 {
         return Err(RepositoryError::BackendMismatch {
-            expected: "2.0 active schema",
-            actual: "schema is not activated for the 2.0 API".to_owned(),
+            expected: "complete Keepsake 3.0 tenant-aware PostgreSQL schema",
+            actual: "missing tenant-owned Keepsake table, column, or C collation".to_owned(),
         });
     }
 
-    let has_legacy = sqlx::query_scalar::<_, bool>(
-        "select to_regclass('public.keepsake_audit_events') is not null",
+    postgres_v3_columns_check(pool).await?;
+
+    let indexes = sqlx::query_scalar::<_, i64>(
+        "select count(*) from pg_indexes where schemaname = 'public' and indexname = any($1)",
     )
+    .bind([
+        "keepsakes_one_active_relation_per_subject",
+        "keepsakes_active_subject_lookup",
+        "keepsakes_active_relation_membership",
+        "keepsakes_due_timed_expiry",
+        "keepsakes_due_fulfilled_expiry",
+        "keepsake_fulfillment_counter_scan",
+        "keepsake_fulfillment_checklist_scan",
+    ])
     .fetch_one(pool)
     .await?;
-    postgres_catalog_shape_check(pool, has_legacy).await
+    if indexes != 7 {
+        return Err(RepositoryError::BackendMismatch {
+            expected: "tenant-leading Keepsake 3.0 PostgreSQL indexes",
+            actual: "one or more tenant-aware indexes are missing".to_owned(),
+        });
+    }
+    postgres_v3_constraints_check(pool).await?;
+    postgres_v3_indexes_check(pool).await?;
+    Ok(())
+}
+
+#[cfg(feature = "postgres")]
+async fn postgres_v3_columns_check(pool: &sqlx::PgPool) -> RepositoryResult<()> {
+    use sqlx::Row;
+
+    // The v3 tables retain the v2 column types and add one tenant_id column to
+    // each relation-owned table. Reuse the v2 catalog contract for the stable
+    // columns, then verify the tenant columns separately because their C
+    // collation is part of the identity-isolation contract.
+    for expected in PG_CLEAN_COLUMNS {
+        let row = sqlx::query(
+            "select data_type, udt_name, is_nullable, column_default, is_identity, is_generated, generation_expression from information_schema.columns where table_schema = 'public' and table_name = $1 and column_name = $2",
+        )
+        .bind(expected.table)
+        .bind(expected.name)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| mismatch(format!("missing column {}.{}", expected.table, expected.name)))?;
+        let data_type: String = row.try_get("data_type")?;
+        let udt_name: String = row.try_get("udt_name")?;
+        let nullable: String = row.try_get("is_nullable")?;
+        let default: Option<String> = row.try_get("column_default")?;
+        let identity: String = row.try_get("is_identity")?;
+        let generated: String = row.try_get("is_generated")?;
+        let generation_expression: Option<String> = row.try_get("generation_expression")?;
+        if data_type != expected.data_type
+            || udt_name != expected.udt_name
+            || (nullable == "YES") != expected.nullable
+            || identity != "NO"
+            || generated != "NEVER"
+            || generation_expression.is_some()
+            || !pg_default_matches(default.as_deref(), expected.default, expected.sequence)
+        {
+            return Err(mismatch(format!(
+                "column {}.{} has unexpected v3 catalog semantics",
+                expected.table, expected.name
+            )));
+        }
+    }
+
+    for table in [
+        "keepsake_relation_definitions",
+        "keepsakes",
+        "keepsake_fulfillment_counters",
+        "keepsake_fulfillment_checklist",
+    ] {
+        let row = sqlx::query(
+            "select data_type, udt_name, is_nullable, column_default, collation_name, is_identity, is_generated, generation_expression from information_schema.columns where table_schema = 'public' and table_name = $1 and column_name = 'tenant_id'",
+        )
+        .bind(table)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| mismatch(format!("missing column {table}.tenant_id")))?;
+        let data_type: String = row.try_get("data_type")?;
+        let udt_name: String = row.try_get("udt_name")?;
+        let nullable: String = row.try_get("is_nullable")?;
+        let default: Option<String> = row.try_get("column_default")?;
+        let collation: Option<String> = row.try_get("collation_name")?;
+        let identity: String = row.try_get("is_identity")?;
+        let generated: String = row.try_get("is_generated")?;
+        let generation_expression: Option<String> = row.try_get("generation_expression")?;
+        if data_type != "text"
+            || udt_name != "text"
+            || nullable != "NO"
+            || default.is_some()
+            || collation.as_deref() != Some("C")
+            || identity != "NO"
+            || generated != "NEVER"
+            || generation_expression.is_some()
+        {
+            return Err(mismatch(format!(
+                "column {table}.tenant_id has unexpected v3 catalog semantics"
+            )));
+        }
+    }
+
+    let column_count = sqlx::query_scalar::<_, i64>(
+        "select count(*) from information_schema.columns where table_schema = 'public' and table_name = any($1)",
+    )
+    .bind([
+        "keepsake_schema_metadata",
+        "keepsake_relation_definitions",
+        "keepsakes",
+        "keepsake_fulfillment_counters",
+        "keepsake_fulfillment_checklist",
+    ])
+    .fetch_one(pool)
+    .await?;
+    let expected_count = i64::try_from(PG_CLEAN_COLUMNS.len() + 4).unwrap_or(i64::MAX);
+    if column_count != expected_count {
+        return Err(mismatch("v3 domain tables contain unexpected columns"));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "postgres")]
+#[allow(clippy::too_many_lines)]
+async fn postgres_v3_constraints_check(pool: &sqlx::PgPool) -> RepositoryResult<()> {
+    use sqlx::Row;
+
+    // Compare catalog definitions rather than only constraint names. Names
+    // generated for composite unique constraints are PostgreSQL-version
+    // details, while the tenant-leading columns and foreign-key pairs are the
+    // actual isolation contract.
+    let rows = sqlx::query(
+        "select c.relname, x.contype::text as contype, x.conname, pg_get_constraintdef(x.oid, true) as definition from pg_constraint x join pg_class c on c.oid = x.conrelid join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relname = any($1) and x.contype in ('p','u','f','c')",
+    )
+    .bind([
+        "keepsake_schema_metadata",
+        "keepsake_relation_definitions",
+        "keepsakes",
+        "keepsake_fulfillment_counters",
+        "keepsake_fulfillment_checklist",
+    ])
+    .fetch_all(pool)
+    .await?;
+    if rows.len() != 20 {
+        return Err(RepositoryError::BackendMismatch {
+            expected: "complete Keepsake 3.0 PostgreSQL constraints",
+            actual: "primary, foreign, unique, or check constraint count differs".to_owned(),
+        });
+    }
+
+    let expected = [
+        ("keepsake_schema_metadata", "p", "primary key (key)"),
+        (
+            "keepsake_relation_definitions",
+            "p",
+            "primary key (tenant_id, id)",
+        ),
+        (
+            "keepsake_relation_definitions",
+            "u",
+            "unique (tenant_id, kind, key)",
+        ),
+        ("keepsakes", "p", "primary key (tenant_id, id)"),
+        (
+            "keepsakes",
+            "f",
+            "foreign key (tenant_id, relation_id) references keepsake_relation_definitions(tenant_id, id)",
+        ),
+        (
+            "keepsake_fulfillment_counters",
+            "p",
+            "primary key (tenant_id, keepsake_id, key)",
+        ),
+        (
+            "keepsake_fulfillment_counters",
+            "f",
+            "foreign key (tenant_id, keepsake_id) references keepsakes(tenant_id, id) on delete cascade",
+        ),
+        (
+            "keepsake_fulfillment_checklist",
+            "p",
+            "primary key (tenant_id, keepsake_id, item)",
+        ),
+        (
+            "keepsake_fulfillment_checklist",
+            "f",
+            "foreign key (tenant_id, keepsake_id) references keepsakes(tenant_id, id) on delete cascade",
+        ),
+    ];
+
+    for row in rows {
+        let table: String = row.try_get("relname")?;
+        let kind: String = row.try_get("contype")?;
+        let name: String = row.try_get("conname")?;
+        let definition: String = row.try_get("definition")?;
+        let normalized = normalize_sql(&definition).replace("public.", "");
+        let matches = if kind == "c" {
+            let check = normalize_check_expression(&definition);
+            match name.as_str() {
+                "keepsake_relation_definitions_tenant_size"
+                | "keepsake_relation_definitions_tenant_nonempty"
+                | "keepsakes_tenant_size"
+                | "keepsakes_tenant_nonempty"
+                | "keepsake_fulfillment_counter_tenant_size"
+                | "keepsake_fulfillment_counter_tenant_nonempty"
+                | "keepsake_fulfillment_checklist_tenant_size"
+                | "keepsake_fulfillment_checklist_tenant_nonempty" => match name.as_str() {
+                    "keepsake_relation_definitions_tenant_nonempty"
+                    | "keepsakes_tenant_nonempty"
+                    | "keepsake_fulfillment_counter_tenant_nonempty"
+                    | "keepsake_fulfillment_checklist_tenant_nonempty" => {
+                        check.contains("octet_length(tenant_id)>0")
+                    }
+                    _ => check.contains("octet_length(tenant_id)<=255"),
+                },
+                "keepsakes_state_check" => {
+                    check.contains("state=any(array['applied','revoked','expired'])")
+                }
+                "keepsakes_expiry_policy_projection" => {
+                    check.contains(
+                        "(expiry_policy->>'type')=any(array['manual_only','at','when_fulfilled'])",
+                    ) && check.contains("expires_atisnotnull")
+                        && check.contains("expires_atisnull")
+                }
+                "keepsakes_lifecycle_timestamps" => {
+                    check.contains("state='applied'andrevoked_atisnullandfulfilled_atisnull")
+                        && check
+                            .contains("state='revoked'andrevoked_atisnotnullandfulfilled_atisnull")
+                        && check.contains("state='expired'andrevoked_atisnull")
+                        && check.contains("(expiry_policy->>'type')='at'")
+                        && check.contains("(expiry_policy->>'type')='when_fulfilled'")
+                }
+                _ => false,
+            }
+        } else {
+            expected
+                .iter()
+                .any(|(expected_table, expected_kind, definition)| {
+                    *expected_table == table
+                        && *expected_kind == kind
+                        && normalize_sql(definition) == normalized
+                })
+        };
+        if !matches {
+            return Err(RepositoryError::BackendMismatch {
+                expected: "complete Keepsake 3.0 PostgreSQL constraints",
+                actual: format!("unexpected or altered constraint {table}.{name}"),
+            });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "postgres")]
+async fn postgres_v3_indexes_check(pool: &sqlx::PgPool) -> RepositoryResult<()> {
+    use sqlx::Row;
+
+    let expected = [
+        (
+            "keepsakes_one_active_relation_per_subject",
+            "keepsakes",
+            true,
+            "tenant_id,subject_kind,subject_id,relation_id",
+            "state='applied'",
+        ),
+        (
+            "keepsakes_active_subject_lookup",
+            "keepsakes",
+            false,
+            "tenant_id,subject_kind,subject_id,relation_id,id",
+            "state='applied'",
+        ),
+        (
+            "keepsakes_active_relation_membership",
+            "keepsakes",
+            false,
+            "tenant_id,relation_id,subject_kind,subject_id,id",
+            "state='applied'",
+        ),
+        (
+            "keepsakes_due_timed_expiry",
+            "keepsakes",
+            false,
+            "tenant_id,expires_at,relation_id,subject_kind,subject_id,id",
+            "state='applied'andexpires_atisnotnull",
+        ),
+        (
+            "keepsakes_due_fulfilled_expiry",
+            "keepsakes",
+            false,
+            "tenant_id,relation_id,subject_kind,subject_id,id",
+            "state='applied'andexpiry_policy->>'type'='when_fulfilled'",
+        ),
+        (
+            "keepsake_fulfillment_counter_scan",
+            "keepsake_fulfillment_counters",
+            false,
+            "tenant_id,key,value,keepsake_id",
+            "",
+        ),
+        (
+            "keepsake_fulfillment_checklist_scan",
+            "keepsake_fulfillment_checklist",
+            false,
+            "tenant_id,item,complete,keepsake_id",
+            "",
+        ),
+    ];
+
+    for (name, table, unique, columns, predicate) in expected {
+        let row = sqlx::query(
+            "select ix.indisunique, pg_get_indexdef(ix.indexrelid, 0, true) as definition from pg_index ix join pg_class c on c.oid = ix.indexrelid join pg_namespace n on n.oid = c.relnamespace join pg_class table_class on table_class.oid = ix.indrelid where n.nspname = 'public' and c.relname = $1 and table_class.relname = $2",
+        )
+        .bind(name)
+        .bind(table)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| mismatch(format!("missing index {name}")))?;
+        let actual_unique: bool = row.try_get("indisunique")?;
+        let definition: String = row.try_get("definition")?;
+        let compact = compact_pg_index(&definition);
+        let expected_prefix = format!("on{table}({columns})");
+        let actual_predicate = compact
+            .split_once("where")
+            .map_or(String::new(), |(_, value)| value.replace(['(', ')'], ""));
+        if actual_unique != unique
+            || !compact.contains(&expected_prefix)
+            || actual_predicate != predicate
+        {
+            return Err(mismatch(format!(
+                "index {name} columns, uniqueness, or predicate differ"
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "postgres")]
@@ -1891,6 +2536,21 @@ pub(super) async fn postgres_upgrade_schema_preflight(pool: &sqlx::PgPool) -> Re
         return Err(RepositoryError::BackendMismatch {
             expected: "legacy upgrade track",
             actual: "2.0 clean track".to_owned(),
+        });
+    }
+    let has_v3 = if metadata.is_some() {
+        sqlx::query_scalar::<_, bool>(
+            "select exists (select 1 from keepsake_schema_metadata where key = 'api_track' and value = '3')",
+        )
+        .fetch_one(pool)
+        .await?
+    } else {
+        false
+    };
+    if has_v3 {
+        return Err(RepositoryError::BackendMismatch {
+            expected: "legacy upgrade track",
+            actual: "3.0 clean track".to_owned(),
         });
     }
     postgres_schema_preflight(pool).await
@@ -2260,6 +2920,64 @@ const MYSQL_CLEAN_COLUMNS: &[MySqlColumn<'_>] = &[
 ];
 
 #[cfg(feature = "mysql")]
+const MYSQL_V3_TENANT_COLUMNS: &[MySqlColumn<'_>] = &[
+    MySqlColumn {
+        table: "keepsake_relation_definitions",
+        name: "tenant_id",
+        column_type: "varbinary(255)",
+        nullable: false,
+        default: None,
+        auto_increment: false,
+        generated: None,
+    },
+    MySqlColumn {
+        table: "keepsakes",
+        name: "tenant_id",
+        column_type: "varbinary(255)",
+        nullable: false,
+        default: None,
+        auto_increment: false,
+        generated: None,
+    },
+    MySqlColumn {
+        table: "keepsake_fulfillment_counters",
+        name: "tenant_id",
+        column_type: "varbinary(255)",
+        nullable: false,
+        default: None,
+        auto_increment: false,
+        generated: None,
+    },
+    MySqlColumn {
+        table: "keepsake_fulfillment_checklist",
+        name: "tenant_id",
+        column_type: "varbinary(255)",
+        nullable: false,
+        default: None,
+        auto_increment: false,
+        generated: None,
+    },
+];
+
+#[cfg(feature = "mysql")]
+fn mysql_v3_clean_columns() -> Vec<MySqlColumn<'static>> {
+    // MariaDB does not permit a conditional generated expression to read a
+    // CHAR column. The v3 baseline therefore uses VARCHAR for UUID text
+    // columns, preserving the wire representation while keeping the
+    // active-relation projection portable across both MySQL families.
+    MYSQL_CLEAN_COLUMNS
+        .iter()
+        .copied()
+        .map(|mut column| {
+            if column.column_type == "char(36)" {
+                column.column_type = "varchar(36)";
+            }
+            column
+        })
+        .collect()
+}
+
+#[cfg(feature = "mysql")]
 const MYSQL_LEGACY_COLUMNS: &[MySqlColumn<'_>] = &[
     MySqlColumn {
         table: "keepsake_audit_events",
@@ -2526,61 +3244,33 @@ fn mysql_expected_check_expression(activated_upgrade: bool, name: &str) -> Optio
 }
 
 #[cfg(feature = "mysql")]
-#[allow(clippy::too_many_lines)]
-async fn mysql_catalog_shape_check(
-    pool: &sqlx::MySqlPool,
-    activated_upgrade: bool,
-) -> RepositoryResult<()> {
-    use sqlx::Row;
-    let tables: &[&str] = if activated_upgrade {
-        &[
-            "keepsake_schema_metadata",
-            "keepsake_relation_definitions",
-            "keepsakes",
-            "keepsake_fulfillment_counters",
-            "keepsake_fulfillment_checklist",
-            "keepsake_audit_events",
-            "keepsake_audit_context_attributes",
-            "keepsake_audit_outbox",
-        ]
-    } else {
-        &[
-            "keepsake_schema_metadata",
-            "keepsake_relation_definitions",
-            "keepsakes",
-            "keepsake_fulfillment_counters",
-            "keepsake_fulfillment_checklist",
-        ]
-    };
-
-    let expected: Vec<MySqlColumn<'_>> = MYSQL_CLEAN_COLUMNS
-        .iter()
-        .chain(
-            activated_upgrade
-                .then_some(MYSQL_LEGACY_COLUMNS)
-                .into_iter()
-                .flatten(),
-        )
-        .copied()
-        .collect();
-    let table_count = sqlx::query_scalar::<_, i64>("select count(*) from information_schema.tables where table_schema = database() and table_name in (?,?,?,?,?,?,?,?)").bind(tables.first().unwrap_or(&"")).bind(tables.get(1).unwrap_or(&"")).bind(tables.get(2).unwrap_or(&"")).bind(tables.get(3).unwrap_or(&"")).bind(tables.get(4).unwrap_or(&"")).bind(tables.get(5).unwrap_or(&"")).bind(tables.get(6).unwrap_or(&"")).bind(tables.get(7).unwrap_or(&"")).fetch_one(pool).await?;
-    if table_count != i64::try_from(tables.len()).unwrap_or(i64::MAX) {
-        return Err(mismatch(format!(
-            "expected {} domain tables, found {table_count}",
-            tables.len()
-        )));
-    }
-
-    if !activated_upgrade {
-        let legacy = sqlx::query_scalar::<_, i64>("select count(*) from information_schema.tables where table_schema = database() and table_name in ('keepsake_audit_events','keepsake_audit_context_attributes','keepsake_audit_outbox')").fetch_one(pool).await?;
-        if legacy != 0 {
-            return Err(mismatch("clean track contains legacy audit tables"));
+fn mysql_v3_expected_check_expression(name: &str) -> Option<String> {
+    let marker = match name {
+        "state" => "constraint keepsakes_state_check check",
+        "keepsakes_expiry_policy_projection" => {
+            "constraint keepsakes_expiry_policy_projection check"
         }
-    }
+        "keepsakes_lifecycle_timestamps" => "constraint keepsakes_lifecycle_timestamps check",
+        _ => return None,
+    };
+    artifact_check_expression(MYSQL_V3_CLEAN_ARTIFACT, marker)
+}
+
+#[cfg(feature = "mysql")]
+async fn mysql_columns_check<'a>(
+    pool: &sqlx::MySqlPool,
+    expected: &[MySqlColumn<'a>],
+) -> RepositoryResult<Vec<(&'a str, &'a str)>> {
+    use sqlx::Row;
 
     let mut json_longtext_columns = Vec::new();
-    for item in &expected {
-        let row = sqlx::query("select column_type as column_type, is_nullable as is_nullable, column_default as column_default, extra as extra, generation_expression as generation_expression from information_schema.columns where table_schema = database() and table_name = ? and column_name = ?").bind(item.table).bind(item.name).fetch_optional(pool).await?.ok_or_else(|| mismatch(format!("missing column {}.{}", item.table, item.name)))?;
+    for item in expected {
+        let row = sqlx::query("select column_type as column_type, is_nullable as is_nullable, column_default as column_default, extra as extra, generation_expression as generation_expression from information_schema.columns where table_schema = database() and table_name = ? and column_name = ?")
+            .bind(item.table)
+            .bind(item.name)
+            .fetch_optional(pool)
+            .await?
+            .ok_or_else(|| mismatch(format!("missing column {}.{}", item.table, item.name)))?;
         let column_type: String = row.try_get("column_type")?;
         let nullable: String = row.try_get("is_nullable")?;
         let default: Option<String> = row.try_get("column_default")?;
@@ -2640,6 +3330,62 @@ async fn mysql_catalog_shape_check(
             json_longtext_columns.push((item.table, item.name));
         }
     }
+    Ok(json_longtext_columns)
+}
+
+#[cfg(feature = "mysql")]
+#[allow(clippy::too_many_lines)]
+async fn mysql_catalog_shape_check(
+    pool: &sqlx::MySqlPool,
+    activated_upgrade: bool,
+) -> RepositoryResult<()> {
+    let tables: &[&str] = if activated_upgrade {
+        &[
+            "keepsake_schema_metadata",
+            "keepsake_relation_definitions",
+            "keepsakes",
+            "keepsake_fulfillment_counters",
+            "keepsake_fulfillment_checklist",
+            "keepsake_audit_events",
+            "keepsake_audit_context_attributes",
+            "keepsake_audit_outbox",
+        ]
+    } else {
+        &[
+            "keepsake_schema_metadata",
+            "keepsake_relation_definitions",
+            "keepsakes",
+            "keepsake_fulfillment_counters",
+            "keepsake_fulfillment_checklist",
+        ]
+    };
+
+    let expected: Vec<MySqlColumn<'_>> = MYSQL_CLEAN_COLUMNS
+        .iter()
+        .chain(
+            activated_upgrade
+                .then_some(MYSQL_LEGACY_COLUMNS)
+                .into_iter()
+                .flatten(),
+        )
+        .copied()
+        .collect();
+    let table_count = sqlx::query_scalar::<_, i64>("select count(*) from information_schema.tables where table_schema = database() and table_name in (?,?,?,?,?,?,?,?)").bind(tables.first().unwrap_or(&"")).bind(tables.get(1).unwrap_or(&"")).bind(tables.get(2).unwrap_or(&"")).bind(tables.get(3).unwrap_or(&"")).bind(tables.get(4).unwrap_or(&"")).bind(tables.get(5).unwrap_or(&"")).bind(tables.get(6).unwrap_or(&"")).bind(tables.get(7).unwrap_or(&"")).fetch_one(pool).await?;
+    if table_count != i64::try_from(tables.len()).unwrap_or(i64::MAX) {
+        return Err(mismatch(format!(
+            "expected {} domain tables, found {table_count}",
+            tables.len()
+        )));
+    }
+
+    if !activated_upgrade {
+        let legacy = sqlx::query_scalar::<_, i64>("select count(*) from information_schema.tables where table_schema = database() and table_name in ('keepsake_audit_events','keepsake_audit_context_attributes','keepsake_audit_outbox')").fetch_one(pool).await?;
+        if legacy != 0 {
+            return Err(mismatch("clean track contains legacy audit tables"));
+        }
+    }
+
+    let json_longtext_columns = mysql_columns_check(pool, &expected).await?;
 
     let column_count = sqlx::query_scalar::<_, i64>("select count(*) from information_schema.columns where table_schema = database() and table_name in (?,?,?,?,?,?,?,?)").bind(tables.first().unwrap_or(&"")).bind(tables.get(1).unwrap_or(&"")).bind(tables.get(2).unwrap_or(&"")).bind(tables.get(3).unwrap_or(&"")).bind(tables.get(4).unwrap_or(&"")).bind(tables.get(5).unwrap_or(&"")).bind(tables.get(6).unwrap_or(&"")).bind(tables.get(7).unwrap_or(&"")).fetch_one(pool).await?;
     if column_count != i64::try_from(expected.len()).unwrap_or(i64::MAX) {
@@ -2965,7 +3711,13 @@ async fn mysql_constraints_check(
         if let Some((_, _, logical_name)) = named_check {
             let expected_clause = mysql_expected_check_expression(activated_upgrade, logical_name)
                 .ok_or_else(|| mismatch(format!("missing migration CHECK {table}.{name}")))?;
-            if !mysql_catalog_check_matches(activated_upgrade, &name, &clause, &expected_clause) {
+            if !mysql_catalog_check_matches(
+                activated_upgrade,
+                &name,
+                &clause,
+                &expected_clause,
+                maria_db,
+            ) {
                 return Err(mismatch(format!(
                     "CHECK constraint {table}.{name} definition differs: actual={:?} expected={:?}",
                     normalize_check_expression(&clause),
@@ -3187,6 +3939,507 @@ pub(super) async fn mysql_upgrade_schema_check(pool: &sqlx::MySqlPool) -> Reposi
 }
 
 #[cfg(feature = "mysql")]
+#[allow(clippy::too_many_lines)]
+async fn mysql_v3_domain_shape_check(pool: &sqlx::MySqlPool) -> RepositoryResult<()> {
+    let expected_tables = [
+        "keepsake_schema_metadata",
+        "keepsake_relation_definitions",
+        "keepsakes",
+        "keepsake_fulfillment_counters",
+        "keepsake_fulfillment_checklist",
+    ];
+    let v3_clean_columns = mysql_v3_clean_columns();
+    let expected: Vec<MySqlColumn<'_>> = v3_clean_columns
+        .iter()
+        .chain(MYSQL_V3_TENANT_COLUMNS.iter())
+        .copied()
+        .collect();
+    let json_longtext_columns = mysql_columns_check(pool, &expected).await?;
+    let column_count = sqlx::query_scalar::<_, i64>("select count(*) from information_schema.columns where table_schema = database() and table_name in (?,?,?,?,?,?,?,?)")
+        .bind(expected_tables.first().unwrap_or(&""))
+        .bind(expected_tables.get(1).unwrap_or(&""))
+        .bind(expected_tables.get(2).unwrap_or(&""))
+        .bind(expected_tables.get(3).unwrap_or(&""))
+        .bind(expected_tables.get(4).unwrap_or(&""))
+        .bind(expected_tables.get(5).unwrap_or(&""))
+        .bind(expected_tables.get(6).unwrap_or(&""))
+        .bind(expected_tables.get(7).unwrap_or(&""))
+        .fetch_one(pool)
+        .await?;
+    if column_count != i64::try_from(expected.len()).unwrap_or(i64::MAX) {
+        return Err(mismatch("domain tables contain unexpected columns"));
+    }
+
+    let server_version = sqlx::query_scalar::<_, String>("select version()")
+        .fetch_one(pool)
+        .await?;
+    // Validate key topology before CHECK expressions so a partially damaged
+    // catalog reports the actionable PK/index/FK drift directly.
+    mysql_v3_indexes_check(pool).await?;
+    mysql_v3_foreign_keys_check(pool).await?;
+    mysql_v3_constraints_check(
+        pool,
+        &json_longtext_columns,
+        server_version.to_ascii_lowercase().contains("mariadb"),
+    )
+    .await?;
+
+    let tenant_columns = sqlx::query_scalar::<_, i64>(
+        "select count(*) from information_schema.columns where table_schema = database() and column_name = 'tenant_id' and is_nullable = 'NO' and table_name in (?,?,?,?)",
+    )
+    .bind("keepsake_relation_definitions")
+    .bind("keepsakes")
+    .bind("keepsake_fulfillment_counters")
+    .bind("keepsake_fulfillment_checklist")
+    .fetch_one(pool)
+    .await?;
+    if tenant_columns != 4 {
+        return Err(mismatch(format!(
+            "v3 schema has {tenant_columns} of 4 tenant_id columns"
+        )));
+    }
+    let tenant_checks = sqlx::query_scalar::<_, i64>(
+        "select count(*) from information_schema.table_constraints where constraint_schema = database() and constraint_type = 'CHECK' and constraint_name in (?,?,?,?,?,?,?,?)",
+    )
+    .bind("keepsake_relation_definitions_tenant_size")
+    .bind("keepsake_relation_definitions_tenant_nonempty")
+    .bind("keepsakes_tenant_size")
+    .bind("keepsakes_tenant_nonempty")
+    .bind("keepsake_fulfillment_counter_tenant_size")
+    .bind("keepsake_fulfillment_counter_tenant_nonempty")
+    .bind("keepsake_fulfillment_checklist_tenant_size")
+    .bind("keepsake_fulfillment_checklist_tenant_nonempty")
+    .fetch_one(pool)
+    .await?;
+    if tenant_checks != 8 {
+        return Err(mismatch("v3 tenant size/non-empty checks are incomplete"));
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "mysql")]
+#[allow(clippy::too_many_lines)]
+async fn mysql_v3_indexes_check(pool: &sqlx::MySqlPool) -> RepositoryResult<()> {
+    use sqlx::Row;
+
+    let expected: &[(&str, &str, bool, &[&str])] = &[
+        (
+            "keepsake_relation_definitions",
+            "PRIMARY",
+            true,
+            &["tenant_id", "id"],
+        ),
+        (
+            "keepsake_relation_definitions",
+            "keepsake_relation_definitions_tenant_key",
+            true,
+            &["tenant_id", "kind", "key"],
+        ),
+        (
+            "keepsake_relation_definitions",
+            "keepsake_relation_definitions_tenant_key_idx",
+            false,
+            &["tenant_id", "kind", "key", "id"],
+        ),
+        ("keepsakes", "PRIMARY", true, &["tenant_id", "id"]),
+        (
+            "keepsakes",
+            "keepsakes_one_active_relation_per_subject",
+            true,
+            &[
+                "tenant_id",
+                "subject_kind",
+                "subject_id",
+                "active_relation_key",
+            ],
+        ),
+        (
+            "keepsakes",
+            "keepsakes_active_subject_lookup",
+            false,
+            &[
+                "tenant_id",
+                "subject_kind",
+                "subject_id",
+                "relation_id",
+                "id",
+            ],
+        ),
+        (
+            "keepsakes",
+            "keepsakes_active_relation_membership",
+            false,
+            &[
+                "tenant_id",
+                "relation_id",
+                "subject_kind",
+                "subject_id",
+                "id",
+            ],
+        ),
+        (
+            "keepsakes",
+            "keepsakes_due_timed_expiry",
+            false,
+            &[
+                "tenant_id",
+                "expires_at",
+                "relation_id",
+                "subject_kind",
+                "subject_id",
+                "id",
+            ],
+        ),
+        (
+            "keepsakes",
+            "keepsakes_due_fulfilled_expiry",
+            false,
+            &[
+                "tenant_id",
+                "fulfillment_pending",
+                "relation_id",
+                "subject_kind",
+                "subject_id",
+                "id",
+            ],
+        ),
+        (
+            "keepsake_fulfillment_counters",
+            "PRIMARY",
+            true,
+            &["tenant_id", "keepsake_id", "key"],
+        ),
+        (
+            "keepsake_fulfillment_counters",
+            "keepsake_fulfillment_counter_scan",
+            false,
+            &["tenant_id", "key", "value", "keepsake_id"],
+        ),
+        (
+            "keepsake_fulfillment_checklist",
+            "PRIMARY",
+            true,
+            &["tenant_id", "keepsake_id", "item"],
+        ),
+        (
+            "keepsake_fulfillment_checklist",
+            "keepsake_fulfillment_checklist_scan",
+            false,
+            &["tenant_id", "item", "complete", "keepsake_id"],
+        ),
+    ];
+
+    let tables = [
+        "keepsake_relation_definitions",
+        "keepsakes",
+        "keepsake_fulfillment_counters",
+        "keepsake_fulfillment_checklist",
+    ];
+    let names = sqlx::query_as::<_, (String, String)>(
+        "select distinct table_name, index_name from information_schema.statistics where table_schema = database() and table_name in (?,?,?,?)",
+    )
+    .bind(tables[0])
+    .bind(tables[1])
+    .bind(tables[2])
+    .bind(tables[3])
+    .fetch_all(pool)
+    .await?;
+    if names.len() != expected.len()
+        || names.iter().any(|(table, name)| {
+            !expected
+                .iter()
+                .any(|(expected_table, expected_name, _, _)| {
+                    *expected_table == table && *expected_name == name
+                })
+        })
+    {
+        return Err(mismatch(format!("v3 domain index set differs: {names:?}")));
+    }
+
+    for (table, name, unique, columns) in expected {
+        let rows = sqlx::query(
+            "select non_unique as non_unique, cast(seq_in_index as signed) as seq_in_index, column_name as column_name, sub_part as sub_part from information_schema.statistics where table_schema = database() and table_name = ? and index_name = ? order by seq_in_index",
+        )
+        .bind(table)
+        .bind(name)
+        .fetch_all(pool)
+        .await?;
+        if rows.len() != columns.len() {
+            return Err(mismatch(format!(
+                "index {table}.{name} column count differs"
+            )));
+        }
+        for (offset, row) in rows.iter().enumerate() {
+            let non_unique: i64 = row.try_get("non_unique")?;
+            let seq_in_index: i64 = row.try_get("seq_in_index")?;
+            let column: String = row.try_get("column_name")?;
+            let sub_part: Option<i64> = row.try_get("sub_part")?;
+            if seq_in_index != i64::try_from(offset + 1).unwrap_or(i64::MAX)
+                || (non_unique == 0) != *unique
+                || column != columns[offset]
+                || sub_part.is_some()
+            {
+                return Err(mismatch(format!(
+                    "index {table}.{name} columns or uniqueness differ"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "mysql")]
+fn mysql_v3_referential_action_matches(expected: &str, actual: &str) -> bool {
+    actual == expected || (expected == "NO ACTION" && actual == "RESTRICT")
+}
+
+#[cfg(feature = "mysql")]
+#[allow(clippy::type_complexity)]
+async fn mysql_v3_foreign_keys_check(pool: &sqlx::MySqlPool) -> RepositoryResult<()> {
+    use sqlx::Row;
+
+    let expected: &[(&str, &str, &[(&str, &str)], &str)] = &[
+        (
+            "keepsakes",
+            "keepsakes_relation_fk",
+            &[("tenant_id", "tenant_id"), ("relation_id", "id")],
+            "NO ACTION",
+        ),
+        (
+            "keepsake_fulfillment_counters",
+            "keepsake_fulfillment_counter_keepsake_fk",
+            &[("tenant_id", "tenant_id"), ("keepsake_id", "id")],
+            "CASCADE",
+        ),
+        (
+            "keepsake_fulfillment_checklist",
+            "keepsake_fulfillment_checklist_keepsake_fk",
+            &[("tenant_id", "tenant_id"), ("keepsake_id", "id")],
+            "CASCADE",
+        ),
+    ];
+
+    let tables = [
+        "keepsake_relation_definitions",
+        "keepsakes",
+        "keepsake_fulfillment_counters",
+        "keepsake_fulfillment_checklist",
+    ];
+    let names = sqlx::query_as::<_, (String, String)>(
+        "select distinct table_name, constraint_name from information_schema.key_column_usage where constraint_schema = database() and referenced_table_name is not null and table_name in (?,?,?,?)",
+    )
+    .bind(tables[0])
+    .bind(tables[1])
+    .bind(tables[2])
+    .bind(tables[3])
+    .fetch_all(pool)
+    .await?;
+    if names.len() != expected.len()
+        || names.iter().any(|(table, name)| {
+            !expected
+                .iter()
+                .any(|(expected_table, expected_name, _, _)| {
+                    *expected_table == table && *expected_name == name
+                })
+        })
+    {
+        return Err(mismatch(format!(
+            "v3 domain foreign-key set differs: {names:?}"
+        )));
+    }
+
+    for (table, name, columns, delete_rule) in expected {
+        let rows = sqlx::query(
+            "select cast(kcu.ordinal_position as signed) as ordinal_position, kcu.column_name as column_name, kcu.referenced_table_name as referenced_table_name, kcu.referenced_column_name as referenced_column_name, rc.delete_rule as delete_rule, rc.update_rule as update_rule from information_schema.key_column_usage kcu join information_schema.referential_constraints rc on rc.constraint_schema = kcu.constraint_schema and rc.table_name = kcu.table_name and rc.constraint_name = kcu.constraint_name where kcu.constraint_schema = database() and kcu.table_name = ? and kcu.constraint_name = ? order by kcu.ordinal_position",
+        )
+        .bind(table)
+        .bind(name)
+        .fetch_all(pool)
+        .await?;
+        if rows.len() != columns.len() {
+            return Err(mismatch(format!(
+                "foreign key {table}.{name} column count differs"
+            )));
+        }
+        for (offset, row) in rows.iter().enumerate() {
+            let ordinal: i64 = row.try_get("ordinal_position")?;
+            let local: String = row.try_get("column_name")?;
+            let referenced_table: Option<String> = row.try_get("referenced_table_name")?;
+            let referenced_column: Option<String> = row.try_get("referenced_column_name")?;
+            let actual_rule: String = row.try_get("delete_rule")?;
+            let actual_update_rule: String = row.try_get("update_rule")?;
+            let (expected_local, expected_referenced) = columns[offset];
+            if ordinal != i64::try_from(offset + 1).unwrap_or(i64::MAX)
+                || local != expected_local
+                || referenced_table.as_deref()
+                    != Some(if *table == "keepsakes" {
+                        "keepsake_relation_definitions"
+                    } else {
+                        "keepsakes"
+                    })
+                || referenced_column.as_deref() != Some(expected_referenced)
+            {
+                return Err(mismatch(format!(
+                    "foreign key {table}.{name} columns or target differ"
+                )));
+            }
+            if !mysql_v3_referential_action_matches(delete_rule, &actual_rule) {
+                return Err(mismatch(format!(
+                    "foreign key {table}.{name} delete action differs: actual={actual_rule}, expected={delete_rule}"
+                )));
+            }
+            if !mysql_v3_referential_action_matches("NO ACTION", &actual_update_rule) {
+                return Err(mismatch(format!(
+                    "foreign key {table}.{name} update action differs: actual={actual_update_rule}, expected=NO ACTION"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "mysql")]
+#[allow(clippy::too_many_lines)]
+async fn mysql_v3_constraints_check(
+    pool: &sqlx::MySqlPool,
+    json_longtext_columns: &[(&str, &str)],
+    maria_db: bool,
+) -> RepositoryResult<()> {
+    use sqlx::Row;
+
+    let tables = [
+        "keepsake_schema_metadata",
+        "keepsake_relation_definitions",
+        "keepsakes",
+        "keepsake_fulfillment_counters",
+        "keepsake_fulfillment_checklist",
+    ];
+    let check_query = if maria_db {
+        "select tc.table_name as table_name, tc.constraint_name as constraint_name, cc.check_clause as check_clause from information_schema.table_constraints tc join information_schema.check_constraints cc on cc.constraint_schema = tc.constraint_schema and cc.table_name = tc.table_name and cc.constraint_name = tc.constraint_name where tc.constraint_schema = database() and tc.table_name in (?,?,?,?,?,?,?,?) and tc.constraint_type = 'CHECK'"
+    } else {
+        "select tc.table_name as table_name, tc.constraint_name as constraint_name, cc.check_clause as check_clause from information_schema.table_constraints tc join information_schema.check_constraints cc on cc.constraint_schema = tc.constraint_schema and cc.constraint_name = tc.constraint_name where tc.constraint_schema = database() and tc.table_name in (?,?,?,?,?,?,?,?) and tc.constraint_type = 'CHECK'"
+    };
+    let checks = sqlx::query(check_query)
+        .bind(tables.first().unwrap_or(&""))
+        .bind(tables.get(1).unwrap_or(&""))
+        .bind(tables.get(2).unwrap_or(&""))
+        .bind(tables.get(3).unwrap_or(&""))
+        .bind(tables.get(4).unwrap_or(&""))
+        .bind(tables.get(5).unwrap_or(&""))
+        .bind(tables.get(6).unwrap_or(&""))
+        .bind(tables.get(7).unwrap_or(&""))
+        .fetch_all(pool)
+        .await?;
+    let expected_checks = [
+        ("keepsakes", "keepsakes_state_check", "state"),
+        (
+            "keepsakes",
+            "keepsakes_expiry_policy_projection",
+            "keepsakes_expiry_policy_projection",
+        ),
+        (
+            "keepsakes",
+            "keepsakes_lifecycle_timestamps",
+            "keepsakes_lifecycle_timestamps",
+        ),
+    ];
+    let tenant_checks = [
+        (
+            "keepsake_relation_definitions_tenant_size",
+            "octet_length(tenant_id)<=255",
+        ),
+        (
+            "keepsake_relation_definitions_tenant_nonempty",
+            "octet_length(tenant_id)>0",
+        ),
+        ("keepsakes_tenant_size", "octet_length(tenant_id)<=255"),
+        ("keepsakes_tenant_nonempty", "octet_length(tenant_id)>0"),
+        (
+            "keepsake_fulfillment_counter_tenant_size",
+            "octet_length(tenant_id)<=255",
+        ),
+        (
+            "keepsake_fulfillment_counter_tenant_nonempty",
+            "octet_length(tenant_id)>0",
+        ),
+        (
+            "keepsake_fulfillment_checklist_tenant_size",
+            "octet_length(tenant_id)<=255",
+        ),
+        (
+            "keepsake_fulfillment_checklist_tenant_nonempty",
+            "octet_length(tenant_id)>0",
+        ),
+    ];
+    let mut found_checks = std::collections::BTreeSet::new();
+    let mut found_tenant_checks = std::collections::BTreeSet::new();
+    let mut found_json_checks = std::collections::BTreeSet::new();
+    for row in checks {
+        let table: String = row.try_get("table_name")?;
+        let name: String = row.try_get("constraint_name")?;
+        let clause: String = row.try_get("check_clause")?;
+        if let Some((_, _, logical_name)) =
+            expected_checks
+                .iter()
+                .find(|(expected_table, expected_name, _)| {
+                    *expected_table == table && *expected_name == name
+                })
+        {
+            let expected_clause = mysql_v3_expected_check_expression(logical_name)
+                .ok_or_else(|| mismatch(format!("missing migration CHECK {table}.{name}")))?;
+            if !mysql_catalog_check_matches(false, &name, &clause, &expected_clause, maria_db) {
+                return Err(mismatch(format!(
+                    "CHECK constraint {table}.{name} definition differs"
+                )));
+            }
+            found_checks.insert(name.clone());
+            continue;
+        }
+
+        if let Some((tenant_name, fragment)) = tenant_checks
+            .iter()
+            .find(|(expected_name, _)| *expected_name == name)
+        {
+            let normalized = normalize_check_expression(&clause);
+            // MySQL deparses OCTET_LENGTH as its equivalent LENGTH function;
+            // MariaDB commonly preserves the source spelling.
+            let mysql_fragment = fragment.replace("octet_length", "length");
+            if !normalized.contains(fragment) && !normalized.contains(&mysql_fragment) {
+                return Err(mismatch(format!(
+                    "tenant CHECK constraint {table}.{name} definition differs"
+                )));
+            }
+            found_tenant_checks.insert(*tenant_name);
+            continue;
+        }
+
+        let json_check = json_longtext_columns.iter().find(|(json_table, column)| {
+            *json_table == table
+                && compact_sql(&clause) == format!("json_valid({})", column.to_ascii_lowercase())
+        });
+        if let Some((json_table, column)) = json_check {
+            found_json_checks.insert(format!("{json_table}.{column}"));
+            continue;
+        }
+
+        return Err(mismatch(format!(
+            "unexpected or altered CHECK constraint {table}.{name}"
+        )));
+    }
+
+    if found_checks.len() != expected_checks.len()
+        || found_tenant_checks.len() != tenant_checks.len()
+        || json_longtext_columns
+            .iter()
+            .any(|(table, column)| !found_json_checks.contains(&format!("{table}.{column}")))
+    {
+        return Err(mismatch("Keepsake v3 CHECK constraint definitions differ"));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "mysql")]
 pub(super) async fn mysql_runtime_schema_check(pool: &sqlx::MySqlPool) -> RepositoryResult<()> {
     let metadata_exists = sqlx::query_scalar::<_, i64>(
         "select count(*) from information_schema.tables where table_schema = database() and table_name = 'keepsake_schema_metadata'",
@@ -3215,6 +4468,10 @@ pub(super) async fn mysql_runtime_schema_check(pool: &sqlx::MySqlPool) -> Reposi
     .fetch_optional(pool)
     .await?
     .flatten();
+    if track.as_deref() == Some("3") {
+        mysql_v3_domain_shape_check(pool).await?;
+        return Ok(());
+    }
     if track.as_deref() != Some("2") {
         return Err(RepositoryError::BackendMismatch {
             expected: "2.0 active schema",
@@ -3241,6 +4498,7 @@ pub(super) async fn mysql_clean_schema_preflight(pool: &sqlx::MySqlPool) -> Repo
     .await?
     .flatten();
     match track.as_deref() {
+        Some("3") => mysql_v3_domain_shape_check(pool).await,
         Some("2") => {
             let legacy = sqlx::query_scalar::<_, i64>("select count(*) from information_schema.tables where table_schema = database() and table_name = 'keepsake_audit_events'").fetch_one(pool).await? != 0;
             if legacy {
@@ -3249,14 +4507,17 @@ pub(super) async fn mysql_clean_schema_preflight(pool: &sqlx::MySqlPool) -> Repo
                     actual: "activated upgrade track".to_owned(),
                 });
             }
-            mysql_catalog_shape_check(pool, false).await
+            Err(RepositoryError::BackendMismatch {
+                expected: "3.0 clean track",
+                actual: "2.0 clean track; run the explicit tenant upgrade route".to_owned(),
+            })
         }
         Some(actual) => Err(RepositoryError::BackendMismatch {
-            expected: "2.0 clean track",
+            expected: "3.0 clean track",
             actual: actual.to_owned(),
         }),
         None => Err(RepositoryError::BackendMismatch {
-            expected: "2.0 clean track",
+            expected: "3.0 clean track",
             actual: "legacy schema; call upgrade_migrate".to_owned(),
         }),
     }
@@ -3281,6 +4542,19 @@ pub(super) async fn mysql_upgrade_schema_preflight(pool: &sqlx::MySqlPool) -> Re
         return Err(RepositoryError::BackendMismatch {
             expected: "legacy upgrade track",
             actual: "2.0 clean track".to_owned(),
+        });
+    }
+    let has_v3 = sqlx::query_scalar::<_, Option<String>>(
+        "select value from keepsake_schema_metadata where `key` = 'api_track'",
+    )
+    .fetch_optional(pool)
+    .await?
+    .flatten()
+    .is_some_and(|value| value == "3");
+    if has_v3 {
+        return Err(RepositoryError::BackendMismatch {
+            expected: "legacy upgrade track",
+            actual: "3.0 clean track".to_owned(),
         });
     }
     mysql_schema_preflight(pool).await

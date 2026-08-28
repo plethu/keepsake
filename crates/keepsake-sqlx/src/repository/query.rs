@@ -5,12 +5,13 @@ use keepsake::{
     SubjectRef,
 };
 
+use super::PostgresBackend;
 use super::{
-    ActiveRelationRow, AppliedKeepsakeRow, KeepsakeRepository, MembershipCursor, RelationCache,
-    RepositoryError, RepositoryResult, validate_limit,
+    ActiveRelationRow, AppliedKeepsakeRow, MembershipCursor, RelationCache, RepositoryError,
+    RepositoryResult, TenantSqlxKeepsakeRepository, validate_limit,
 };
 
-impl<C> KeepsakeRepository<C>
+impl<C> TenantSqlxKeepsakeRepository<'_, PostgresBackend, C>
 where
     C: RelationCache,
 {
@@ -21,16 +22,17 @@ where
     ) -> RepositoryResult<Vec<Keepsake>> {
         let rows = sqlx::query_as::<_, AppliedKeepsakeRow>(
             r"
-            select id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
+            select tenant_id, id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
                 expires_at, fulfilled_at, revoked_at, metadata
             from keepsakes
-            where subject_kind = $1 and subject_id = $2 and state = 'applied'
+            where tenant_id = $1 and subject_kind = $2 and subject_id = $3 and state = 'applied'
             order by relation_id, id
             ",
         )
+        .bind(self.tenant_id.as_str())
         .bind(subject.kind())
         .bind(subject.id())
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool)
         .await?;
 
         rows.into_iter()
@@ -46,6 +48,7 @@ where
         let rows = sqlx::query_as::<_, ActiveRelationRow>(
             r"
             select
+                k.tenant_id,
                 k.id,
                 k.subject_kind,
                 k.subject_id,
@@ -63,20 +66,25 @@ where
                 r.enabled as relation_enabled,
                 r.expiry_policy as relation_expiry_policy
             from keepsakes k
-            join keepsake_relation_definitions r on r.id = k.relation_id
-            where k.subject_kind = $1 and k.subject_id = $2 and k.state = 'applied'
+            join keepsake_relation_definitions r
+              on r.tenant_id = k.tenant_id and r.id = k.relation_id
+            where k.tenant_id = $1
+              and k.subject_kind = $2 and k.subject_id = $3 and k.state = 'applied'
             order by k.relation_id, k.id
             ",
         )
+        .bind(self.tenant_id.as_str())
         .bind(subject.kind())
         .bind(subject.id())
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool)
         .await?;
 
         let mut active = Vec::with_capacity(rows.len());
         for row in rows {
             let active_relation = row.try_into_active_relation()?;
-            self.relation_cache.store(active_relation.relation()).await;
+            self.relation_cache
+                .store(&self.tenant_id, active_relation.relation())
+                .await;
             active.push(active_relation);
         }
         Ok(active)
@@ -112,9 +120,10 @@ where
             r"
             with requested_relation_ids(id) as (
                 select distinct id
-                from unnest($3::uuid[]) as requested(id)
+                from unnest($4::uuid[]) as requested(id)
             )
             select
+                k.tenant_id,
                 k.id,
                 k.subject_kind,
                 k.subject_id,
@@ -133,25 +142,29 @@ where
                 r.expiry_policy as relation_expiry_policy
             from requested_relation_ids requested
             join keepsake_relation_definitions r
-              on r.id = requested.id
+              on r.tenant_id = $1 and r.id = requested.id
             join keepsakes k
               on k.relation_id = r.id
-             and k.subject_kind = $1
-             and k.subject_id = $2
+             and k.tenant_id = r.tenant_id
+             and k.subject_kind = $2
+             and k.subject_id = $3
              and k.state = 'applied'
             order by k.relation_id, k.id
             ",
         )
+        .bind(self.tenant_id.as_str())
         .bind(subject.kind())
         .bind(subject.id())
         .bind(&requested_relation_ids)
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool)
         .await?;
 
         let mut active = Vec::with_capacity(rows.len());
         for row in rows {
             let active_relation = row.try_into_active_relation()?;
-            self.relation_cache.store(active_relation.relation()).await;
+            self.relation_cache
+                .store(&self.tenant_id, active_relation.relation())
+                .await;
             active.push(active_relation);
         }
         Ok(active)
@@ -194,9 +207,10 @@ where
             r"
             with requested_relation_keys(kind, key) as (
                 select distinct kind, key
-                from unnest($3::text[], $4::text[]) as requested(kind, key)
+                from unnest($4::text[], $5::text[]) as requested(kind, key)
             )
             select
+                k.tenant_id,
                 k.id,
                 k.subject_kind,
                 k.subject_id,
@@ -215,26 +229,31 @@ where
                 r.expiry_policy as relation_expiry_policy
             from requested_relation_keys requested
             join keepsake_relation_definitions r
-              on r.kind = requested.kind and r.key = requested.key
+              on r.tenant_id = $1
+             and r.kind = requested.kind and r.key = requested.key
             join keepsakes k
               on k.relation_id = r.id
-             and k.subject_kind = $1
-             and k.subject_id = $2
+             and k.tenant_id = r.tenant_id
+             and k.subject_kind = $2
+             and k.subject_id = $3
              and k.state = 'applied'
             order by k.relation_id, k.id
             ",
         )
+        .bind(self.tenant_id.as_str())
         .bind(subject.kind())
         .bind(subject.id())
         .bind(&kinds)
         .bind(&names)
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool)
         .await?;
 
         let mut active = Vec::with_capacity(rows.len());
         for row in rows {
             let active_relation = row.try_into_active_relation()?;
-            self.relation_cache.store(active_relation.relation()).await;
+            self.relation_cache
+                .store(&self.tenant_id, active_relation.relation())
+                .await;
             active.push(active_relation);
         }
         Ok(active)
@@ -260,25 +279,26 @@ where
         let limit = validate_limit(limit)?;
         let rows = sqlx::query_as::<_, AppliedKeepsakeRow>(
             r"
-            select id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
+            select tenant_id, id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
                 expires_at, fulfilled_at, revoked_at, metadata
             from keepsakes
-            where relation_id = $1
+            where tenant_id = $1 and relation_id = $2
               and state = 'applied'
               and (
-                $2::text is null
-                or (subject_kind, subject_id, id) > ($2, $3, $4)
+                $3::text is null
+                or (subject_kind, subject_id, id) > ($3, $4, $5)
               )
             order by subject_kind, subject_id, id
-            limit $5
+            limit $6
             ",
         )
+        .bind(self.tenant_id.as_str())
         .bind(relation_id)
         .bind(after.map(|cursor| cursor.subject_kind.as_str()))
         .bind(after.map(|cursor| cursor.subject_id.as_str()))
         .bind(after.map(|cursor| cursor.keepsake_id))
         .bind(limit)
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool)
         .await?;
 
         rows.into_iter()
@@ -292,7 +312,10 @@ where
     ) -> Option<BTreeMap<RelationId, RelationDefinition>> {
         let mut relations = BTreeMap::new();
         for relation_id in relation_ids {
-            let relation = self.relation_cache.get_by_id(*relation_id).await?;
+            let relation = self
+                .relation_cache
+                .get_by_id(&self.tenant_id, *relation_id)
+                .await?;
             relations.insert(relation.id, relation);
         }
         Some(relations)
@@ -304,7 +327,7 @@ where
     ) -> Option<BTreeMap<RelationId, RelationDefinition>> {
         let mut relations = BTreeMap::new();
         for key in keys {
-            let relation = self.relation_cache.get_by_key(key).await?;
+            let relation = self.relation_cache.get_by_key(&self.tenant_id, key).await?;
             relations.insert(relation.id, relation);
         }
         Some(relations)
@@ -319,23 +342,25 @@ where
             r"
             with requested_relation_ids(id) as (
                 select distinct id
-                from unnest($3::uuid[]) as requested(id)
+                from unnest($4::uuid[]) as requested(id)
             )
-            select k.id, k.subject_kind, k.subject_id, k.relation_id, k.state, k.expiry_policy,
+            select k.tenant_id, k.id, k.subject_kind, k.subject_id, k.relation_id, k.state, k.expiry_policy,
                 k.applied_at, k.expires_at, k.fulfilled_at, k.revoked_at, k.metadata
             from requested_relation_ids requested
             join keepsakes k
               on k.relation_id = requested.id
-             and k.subject_kind = $1
-             and k.subject_id = $2
+             and k.tenant_id = $1
+             and k.subject_kind = $2
+             and k.subject_id = $3
              and k.state = 'applied'
             order by k.relation_id, k.id
             ",
         )
+        .bind(self.tenant_id.as_str())
         .bind(subject.kind())
         .bind(subject.id())
         .bind(relation_ids)
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool)
         .await?;
 
         rows.into_iter()
@@ -362,7 +387,7 @@ fn active_relations_from_keepsakes(
         .collect()
 }
 
-impl<C> ActiveRelationSource for KeepsakeRepository<C>
+impl<C> ActiveRelationSource for TenantSqlxKeepsakeRepository<'_, PostgresBackend, C>
 where
     C: RelationCache,
 {
@@ -370,25 +395,37 @@ where
 
     async fn active_relations_for_subject<'a>(
         &'a self,
+        tenant_id: &'a keepsake::TenantId,
         subject: &'a SubjectRef,
     ) -> RepositoryResult<Vec<ActiveRelation>> {
+        if tenant_id != &self.tenant_id {
+            return Err(RepositoryError::TenantScopeMismatch);
+        }
         self.active_relations_for_subject(subject).await
     }
 
     async fn active_relations_for_subject_by_ids<'a>(
         &'a self,
+        tenant_id: &'a keepsake::TenantId,
         subject: &'a SubjectRef,
         relation_ids: &'a [RelationId],
     ) -> RepositoryResult<Vec<ActiveRelation>> {
+        if tenant_id != &self.tenant_id {
+            return Err(RepositoryError::TenantScopeMismatch);
+        }
         self.active_relations_for_subject_by_ids(subject, relation_ids)
             .await
     }
 
     async fn active_relations_for_subject_by_keys<'a>(
         &'a self,
+        tenant_id: &'a keepsake::TenantId,
         subject: &'a SubjectRef,
         keys: &'a [RelationKey],
     ) -> RepositoryResult<Vec<ActiveRelation>> {
+        if tenant_id != &self.tenant_id {
+            return Err(RepositoryError::TenantScopeMismatch);
+        }
         self.active_relations_for_subject_by_keys(subject, keys)
             .await
     }

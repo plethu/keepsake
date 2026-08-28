@@ -10,8 +10,9 @@ use sqlx::Row;
 async fn lifecycle_events_are_typed_dovecote_rows() -> TestResult<()> {
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
-    let repo = KeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/postgres")?;
-    repo.migrate().await?;
+    reset_schema(&pool).await?;
+    let root = KeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/postgres")?;
+    root.migrate().await?;
     if sqlx::query_scalar::<_, bool>("select to_regclass('public.dovecote_events') is not null")
         .fetch_one(&pool)
         .await?
@@ -25,12 +26,14 @@ async fn lifecycle_events_are_typed_dovecote_rows() -> TestResult<()> {
             .await?;
     }
     reset_database(&pool).await?;
+    let repo = root.for_tenant(test_tenant());
 
     let relation = timed_relation(&repo, "dovecote-audit", "2026-01-02T00:00:00Z").await?;
     let subject = SubjectRef::new("user", format!("audit_{}", Uuid::now_v7()))?;
     let apply_at = ts("2026-01-01T00:01:00.123456Z")?;
     let apply_id = AuditEventId::deterministic(b"postgres-apply");
     let command = ApplyKeepsake::new(
+        test_tenant(),
         subject.clone(),
         relation.id,
         apply_at,
@@ -43,6 +46,7 @@ async fn lifecycle_events_are_typed_dovecote_rows() -> TestResult<()> {
     let revoke_id = AuditEventId::deterministic(b"postgres-revoke");
     repo.revoke_by_subject(
         &RevokeBySubject::new(
+            test_tenant(),
             subject,
             relation.id,
             ts("2026-01-01T00:02:00Z")?,
@@ -100,12 +104,14 @@ async fn lifecycle_events_are_typed_dovecote_rows() -> TestResult<()> {
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn exact_replay_is_idempotent_and_changed_content_conflicts() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
     let relation = timed_relation(&repo, "dovecote-replay", "2026-01-02T00:00:00Z").await?;
     let id = AuditEventId::deterministic(b"postgres-replay");
     let command = ApplyKeepsake::new(
+        test_tenant(),
         SubjectRef::new("user", format!("replay_{}", Uuid::now_v7()))?,
         relation.id,
         ts("2026-01-01T00:01:00Z")?,
@@ -121,6 +127,7 @@ async fn exact_replay_is_idempotent_and_changed_content_conflicts() -> TestResul
         1
     );
     let changed = ApplyKeepsake::new(
+        test_tenant(),
         command.subject.clone(),
         relation.id,
         command.at,

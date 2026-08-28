@@ -7,6 +7,7 @@ use std::pin::Pin;
 use crate::command::{ApplyKeepsake, RevokeKeepsake};
 use crate::model::{
     ActiveRelation, FulfillmentSnapshot, Keepsake, KeepsakeId, RelationId, RelationKey, SubjectRef,
+    TenantId,
 };
 
 #[cfg(any(test, feature = "test"))]
@@ -48,11 +49,16 @@ pub trait KeepsakeStore: Send + Sync {
     /// Finds active keepsakes for a subject.
     fn active_for_subject(
         &self,
+        tenant_id: &TenantId,
         subject: &SubjectRef,
     ) -> ProviderResult<Vec<Keepsake>, Self::Error>;
 
     /// Finds a keepsake by id.
-    fn get(&self, id: KeepsakeId) -> ProviderResult<Option<Keepsake>, Self::Error>;
+    fn get(
+        &self,
+        tenant_id: &TenantId,
+        id: KeepsakeId,
+    ) -> ProviderResult<Option<Keepsake>, Self::Error>;
 }
 
 /// Async read-side boundary for active relation state.
@@ -67,12 +73,14 @@ pub trait ActiveRelationSource: Send + Sync {
     /// Finds active relation memberships for a subject.
     fn active_relations_for_subject<'a>(
         &'a self,
+        tenant_id: &'a TenantId,
         subject: &'a SubjectRef,
     ) -> impl Future<Output = ProviderResult<Vec<ActiveRelation>, Self::Error>> + Send + 'a;
 
     /// Finds active relation memberships for a subject, filtered by relation ids.
     fn active_relations_for_subject_by_ids<'a>(
         &'a self,
+        tenant_id: &'a TenantId,
         subject: &'a SubjectRef,
         relation_ids: &'a [RelationId],
     ) -> impl Future<Output = ProviderResult<Vec<ActiveRelation>, Self::Error>> + Send + 'a;
@@ -80,6 +88,7 @@ pub trait ActiveRelationSource: Send + Sync {
     /// Finds active relation memberships for a subject, filtered by relation keys.
     fn active_relations_for_subject_by_keys<'a>(
         &'a self,
+        tenant_id: &'a TenantId,
         subject: &'a SubjectRef,
         keys: &'a [RelationKey],
     ) -> impl Future<Output = ProviderResult<Vec<ActiveRelation>, Self::Error>> + Send + 'a;
@@ -101,12 +110,14 @@ pub trait DynActiveRelationSource: Send + Sync {
     /// Finds active relation memberships for a subject.
     fn active_relations_for_subject<'a>(
         &'a self,
+        tenant_id: &'a TenantId,
         subject: &'a SubjectRef,
     ) -> DynActiveRelationFuture<'a, Self::Error>;
 
     /// Finds active relation memberships for a subject, filtered by relation ids.
     fn active_relations_for_subject_by_ids<'a>(
         &'a self,
+        tenant_id: &'a TenantId,
         subject: &'a SubjectRef,
         relation_ids: &'a [RelationId],
     ) -> DynActiveRelationFuture<'a, Self::Error>;
@@ -114,6 +125,7 @@ pub trait DynActiveRelationSource: Send + Sync {
     /// Finds active relation memberships for a subject, filtered by relation keys.
     fn active_relations_for_subject_by_keys<'a>(
         &'a self,
+        tenant_id: &'a TenantId,
         subject: &'a SubjectRef,
         keys: &'a [RelationKey],
     ) -> DynActiveRelationFuture<'a, Self::Error>;
@@ -127,20 +139,23 @@ where
 
     fn active_relations_for_subject<'a>(
         &'a self,
+        tenant_id: &'a TenantId,
         subject: &'a SubjectRef,
     ) -> DynActiveRelationFuture<'a, Self::Error> {
         Box::pin(ActiveRelationSource::active_relations_for_subject(
-            self, subject,
+            self, tenant_id, subject,
         ))
     }
 
     fn active_relations_for_subject_by_ids<'a>(
         &'a self,
+        tenant_id: &'a TenantId,
         subject: &'a SubjectRef,
         relation_ids: &'a [RelationId],
     ) -> DynActiveRelationFuture<'a, Self::Error> {
         Box::pin(ActiveRelationSource::active_relations_for_subject_by_ids(
             self,
+            tenant_id,
             subject,
             relation_ids,
         ))
@@ -148,11 +163,12 @@ where
 
     fn active_relations_for_subject_by_keys<'a>(
         &'a self,
+        tenant_id: &'a TenantId,
         subject: &'a SubjectRef,
         keys: &'a [RelationKey],
     ) -> DynActiveRelationFuture<'a, Self::Error> {
         Box::pin(ActiveRelationSource::active_relations_for_subject_by_keys(
-            self, subject, keys,
+            self, tenant_id, subject, keys,
         ))
     }
 }

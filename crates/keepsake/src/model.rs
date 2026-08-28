@@ -9,7 +9,7 @@ mod relation;
 mod tests;
 
 pub use fulfillment::FulfillmentSnapshot;
-pub use identity::{ActorRef, KeepsakeId, RelationId, SubjectRef};
+pub use identity::{ActorRef, KeepsakeId, RelationId, SubjectRef, TenantId};
 pub use keepsake::{ExpiryCause, Keepsake, KeepsakeLifecycle, KeepsakeRecord, LifecycleState};
 pub use relation::{
     ActiveRelation, RelationDefinition, RelationKey, RelationKind, RelationName, RelationSpec,

@@ -78,12 +78,18 @@ or MySQL, disable default features so Postgres is not enabled implicitly:
 
 ```toml
 [dependencies]
-keepsake-sqlx = { version = "2", default-features = false, features = ["sqlite", "migrations"] }
-dovecote-sqlx-sqlite = "0.1"
+keepsake-sqlx = { version = "3", default-features = false, features = ["sqlite", "migrations"] }
+dovecote-sqlx-sqlite = "0.2"
 ```
 
-Dovecote 0.1 is published on crates.io; use the matching adapter for the
+Dovecote 0.2 is published on crates.io; use the matching adapter for the
 selected backend.
+
+The 3.0 tenant-scoped SQLx contract is available for PostgreSQL, SQLite, and
+MySQL. Each backend has a clean v3 baseline and an explicit v2-to-v3
+prepare/backfill/activate route. For regulated workloads, prefer MySQL
+separate-database or SQLite file-per-tenant deployment boundaries when they fit
+the product's operational model.
 
 Disable `migrations` when your service vendors the SQL into a separate
 migration framework. Disable `fulfillment-counters` when fulfillment state is

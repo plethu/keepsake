@@ -5,15 +5,17 @@ use keepsake::{
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
+use super::PostgresBackend;
 use super::support::{
-    apply_event, dovecote_event, replay_event, revoke_by_subject_event, revoke_event,
+    apply_event, dovecote_event, dovecote_tenant_id, replay_event, revoke_by_subject_event,
+    revoke_event,
 };
 use super::{
-    AppliedKeepsake, AppliedKeepsakeRow, AppliedKeepsakeWriteRow, KeepsakeRepository,
-    RelationCache, RelationRow, RepositoryError, RepositoryResult,
+    AppliedKeepsake, AppliedKeepsakeRow, AppliedKeepsakeWriteRow, RelationCache, RelationRow,
+    RepositoryError, RepositoryResult, TenantSqlxKeepsakeRepository,
 };
 
-impl<C> KeepsakeRepository<C>
+impl<C> TenantSqlxKeepsakeRepository<'_, PostgresBackend, C>
 where
     C: RelationCache,
 {
@@ -23,41 +25,46 @@ where
     /// row is returned with `duplicate_prevented` set to true, even if the relation
     /// has since been disabled. Disabled relations reject new non-duplicate applies.
     pub async fn apply(&self, command: &ApplyKeepsake) -> RepositoryResult<AppliedKeepsake> {
+        if command.tenant_id != self.tenant_id {
+            return Err(RepositoryError::TenantScopeMismatch);
+        }
         command.subject.validate()?;
         command.context.validate()?;
 
         let mut tx = self.pool.begin().await?;
-        let relation = relation_for_share_tx(&mut tx, command.relation_id).await?;
+        let relation = relation_for_share_tx(&mut tx, &self.tenant_id, command.relation_id).await?;
         let metadata = serde_json::to_value(&command.metadata)?;
 
         let applied = sqlx::query_as::<_, AppliedKeepsakeWriteRow>(
             r"
             insert into keepsakes
-                (id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at, expires_at, metadata, created_at, updated_at)
+                (tenant_id, id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at, expires_at, metadata, created_at, updated_at)
             select
                 $1,
                 $2,
                 $3,
+                $4,
                 r.id,
                 'applied',
                 r.expiry_policy,
-                $4,
+                $5,
                 case
                     when r.expiry_policy->>'type' = 'at'
                     then (r.expiry_policy->>'timestamp')::timestamptz
                     else null
                 end,
+                $6,
                 $5,
-                $4,
-                $4
+                $5
             from keepsake_relation_definitions r
-            where r.id = $6
-            on conflict (subject_kind, subject_id, relation_id) where state = 'applied'
+            where r.tenant_id = $1 and r.id = $7
+            on conflict (tenant_id, subject_kind, subject_id, relation_id) where state = 'applied'
             do update set updated_at = keepsakes.updated_at
-            returning id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
+            returning tenant_id, id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
                 expires_at, fulfilled_at, revoked_at, metadata, (xmax <> 0) as duplicate_prevented
             ",
         )
+        .bind(self.tenant_id.as_str())
         .bind(command.id)
         .bind(command.subject.kind())
         .bind(command.subject.id())
@@ -75,7 +82,7 @@ where
 
         let (keepsake, duplicate_prevented) = applied.try_into_parts()?;
         let event = replay_event(
-            existing_audit_event_tx(&mut tx, &self.audit, command.audit_id).await?,
+            existing_audit_event_tx(&mut tx, &self.tenant_id, self.audit, command.audit_id).await?,
             apply_event(command, &keepsake, duplicate_prevented),
         );
         self.enqueue_audit_event_tx(&mut tx, &event).await?;
@@ -88,10 +95,13 @@ where
 
     /// Revokes an active keepsake from a command and records its audit event atomically.
     pub async fn revoke(&self, command: &RevokeKeepsake) -> RepositoryResult<bool> {
+        if command.tenant_id != self.tenant_id {
+            return Err(RepositoryError::TenantScopeMismatch);
+        }
         command.context.validate()?;
 
         let mut tx = self.pool.begin().await?;
-        let revoked = revoke_tx(&mut tx, command.keepsake_id, command.at).await?;
+        let revoked = revoke_tx(&mut tx, &self.tenant_id, command.keepsake_id, command.at).await?;
         if let Some(keepsake) = &revoked {
             let event = revoke_event(command, keepsake);
             self.enqueue_audit_event_tx(&mut tx, &event).await?;
@@ -108,13 +118,21 @@ where
         &self,
         command: &RevokeBySubject,
     ) -> RepositoryResult<Option<KeepsakeId>> {
+        if command.tenant_id != self.tenant_id {
+            return Err(RepositoryError::TenantScopeMismatch);
+        }
         command.subject.validate()?;
         command.context.validate()?;
 
         let mut tx = self.pool.begin().await?;
-        let revoked =
-            revoke_by_subject_tx(&mut tx, &command.subject, command.relation_id, command.at)
-                .await?;
+        let revoked = revoke_by_subject_tx(
+            &mut tx,
+            &self.tenant_id,
+            &command.subject,
+            command.relation_id,
+            command.at,
+        )
+        .await?;
         let revoked_id = revoked.as_ref().map(Keepsake::id);
         if let Some(keepsake) = &revoked {
             let event = revoke_by_subject_event(command, keepsake);
@@ -127,13 +145,15 @@ where
 
 async fn existing_audit_event_tx(
     tx: &mut Transaction<'_, Postgres>,
+    tenant_id: &keepsake::TenantId,
     config: &super::support::DovecoteAuditConfig,
     audit_id: keepsake::AuditEventId,
 ) -> RepositoryResult<Option<keepsake::AuditEvent>> {
     let event_id = format!("keepsake-audit-{}", audit_id.as_uuid());
     let bytes = sqlx::query_scalar::<_, Option<Vec<u8>>>(
-        "select data from dovecote_events where source = $1 and event_id = $2",
+        "select data from dovecote_events where tenant_id = $1 and source = $2 and event_id = $3",
     )
+    .bind(tenant_id.as_str())
     .bind(config.source())
     .bind(event_id)
     .fetch_optional(&mut **tx)
@@ -144,7 +164,7 @@ async fn existing_audit_event_tx(
         .transpose()
 }
 
-impl<C> KeepsakeRepository<C>
+impl<C> TenantSqlxKeepsakeRepository<'_, PostgresBackend, C>
 where
     C: RelationCache,
 {
@@ -153,8 +173,12 @@ where
         tx: &mut Transaction<'_, Postgres>,
         event: &keepsake::AuditEvent,
     ) -> RepositoryResult<()> {
-        let event = dovecote_event(&self.audit, event)?;
-        dovecote_sqlx_postgres::enqueue(tx, event)
+        let event = dovecote_event(self.audit, event)?;
+        let tenant_id = dovecote_tenant_id(&self.tenant_id)?;
+        let adapter = dovecote_sqlx_postgres::PostgresDovecote::new(self.pool.clone());
+        adapter
+            .for_tenant(tenant_id)
+            .enqueue(tx, event)
             .await
             .map(|_| ())
             .map_err(|error| RepositoryError::DovecoteEnqueue(error.into()))
@@ -163,6 +187,7 @@ where
 
 async fn revoke_by_subject_tx(
     tx: &mut Transaction<'_, Postgres>,
+    tenant_id: &keepsake::TenantId,
     subject: &SubjectRef,
     relation_id: RelationId,
     at: chrono::DateTime<chrono::Utc>,
@@ -170,12 +195,13 @@ async fn revoke_by_subject_tx(
     let row = sqlx::query_as::<_, AppliedKeepsakeRow>(
         r"
         update keepsakes
-        set state = 'revoked', revoked_at = $4, updated_at = $4
-        where subject_kind = $1 and subject_id = $2 and relation_id = $3 and state = 'applied'
-        returning id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
+        set state = 'revoked', revoked_at = $5, updated_at = $5
+        where tenant_id = $1 and subject_kind = $2 and subject_id = $3 and relation_id = $4 and state = 'applied'
+        returning tenant_id, id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
             expires_at, fulfilled_at, revoked_at, metadata
         ",
     )
+    .bind(tenant_id.as_str())
     .bind(subject.kind())
     .bind(subject.id())
     .bind(relation_id)
@@ -188,18 +214,20 @@ async fn revoke_by_subject_tx(
 
 async fn revoke_tx(
     tx: &mut Transaction<'_, Postgres>,
+    tenant_id: &keepsake::TenantId,
     keepsake_id: Uuid,
     at: chrono::DateTime<chrono::Utc>,
 ) -> RepositoryResult<Option<Keepsake>> {
     let row = sqlx::query_as::<_, AppliedKeepsakeRow>(
         r"
         update keepsakes
-        set state = 'revoked', revoked_at = $2, updated_at = $2
-        where id = $1 and state = 'applied'
-        returning id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
+        set state = 'revoked', revoked_at = $3, updated_at = $3
+        where tenant_id = $1 and id = $2 and state = 'applied'
+        returning tenant_id, id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
             expires_at, fulfilled_at, revoked_at, metadata
         ",
     )
+    .bind(tenant_id.as_str())
     .bind(keepsake_id)
     .bind(at)
     .fetch_optional(&mut **tx)
@@ -210,16 +238,18 @@ async fn revoke_tx(
 
 async fn relation_for_share_tx(
     tx: &mut Transaction<'_, Postgres>,
+    tenant_id: &keepsake::TenantId,
     relation_id: RelationId,
 ) -> RepositoryResult<RelationDefinition> {
     let row = sqlx::query_as::<_, RelationRow>(
         r"
-        select id, kind, key, enabled, expiry_policy
+        select tenant_id, id, kind, key, enabled, expiry_policy
         from keepsake_relation_definitions
-        where id = $1
+        where tenant_id = $1 and id = $2
         for share
         ",
     )
+    .bind(tenant_id.as_str())
     .bind(relation_id)
     .fetch_one(&mut **tx)
     .await?;

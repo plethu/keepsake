@@ -10,6 +10,7 @@ async fn sqlite_increment_counter_projection_is_atomic_and_returns_value() -> Te
     let subject = SubjectRef::new("account", "sqlite_acct_increment")?;
     let applied = repo
         .apply(&ApplyKeepsake::new(
+            SqliteHarness::tenant(),
             subject,
             relation.id,
             backend_cases::ts("2026-01-01T00:01:00Z")?,
@@ -59,6 +60,7 @@ async fn sqlite_checklist_fulfillment_persists_and_expires() -> TestResult<()> {
     let subject = SubjectRef::new("account", "sqlite_acct_checklist")?;
     let applied = repo
         .apply(&ApplyKeepsake::new(
+            SqliteHarness::tenant(),
             subject,
             relation.id,
             backend_cases::ts("2026-01-01T00:01:00Z")?,

@@ -9,4 +9,5 @@ mod sqlite {
     mod migrations;
     mod queries;
     mod support;
+    mod tenancy;
 }

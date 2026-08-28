@@ -3,9 +3,11 @@ use super::support::*;
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn lifecycle_commands_and_timed_batches_use_stable_order() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
 
     let relation = RelationDefinition::new(
+        test_tenant(),
         Uuid::now_v7(),
         RelationKey::new("tag", unique_key("stable"))?,
         true,
@@ -55,7 +57,8 @@ async fn lifecycle_commands_and_timed_batches_use_stable_order() -> TestResult<(
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn disabled_relation_is_excluded_from_timed_expiry() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let relation = timed_relation(&repo, "disabled-expiry", "2026-01-02T00:00:00Z").await?;
     let subject = SubjectRef::new("user", format!("disabled_expiry_{}", Uuid::now_v7()))?;
     let applied = apply_at(&repo, &subject, relation.id, "2026-01-01T00:00:00Z").await?;
@@ -85,11 +88,14 @@ async fn disabled_relation_is_excluded_from_timed_expiry() -> TestResult<()> {
 async fn lifecycle_check_constraints_reject_invalid_rows() -> TestResult<()> {
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
-    let repo = KeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/postgres")?;
-    repo.migrate().await?;
+    reset_schema(&pool).await?;
+    let root = KeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/postgres")?;
+    root.migrate().await?;
     reset_database(&pool).await?;
+    let repo = root.for_tenant(test_tenant());
 
     let manual = RelationDefinition::new(
+        test_tenant(),
         Uuid::now_v7(),
         RelationKey::new("tag", unique_key("manual-constraint"))?,
         true,
@@ -166,7 +172,8 @@ async fn lifecycle_check_constraints_reject_invalid_rows() -> TestResult<()> {
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn concurrent_expiry_workers_expire_each_due_row_once() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let relation = timed_relation(&repo, "concurrent-expiry", "2026-01-02T00:00:00Z").await?;
     let subjects = [
         SubjectRef::new("user", format!("expire_a_{}", Uuid::now_v7()))?,
@@ -180,8 +187,8 @@ async fn concurrent_expiry_workers_expire_each_due_row_once() -> TestResult<()> 
     }
 
     let due_at = ts("2026-01-03T00:00:00Z")?;
-    let worker_a = spawn_expire_due(repo.clone(), due_at);
-    let worker_b = spawn_expire_due(repo.clone(), due_at);
+    let worker_a = spawn_expire_due(root.clone(), test_tenant(), due_at);
+    let worker_b = spawn_expire_due(root.clone(), test_tenant(), due_at);
     let expired = worker_a.await?? + worker_b.await??;
 
     assert_eq!(expired, subjects.len() as u64);
@@ -194,17 +201,20 @@ async fn concurrent_expiry_workers_expire_each_due_row_once() -> TestResult<()> 
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn concurrent_expiry_and_disable_have_ordered_outcomes() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let relation = timed_relation(&repo, "expiry-disable", "2026-01-02T00:00:00Z").await?;
     let subject = SubjectRef::new("user", format!("expiry_disable_{}", Uuid::now_v7()))?;
     apply_at(&repo, &subject, relation.id, "2026-01-01T00:00:00Z").await?;
 
-    let expire_task = spawn_expire_due(repo.clone(), ts("2026-01-03T00:00:00Z")?);
+    let expire_task = spawn_expire_due(root.clone(), test_tenant(), ts("2026-01-03T00:00:00Z")?);
     let disable_task = tokio::spawn({
-        let repo = repo.clone();
+        let disable_root = root.clone();
         let disabled_at = ts("2026-01-03T00:01:00Z")?;
         async move {
-            repo.set_relation_enabled(relation.id, false, disabled_at)
+            disable_root
+                .for_tenant(test_tenant())
+                .set_relation_enabled(relation.id, false, disabled_at)
                 .await
         }
     });
@@ -226,7 +236,8 @@ async fn concurrent_expiry_and_disable_have_ordered_outcomes() -> TestResult<()>
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn relation_share_lock_blocks_disable_until_expiry_order_is_resolved() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let relation = timed_relation(&repo, "expiry-lock", "2026-01-02T00:00:00Z").await?;
     let subject = SubjectRef::new("user", format!("expiry_lock_{}", Uuid::now_v7()))?;
     apply_at(&repo, &subject, relation.id, "2026-01-01T00:00:00Z").await?;
@@ -234,10 +245,11 @@ async fn relation_share_lock_blocks_disable_until_expiry_order_is_resolved() -> 
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
     let disable_pool = single_connection_pool(&database_url).await?;
-    let disable_repo = KeepsakeRepository::new(
+    let disable_root = KeepsakeRepository::new(
         disable_pool.clone(),
         "https://tests.invalid/keepsake/postgres",
     )?;
+    let disable_repo = disable_root.for_tenant(test_tenant());
     let mut tx = pool.begin().await?;
 
     lock_due_keepsake_and_relation_for_expiry(&mut tx, relation.id).await?;
@@ -262,10 +274,11 @@ async fn relation_share_lock_blocks_disable_until_expiry_order_is_resolved() -> 
 
 #[cfg(feature = "fulfillment-counters")]
 async fn fulfilled_relation(
-    repo: &KeepsakeRepository,
+    repo: &TenantKeepsakeRepository<'_, impl RelationCache>,
     key_prefix: &str,
 ) -> TestResult<RelationDefinition> {
     let relation = RelationDefinition::new(
+        repo.tenant_id().clone(),
         Uuid::now_v7(),
         RelationKey::new("tag", unique_key(key_prefix))?,
         true,
@@ -287,9 +300,10 @@ async fn stored_state(keepsake_id: Uuid) -> TestResult<String> {
         r"
         select state
         from keepsakes
-        where id = $1
+        where tenant_id = $1 and id = $2
         ",
     )
+    .bind(test_tenant().as_str())
     .bind(keepsake_id)
     .fetch_one(&pool)
     .await?)
@@ -299,7 +313,8 @@ async fn stored_state(keepsake_id: Uuid) -> TestResult<String> {
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn counter_at_least_fulfillment_expiry_runs_end_to_end() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let relation = fulfilled_relation(&repo, "fulfilled-counter").await?;
     let subject = SubjectRef::new("user", format!("fulfilled_counter_{}", Uuid::now_v7()))?;
     let applied = apply_at(&repo, &subject, relation.id, "2026-01-01T00:00:00Z").await?;
@@ -342,7 +357,8 @@ async fn counter_at_least_fulfillment_expiry_runs_end_to_end() -> TestResult<()>
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn disabled_relation_is_not_expired_by_fulfillment() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let relation = fulfilled_relation(&repo, "fulfilled-disabled").await?;
     let subject = SubjectRef::new("user", format!("fulfilled_disabled_{}", Uuid::now_v7()))?;
     let applied = apply_at(&repo, &subject, relation.id, "2026-01-01T00:00:00Z").await?;
@@ -365,8 +381,10 @@ async fn disabled_relation_is_not_expired_by_fulfillment() -> TestResult<()> {
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn fulfilled_expiry_skips_disabled_relations_before_limit() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let disabled_relation = RelationDefinition::enabled(
+        test_tenant(),
         Uuid::from_u128(1),
         RelationKey::new("tag", unique_key("fulfilled-disabled-first"))?,
         ExpiryPolicy::WhenFulfilled {
@@ -377,6 +395,7 @@ async fn fulfilled_expiry_skips_disabled_relations_before_limit() -> TestResult<
         },
     )?;
     let enabled_relation = RelationDefinition::enabled(
+        test_tenant(),
         Uuid::from_u128(2),
         RelationKey::new("tag", unique_key("fulfilled-enabled-second"))?,
         ExpiryPolicy::WhenFulfilled {
@@ -425,8 +444,10 @@ async fn fulfilled_expiry_skips_disabled_relations_before_limit() -> TestResult<
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn fulfilled_expiry_skips_unfulfilled_relations_before_limit() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let unfulfilled_relation = RelationDefinition::enabled(
+        test_tenant(),
         Uuid::from_u128(1),
         RelationKey::new("tag", unique_key("fulfilled-unfulfilled-first"))?,
         ExpiryPolicy::WhenFulfilled {
@@ -437,6 +458,7 @@ async fn fulfilled_expiry_skips_unfulfilled_relations_before_limit() -> TestResu
         },
     )?;
     let fulfilled_relation = RelationDefinition::enabled(
+        test_tenant(),
         Uuid::from_u128(2),
         RelationKey::new("tag", unique_key("fulfilled-fulfilled-second"))?,
         ExpiryPolicy::WhenFulfilled {
@@ -489,7 +511,8 @@ async fn fulfilled_expiry_skips_unfulfilled_relations_before_limit() -> TestResu
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn due_fulfilled_expiry_returns_only_when_fulfilled_keepsakes() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let fulfilled = fulfilled_relation(&repo, "fulfilled-due").await?;
     let timed = timed_relation(&repo, "fulfilled-due-timed", "2026-01-02T00:00:00Z").await?;
     let fulfilled_subject = SubjectRef::new("user", format!("fulfilled_due_{}", Uuid::now_v7()))?;
@@ -522,10 +545,11 @@ async fn due_fulfilled_expiry_returns_only_when_fulfilled_keepsakes() -> TestRes
 
 #[cfg(feature = "fulfillment-counters")]
 async fn checklist_relation(
-    repo: &KeepsakeRepository,
+    repo: &TenantKeepsakeRepository<'_, impl RelationCache>,
     key_prefix: &str,
 ) -> TestResult<RelationDefinition> {
     let relation = RelationDefinition::new(
+        repo.tenant_id().clone(),
         Uuid::now_v7(),
         RelationKey::new("tag", unique_key(key_prefix))?,
         true,
@@ -542,7 +566,8 @@ async fn checklist_relation(
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn increment_counter_projection_is_atomic_and_returns_value() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let relation = fulfilled_relation(&repo, "increment-counter").await?;
     let subject = SubjectRef::new("user", format!("increment_counter_{}", Uuid::now_v7()))?;
     let applied = apply_at(&repo, &subject, relation.id, "2026-01-01T00:00:00Z").await?;
@@ -569,7 +594,8 @@ async fn increment_counter_projection_is_atomic_and_returns_value() -> TestResul
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn checklist_fulfillment_persists_and_expires() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let relation = checklist_relation(&repo, "checklist-fulfill").await?;
     let subject = SubjectRef::new("user", format!("checklist_{}", Uuid::now_v7()))?;
     let applied = apply_at(&repo, &subject, relation.id, "2026-01-01T00:00:00Z").await?;
@@ -620,13 +646,15 @@ async fn checklist_fulfillment_persists_and_expires() -> TestResult<()> {
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn revoke_by_subject_revokes_active_keepsake() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let relation = timed_relation(&repo, "revoke-by-subject", "2026-02-01T00:00:00Z").await?;
     let subject = SubjectRef::new("user", format!("revoke_by_subject_{}", Uuid::now_v7()))?;
     let applied = apply_at(&repo, &subject, relation.id, "2026-01-01T00:00:00Z").await?;
 
     let revoked = repo
         .revoke_by_subject(&RevokeBySubject::new(
+            test_tenant(),
             subject.clone(),
             relation.id,
             ts("2026-01-01T00:05:00Z")?,
@@ -638,6 +666,7 @@ async fn revoke_by_subject_revokes_active_keepsake() -> TestResult<()> {
 
     let again = repo
         .revoke_by_subject(&RevokeBySubject::new(
+            test_tenant(),
             subject,
             relation.id,
             ts("2026-01-01T00:06:00Z")?,

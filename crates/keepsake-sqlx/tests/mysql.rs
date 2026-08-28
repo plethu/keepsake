@@ -10,4 +10,5 @@ mod mysql {
     mod relations;
     mod schema;
     mod support;
+    mod tenancy;
 }

@@ -16,11 +16,15 @@ async fn mysql_concurrent_duplicate_apply_creates_one_active_keepsake() -> TestR
     let subject = SubjectRef::new("account", format!("mysql_race_{}", Uuid::now_v7()))?;
     let at = ts("2026-01-01T00:01:00Z")?;
 
-    let spawn_apply = |repo: keepsake_sqlx::MySqlKeepsakeRepository| {
+    let spawn_apply = |repo: keepsake_sqlx::TenantSqlxKeepsakeRepository<
+        'static,
+        keepsake_sqlx::MySqlBackend,
+    >| {
         let subject = subject.clone();
         let relation_id = relation.id;
         tokio::spawn(async move {
             let command = ApplyKeepsake::new(
+                MySqlHarness::tenant(),
                 subject,
                 relation_id,
                 at,
@@ -139,6 +143,7 @@ async fn mysql_revoke_by_subject_revokes_active_keepsake() -> TestResult<()> {
     let subject = SubjectRef::new("account", "mysql_acct_revoke_subject")?;
     let applied = repo
         .apply(&ApplyKeepsake::new(
+            MySqlHarness::tenant(),
             subject.clone(),
             relation.id,
             ts("2026-01-01T00:01:00Z")?,
@@ -148,6 +153,7 @@ async fn mysql_revoke_by_subject_revokes_active_keepsake() -> TestResult<()> {
 
     let revoked = repo
         .revoke_by_subject(&RevokeBySubject::new(
+            MySqlHarness::tenant(),
             subject.clone(),
             relation.id,
             ts("2026-01-01T00:02:00Z")?,
@@ -160,6 +166,7 @@ async fn mysql_revoke_by_subject_revokes_active_keepsake() -> TestResult<()> {
 
     let again = repo
         .revoke_by_subject(&RevokeBySubject::new(
+            MySqlHarness::tenant(),
             subject,
             relation.id,
             ts("2026-01-01T00:03:00Z")?,

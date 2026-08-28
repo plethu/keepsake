@@ -1,7 +1,9 @@
 #[path = "../support/backend_cases.rs"]
 pub mod backend_cases;
 
-use keepsake_sqlx::{RepositoryError, SqliteKeepsakeRepository};
+use keepsake_sqlx::{
+    RepositoryError, SqliteBackend, SqliteKeepsakeRepository, TenantSqlxKeepsakeRepository,
+};
 use sqlx::sqlite::SqlitePoolOptions;
 use uuid::Uuid;
 
@@ -12,22 +14,25 @@ pub struct SqliteHarness;
 #[async_trait::async_trait]
 impl BackendHarness for SqliteHarness {
     const BACKEND: &'static str = "sqlite";
+    const TENANT: &'static str = "sqlite-test-tenant";
 
     type Pool = sqlx::SqlitePool;
-    type Repo = SqliteKeepsakeRepository;
+    type Repo = TenantSqlxKeepsakeRepository<'static, SqliteBackend>;
 
     async fn repo() -> TestResult<(Self::Repo, Self::Pool)> {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
             .await?;
-        let repo =
-            SqliteKeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/sqlite")?;
-        repo.migrate().await?;
+        let root = Box::leak(Box::new(SqliteKeepsakeRepository::new(
+            pool.clone(),
+            "https://tests.invalid/keepsake/sqlite",
+        )?));
+        root.migrate().await?;
         sqlx::raw_sql(dovecote_sqlx_sqlite::MIGRATIONS[0].sql())
             .execute(&pool)
             .await?;
-        Ok((repo, pool))
+        Ok((root.for_tenant(Self::tenant()), pool))
     }
 
     async fn backend_marker(pool: &Self::Pool) -> Result<String, sqlx::Error> {

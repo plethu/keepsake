@@ -3,11 +3,18 @@ use super::support::*;
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn relation_upsert_is_idempotent_by_natural_key() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let key = RelationKey::new("tag", unique_key("idempotent"))?;
-    let first =
-        RelationDefinition::new(Uuid::now_v7(), key.clone(), true, ExpiryPolicy::ManualOnly)?;
+    let first = RelationDefinition::new(
+        test_tenant(),
+        Uuid::now_v7(),
+        key.clone(),
+        true,
+        ExpiryPolicy::ManualOnly,
+    )?;
     let second = RelationDefinition::new(
+        test_tenant(),
         Uuid::now_v7(),
         key,
         false,
@@ -28,9 +35,11 @@ async fn relation_upsert_is_idempotent_by_natural_key() -> TestResult<()> {
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn relation_reads_return_stored_relation_definition() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let key = RelationKey::new("tag", unique_key("lookup"))?;
     let relation = RelationDefinition::new(
+        test_tenant(),
         Uuid::now_v7(),
         key.clone(),
         true,
@@ -54,13 +63,18 @@ async fn relation_reads_return_stored_relation_definition() -> TestResult<()> {
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn typed_relation_specs_upsert_and_apply_by_marker_type() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let now = ts("2026-01-01T00:00:00Z")?;
     let relation = repo.upsert_relation_spec::<TrustedAccountTag>(now).await?;
     let subject = SubjectRef::new("account", format!("typed_{}", Uuid::now_v7()))?;
 
-    let command =
-        ApplyKeepsake::for_spec::<TrustedAccountTag>(subject.clone(), now, test_context("worker")?);
+    let command = ApplyKeepsake::for_spec::<TrustedAccountTag>(
+        test_tenant(),
+        subject.clone(),
+        now,
+        test_context("worker")?,
+    );
     let applied = repo.apply(&command).await?;
 
     assert_eq!(relation.id, TrustedAccountTag::ID);
@@ -74,9 +88,11 @@ async fn typed_relation_specs_upsert_and_apply_by_marker_type() -> TestResult<()
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn typed_relation_specs_reject_existing_key_with_different_id() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let now = ts("2026-01-01T00:00:00Z")?;
     let existing = RelationDefinition::enabled(
+        test_tenant(),
         Uuid::now_v7(),
         ConflictingTrustedAccountTag::KEY.to_relation_key()?,
         ExpiryPolicy::At {
@@ -108,14 +124,21 @@ async fn typed_relation_specs_reject_existing_key_with_different_id() -> TestRes
 async fn relation_cache_serves_reads_and_invalidates_local_writes() -> TestResult<()> {
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
-    let repo = KeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/postgres")?
+    reset_schema(&pool).await?;
+    let root = KeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/postgres")?
         .with_local_relation_cache(LocalRelationCacheConfig::new(Duration::from_mins(1)));
-    repo.migrate().await?;
+    root.migrate().await?;
     reset_database(&pool).await?;
+    let repo = root.for_tenant(test_tenant());
 
     let key = RelationKey::new("tag", unique_key("cached"))?;
-    let relation =
-        RelationDefinition::new(Uuid::now_v7(), key.clone(), true, ExpiryPolicy::ManualOnly)?;
+    let relation = RelationDefinition::new(
+        test_tenant(),
+        Uuid::now_v7(),
+        key.clone(),
+        true,
+        ExpiryPolicy::ManualOnly,
+    )?;
     let stored = upsert_relation(&repo, &relation).await?;
 
     assert_eq!(repo.relation_by_key(&key).await?, Some(stored.clone()));
@@ -124,9 +147,10 @@ async fn relation_cache_serves_reads_and_invalidates_local_writes() -> TestResul
         r"
         update keepsake_relation_definitions
         set enabled = false
-        where id = $1
+        where tenant_id = $1 and id = $2
         ",
     )
+    .bind(test_tenant().as_str())
     .bind(stored.id)
     .execute(&pool)
     .await?;
@@ -147,8 +171,8 @@ struct SpyRelationCache {
 
 #[derive(Debug, Default)]
 struct SpyRelationCacheState {
-    by_id: BTreeMap<RelationId, RelationDefinition>,
-    by_key: BTreeMap<RelationKey, RelationDefinition>,
+    by_id: BTreeMap<(TenantId, RelationId), RelationDefinition>,
+    by_key: BTreeMap<(TenantId, RelationKey), RelationDefinition>,
     get_by_id_calls: usize,
     get_by_key_calls: usize,
     store_calls: usize,
@@ -176,30 +200,42 @@ impl SpyRelationCache {
 
 #[async_trait::async_trait]
 impl RelationCache for SpyRelationCache {
-    async fn get_by_id(&self, relation_id: RelationId) -> Option<RelationDefinition> {
+    async fn get_by_id(
+        &self,
+        tenant_id: &TenantId,
+        relation_id: RelationId,
+    ) -> Option<RelationDefinition> {
         let mut state = self.lock_state();
         state.get_by_id_calls += 1;
-        state.by_id.get(&relation_id).cloned()
+        state.by_id.get(&(tenant_id.clone(), relation_id)).cloned()
     }
 
-    async fn get_by_key(&self, key: &RelationKey) -> Option<RelationDefinition> {
+    async fn get_by_key(
+        &self,
+        tenant_id: &TenantId,
+        key: &RelationKey,
+    ) -> Option<RelationDefinition> {
         let mut state = self.lock_state();
         state.get_by_key_calls += 1;
-        state.by_key.get(key).cloned()
+        state.by_key.get(&(tenant_id.clone(), key.clone())).cloned()
     }
 
-    async fn store(&self, relation: &RelationDefinition) {
+    async fn store(&self, tenant_id: &TenantId, relation: &RelationDefinition) {
         let mut state = self.lock_state();
         state.store_calls += 1;
-        state.by_id.insert(relation.id, relation.clone());
-        state.by_key.insert(relation.key.clone(), relation.clone());
+        state
+            .by_id
+            .insert((tenant_id.clone(), relation.id), relation.clone());
+        state
+            .by_key
+            .insert((tenant_id.clone(), relation.key.clone()), relation.clone());
     }
 
-    async fn remove_by_id(&self, relation_id: RelationId) {
+    async fn remove_by_id(&self, tenant_id: &TenantId, relation_id: RelationId) {
         let mut state = self.lock_state();
         state.remove_by_id_calls += 1;
-        if let Some(relation) = state.by_id.remove(&relation_id) {
-            state.by_key.remove(&relation.key);
+        if let Some(relation) = state.by_id.remove(&(tenant_id.clone(), relation_id)) {
+            state.by_key.remove(&(tenant_id.clone(), relation.key));
         }
     }
 }
@@ -209,15 +245,22 @@ impl RelationCache for SpyRelationCache {
 async fn relation_lookup_hits_cache_after_first_database_read() -> TestResult<()> {
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
+    reset_schema(&pool).await?;
     let cache = SpyRelationCache::default();
-    let repo = KeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/postgres")?
+    let root = KeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/postgres")?
         .with_relation_cache(cache.clone());
-    repo.migrate().await?;
+    root.migrate().await?;
     reset_database(&pool).await?;
+    let repo = root.for_tenant(test_tenant());
 
     let key = RelationKey::new("tag", unique_key("spy-cached"))?;
-    let relation =
-        RelationDefinition::new(Uuid::now_v7(), key.clone(), true, ExpiryPolicy::ManualOnly)?;
+    let relation = RelationDefinition::new(
+        test_tenant(),
+        Uuid::now_v7(),
+        key.clone(),
+        true,
+        ExpiryPolicy::ManualOnly,
+    )?;
     let stored = upsert_relation(&repo, &relation).await?;
 
     assert_eq!(repo.relation_by_key(&key).await?, Some(stored.clone()));

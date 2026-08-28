@@ -29,6 +29,7 @@ let timed_repo = repo.at(now);
 timed_repo.upsert_relation_spec::<TrustedTag>().await?;
 
 let command = ApplyKeepsake::for_spec::<TrustedTag>(
+    repo.tenant_id().clone(),
     subject,
     now,
     CommandContext::new(ActorRef::new("system", "worker")?),

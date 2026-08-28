@@ -5,11 +5,13 @@ use keepsake::FulfillmentSnapshot;
 use sqlx::{Row, Sqlite, Transaction};
 use uuid::Uuid;
 
-use crate::repository::{RelationCache, RepositoryResult, SqliteKeepsakeRepository};
+use crate::repository::{
+    RelationCache, RepositoryResult, SqliteBackend, TenantSqlxKeepsakeRepository,
+};
 
 use super::rows::format_timestamp;
 
-impl<C> SqliteKeepsakeRepository<C>
+impl<C> TenantSqlxKeepsakeRepository<'_, SqliteBackend, C>
 where
     C: RelationCache,
 {
@@ -24,28 +26,23 @@ where
         sqlx::query(
             r"
             insert into keepsake_fulfillment_counters
-                (keepsake_id, key, value, observed_at)
-            values (?1, ?2, ?3, ?4)
-            on conflict (keepsake_id, key) do update set
+                (tenant_id, keepsake_id, key, value, observed_at)
+            values (?1, ?2, ?3, ?4, ?5)
+            on conflict (tenant_id, keepsake_id, key) do update set
                 value = excluded.value,
                 observed_at = excluded.observed_at
             ",
         )
+        .bind(self.tenant_id.as_str())
         .bind(keepsake_id.to_string())
         .bind(key)
         .bind(value)
         .bind(format_timestamp(observed_at))
-        .execute(&self.pool)
+        .execute(self.pool)
         .await?;
         Ok(())
     }
 
-    /// Atomically adds `delta` to a fulfillment counter and returns the new value.
-    ///
-    /// Unlike [`upsert_counter_projection`](Self::upsert_counter_projection), the
-    /// increment is computed in the database, so concurrent writers cannot lose
-    /// updates to a read-modify-write race.
-    #[cfg(feature = "fulfillment-counters")]
     /// Atomically adds `delta` to a fulfillment counter and returns the new value.
     pub async fn increment_counter_projection(
         &self,
@@ -57,25 +54,24 @@ where
         let row = sqlx::query(
             r"
             insert into keepsake_fulfillment_counters
-                (keepsake_id, key, value, observed_at)
-            values (?1, ?2, ?3, ?4)
-            on conflict (keepsake_id, key) do update set
+                (tenant_id, keepsake_id, key, value, observed_at)
+            values (?1, ?2, ?3, ?4, ?5)
+            on conflict (tenant_id, keepsake_id, key) do update set
                 value = value + excluded.value,
                 observed_at = excluded.observed_at
             returning value
             ",
         )
+        .bind(self.tenant_id.as_str())
         .bind(keepsake_id.to_string())
         .bind(key)
         .bind(delta)
         .bind(format_timestamp(observed_at))
-        .fetch_one(&self.pool)
+        .fetch_one(self.pool)
         .await?;
         Ok(row.try_get("value")?)
     }
 
-    /// Upserts a checklist item completion projection.
-    #[cfg(feature = "fulfillment-counters")]
     /// Upserts a checklist item completion projection.
     pub async fn upsert_checklist_projection(
         &self,
@@ -87,18 +83,19 @@ where
         sqlx::query(
             r"
             insert into keepsake_fulfillment_checklist
-                (keepsake_id, item, complete, observed_at)
-            values (?1, ?2, ?3, ?4)
-            on conflict (keepsake_id, item) do update set
+                (tenant_id, keepsake_id, item, complete, observed_at)
+            values (?1, ?2, ?3, ?4, ?5)
+            on conflict (tenant_id, keepsake_id, item) do update set
                 complete = excluded.complete,
                 observed_at = excluded.observed_at
             ",
         )
+        .bind(self.tenant_id.as_str())
         .bind(keepsake_id.to_string())
         .bind(item)
         .bind(i64::from(complete))
         .bind(format_timestamp(observed_at))
-        .execute(&self.pool)
+        .execute(self.pool)
         .await?;
         Ok(())
     }
@@ -106,15 +103,17 @@ where
 
 pub(super) async fn fulfillment_snapshot_tx(
     tx: &mut Transaction<'_, Sqlite>,
+    tenant_id: &keepsake::TenantId,
     keepsake_id: Uuid,
 ) -> RepositoryResult<FulfillmentSnapshot> {
     let counter_rows = sqlx::query(
         r"
         select key, value
         from keepsake_fulfillment_counters
-        where keepsake_id = ?1
+        where tenant_id = ?1 and keepsake_id = ?2
         ",
     )
+    .bind(tenant_id.as_str())
     .bind(keepsake_id.to_string())
     .fetch_all(&mut **tx)
     .await?;
@@ -128,9 +127,10 @@ pub(super) async fn fulfillment_snapshot_tx(
         r"
         select item, complete
         from keepsake_fulfillment_checklist
-        where keepsake_id = ?1
+        where tenant_id = ?1 and keepsake_id = ?2
         ",
     )
+    .bind(tenant_id.as_str())
     .bind(keepsake_id.to_string())
     .fetch_all(&mut **tx)
     .await?;

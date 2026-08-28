@@ -5,12 +5,13 @@ use uuid::Uuid;
 #[cfg(feature = "fulfillment-counters")]
 mod fulfillment;
 
+use super::PostgresBackend;
 use super::{
-    KeepsakeRepository, RelationCache, RepositoryResult, TimedExpiryCandidate,
+    RelationCache, RepositoryResult, TenantSqlxKeepsakeRepository, TimedExpiryCandidate,
     support::expiry_event, validate_limit,
 };
 
-impl<C> KeepsakeRepository<C>
+impl<C> TenantSqlxKeepsakeRepository<'_, PostgresBackend, C>
 where
     C: RelationCache,
 {
@@ -25,18 +26,20 @@ where
             r"
             select k.id as keepsake_id, k.relation_id, k.subject_kind, k.subject_id, k.expires_at as due_at
             from keepsakes k
-            join keepsake_relation_definitions r on r.id = k.relation_id
-            where k.state = 'applied'
+            join keepsake_relation_definitions r
+              on r.tenant_id = k.tenant_id and r.id = k.relation_id
+            where k.tenant_id = $1 and k.state = 'applied'
               and r.enabled
               and k.expires_at is not null
-              and k.expires_at <= $1
+              and k.expires_at <= $2
             order by k.expires_at, k.relation_id, k.subject_kind, k.subject_id, k.id
-            limit $2
+            limit $3
             ",
         )
+        .bind(self.tenant_id.as_str())
         .bind(now)
         .bind(limit)
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool)
         .await?;
         Ok(rows)
     }
@@ -44,7 +47,7 @@ where
     pub async fn expire_due_timed(&self, now: DateTime<Utc>, limit: i64) -> RepositoryResult<u64> {
         let limit = validate_limit(limit)?;
         let mut tx = self.pool.begin().await?;
-        let candidates = due_timed_expiry_tx(&mut tx, now, limit).await?;
+        let candidates = due_timed_expiry_tx(&mut tx, &self.tenant_id, now, limit).await?;
         let ids = candidates
             .iter()
             .map(|row| row.keepsake_id)
@@ -57,16 +60,18 @@ where
         let result = sqlx::query(
             r"
             update keepsakes
-            set state = 'expired', updated_at = $2
-            where id = any($1)
+            set state = 'expired', updated_at = $3
+            where tenant_id = $1 and id = any($2)
               and state = 'applied'
               and exists (
                 select 1
                 from keepsake_relation_definitions r
-                where r.id = keepsakes.relation_id and r.enabled
+                where r.tenant_id = keepsakes.tenant_id
+                  and r.id = keepsakes.relation_id and r.enabled
               )
             ",
         )
+        .bind(self.tenant_id.as_str())
         .bind(&ids)
         .bind(now)
         .execute(&mut *tx)
@@ -77,6 +82,7 @@ where
                 &expiry_event(
                     now,
                     ExpiryCause::Timed,
+                    self.tenant_id.clone(),
                     candidate.keepsake_id,
                     candidate.relation_id,
                     candidate.subject_kind,
@@ -92,6 +98,7 @@ where
 
 async fn due_timed_expiry_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant_id: &keepsake::TenantId,
     now: DateTime<Utc>,
     limit: i64,
 ) -> RepositoryResult<Vec<TimedExpiryCandidate>> {
@@ -99,17 +106,19 @@ async fn due_timed_expiry_tx(
         r"
         select k.id as keepsake_id, k.relation_id, k.subject_kind, k.subject_id, k.expires_at as due_at
         from keepsakes k
-        join keepsake_relation_definitions r on r.id = k.relation_id
-        where k.state = 'applied'
+        join keepsake_relation_definitions r
+          on r.tenant_id = k.tenant_id and r.id = k.relation_id
+        where k.tenant_id = $1 and k.state = 'applied'
           and r.enabled
           and k.expires_at is not null
-          and k.expires_at <= $1
+          and k.expires_at <= $2
         order by k.expires_at, k.relation_id, k.subject_kind, k.subject_id, k.id
-        limit $2
+        limit $3
         for update of k skip locked
         for share of r
         ",
     )
+    .bind(tenant_id.as_str())
     .bind(now)
     .bind(limit)
     .fetch_all(&mut **tx)

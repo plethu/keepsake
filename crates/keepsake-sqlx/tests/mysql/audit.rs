@@ -30,6 +30,7 @@ async fn mysql_lifecycle_events_are_typed_dovecote_rows() -> TestResult<()> {
     let apply_at = ts("2026-01-01T00:01:00Z")?;
     let apply_id = AuditEventId::deterministic(b"mysql-apply");
     let command = ApplyKeepsake::new(
+        MySqlHarness::tenant(),
         subject.clone(),
         relation.id,
         apply_at,
@@ -43,6 +44,7 @@ async fn mysql_lifecycle_events_are_typed_dovecote_rows() -> TestResult<()> {
     let revoke_id = AuditEventId::deterministic(b"mysql-revoke");
     repo.revoke_by_subject(
         &RevokeBySubject::new(
+            MySqlHarness::tenant(),
             subject,
             relation.id,
             ts("2026-01-01T00:02:00Z")?,
@@ -105,6 +107,7 @@ async fn mysql_exact_replay_is_idempotent_and_changed_content_conflicts() -> Tes
     let relation = upsert_relation::<MySqlHarness>(&repo, ExpiryPolicy::ManualOnly).await?;
     let id = AuditEventId::deterministic(b"mysql-replay");
     let command = ApplyKeepsake::new(
+        MySqlHarness::tenant(),
         SubjectRef::new("account", "mysql_replay")?,
         relation.id,
         ts("2026-01-01T00:01:00Z")?,
@@ -120,6 +123,7 @@ async fn mysql_exact_replay_is_idempotent_and_changed_content_conflicts() -> Tes
         1
     );
     let changed = ApplyKeepsake::new(
+        MySqlHarness::tenant(),
         command.subject.clone(),
         relation.id,
         command.at,

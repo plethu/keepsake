@@ -7,32 +7,42 @@ use sqlx::{MySql, Transaction};
 use uuid::Uuid;
 
 use crate::repository::support::{
-    apply_event, expires_at, replay_event, revoke_by_subject_event, revoke_event,
+    apply_event, dovecote_event, dovecote_tenant_id, expires_at, replay_event,
+    revoke_by_subject_event, revoke_event,
 };
 use crate::repository::{
-    AppliedKeepsake, MySqlKeepsakeRepository, RelationCache, RepositoryError, RepositoryResult,
+    AppliedKeepsake, MySqlBackend, RelationCache, RepositoryError, RepositoryResult,
+    TenantSqlxKeepsakeRepository,
 };
 
-use super::super::support::dovecote_event;
 use super::rows::{keepsake_from_row, naive_timestamp, relation_from_row};
 
-impl<C> MySqlKeepsakeRepository<C>
+impl<C> TenantSqlxKeepsakeRepository<'_, MySqlBackend, C>
 where
     C: RelationCache,
 {
     /// Applies a command idempotently and records its audit event atomically.
     pub async fn apply(&self, command: &ApplyKeepsake) -> RepositoryResult<AppliedKeepsake> {
+        if command.tenant_id != self.tenant_id {
+            return Err(RepositoryError::TenantScopeMismatch);
+        }
         command.subject.validate()?;
         command.context.validate()?;
 
         let mut tx = self.pool.begin().await?;
-        let relation = relation_for_update_tx(&mut tx, command.relation_id).await?;
-        if let Some(existing) =
-            active_keepsake_for_subject_relation_tx(&mut tx, &command.subject, command.relation_id)
-                .await?
+        let relation =
+            relation_for_update_tx(&mut tx, &self.tenant_id, command.relation_id).await?;
+        if let Some(existing) = active_keepsake_for_subject_relation_tx(
+            &mut tx,
+            &self.tenant_id,
+            &command.subject,
+            command.relation_id,
+        )
+        .await?
         {
             let event = replay_event(
-                existing_audit_event_tx(&mut tx, &self.audit, command.audit_id).await?,
+                existing_audit_event_tx(&mut tx, &self.tenant_id, self.audit, command.audit_id)
+                    .await?,
                 apply_event(command, &existing, true),
             );
             self.enqueue_audit_event_tx(&mut tx, &event).await?;
@@ -52,11 +62,12 @@ where
         sqlx::query(
             r"
             insert into keepsakes
-                (id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
+                (tenant_id, id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
                  expires_at, metadata, created_at, updated_at)
-            values (?, ?, ?, ?, 'applied', ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, 'applied', ?, ?, ?, ?, ?, ?)
             ",
         )
+        .bind(self.tenant_id.as_str().as_bytes())
         .bind(command.id.to_string())
         .bind(command.subject.kind())
         .bind(command.subject.id())
@@ -70,11 +81,11 @@ where
         .execute(&mut *tx)
         .await?;
 
-        let keepsake = keepsake_by_id_tx(&mut tx, command.id).await?.ok_or(
-            RepositoryError::RelationDefinitionMissing {
+        let keepsake = keepsake_by_id_tx(&mut tx, &self.tenant_id, command.id)
+            .await?
+            .ok_or(RepositoryError::RelationDefinitionMissing {
                 relation_id: command.relation_id,
-            },
-        )?;
+            })?;
         self.enqueue_audit_event_tx(&mut tx, &apply_event(command, &keepsake, false))
             .await?;
         tx.commit().await?;
@@ -86,10 +97,13 @@ where
 
     /// Revokes an active keepsake from a command and records its audit event atomically.
     pub async fn revoke(&self, command: &RevokeKeepsake) -> RepositoryResult<bool> {
+        if command.tenant_id != self.tenant_id {
+            return Err(RepositoryError::TenantScopeMismatch);
+        }
         command.context.validate()?;
 
         let mut tx = self.pool.begin().await?;
-        let revoked = revoke_tx(&mut tx, command.keepsake_id, command.at).await?;
+        let revoked = revoke_tx(&mut tx, &self.tenant_id, command.keepsake_id, command.at).await?;
         if let Some(keepsake) = &revoked {
             self.enqueue_audit_event_tx(&mut tx, &revoke_event(command, keepsake))
                 .await?;
@@ -99,20 +113,25 @@ where
     }
 
     /// Revokes the active keepsake for a subject and relation pair.
-    ///
-    /// Returns the revoked keepsake id, or `None` when no active keepsake exists
-    /// for the pair. The active uniqueness invariant guarantees at most one match.
     pub async fn revoke_by_subject(
         &self,
         command: &RevokeBySubject,
     ) -> RepositoryResult<Option<KeepsakeId>> {
+        if command.tenant_id != self.tenant_id {
+            return Err(RepositoryError::TenantScopeMismatch);
+        }
         command.subject.validate()?;
         command.context.validate()?;
 
         let mut tx = self.pool.begin().await?;
-        let revoked =
-            revoke_by_subject_tx(&mut tx, &command.subject, command.relation_id, command.at)
-                .await?;
+        let revoked = revoke_by_subject_tx(
+            &mut tx,
+            &self.tenant_id,
+            &command.subject,
+            command.relation_id,
+            command.at,
+        )
+        .await?;
         let revoked_id = revoked.as_ref().map(Keepsake::id);
         if let Some(keepsake) = &revoked {
             self.enqueue_audit_event_tx(&mut tx, &revoke_by_subject_event(command, keepsake))
@@ -125,24 +144,26 @@ where
 
 async fn existing_audit_event_tx(
     tx: &mut Transaction<'_, MySql>,
+    tenant_id: &keepsake::TenantId,
     config: &super::super::support::DovecoteAuditConfig,
     audit_id: keepsake::AuditEventId,
 ) -> RepositoryResult<Option<keepsake::AuditEvent>> {
     let event_id = format!("keepsake-audit-{}", audit_id.as_uuid());
-    let bytes = sqlx::query_scalar::<_, Option<Vec<u8>>>(
-        "select data from dovecote_events where source = ? and event_id = ?",
+    let row = sqlx::query(
+        "select data from dovecote_events where tenant_id = ? and source = ? and event_id = ?",
     )
+    .bind(tenant_id.as_str().as_bytes())
     .bind(config.source())
     .bind(event_id)
     .fetch_optional(&mut **tx)
     .await?;
-    bytes
-        .flatten()
-        .map(|data| serde_json::from_slice(&data).map_err(RepositoryError::from))
+    let Some(row) = row else { return Ok(None) };
+    let data: Option<Vec<u8>> = sqlx::Row::try_get(&row, "data")?;
+    data.map(|data| serde_json::from_slice(&data).map_err(RepositoryError::from))
         .transpose()
 }
 
-impl<C> MySqlKeepsakeRepository<C>
+impl<C> TenantSqlxKeepsakeRepository<'_, MySqlBackend, C>
 where
     C: RelationCache,
 {
@@ -151,8 +172,11 @@ where
         tx: &mut Transaction<'_, MySql>,
         audit: &keepsake::AuditEvent,
     ) -> RepositoryResult<()> {
-        let event = dovecote_event(&self.audit, audit)?;
-        dovecote_sqlx_mysql::enqueue(tx, event)
+        let event = dovecote_event(self.audit, audit)?;
+        let tenant_id = dovecote_tenant_id(&self.tenant_id)?;
+        dovecote_sqlx_mysql::MySqlDovecote::new((*self.pool).clone())
+            .for_tenant(tenant_id)
+            .enqueue(tx, event)
             .await
             .map(|_| ())
             .map_err(|error| RepositoryError::DovecoteEnqueue(error.into()))
@@ -161,16 +185,18 @@ where
 
 pub(super) async fn relation_for_update_tx(
     tx: &mut Transaction<'_, MySql>,
+    tenant_id: &keepsake::TenantId,
     relation_id: RelationId,
 ) -> RepositoryResult<RelationDefinition> {
     let row = sqlx::query(
         r"
-        select id, kind, `key`, enabled, expiry_policy
+        select tenant_id, id, kind, `key`, enabled, expiry_policy
         from keepsake_relation_definitions
-        where id = ?
+        where tenant_id = ? and id = ?
         for update
         ",
     )
+    .bind(tenant_id.as_str().as_bytes())
     .bind(relation_id.to_string())
     .fetch_one(&mut **tx)
     .await?;
@@ -179,18 +205,20 @@ pub(super) async fn relation_for_update_tx(
 
 pub(super) async fn active_keepsake_for_subject_relation_tx(
     tx: &mut Transaction<'_, MySql>,
+    tenant_id: &keepsake::TenantId,
     subject: &SubjectRef,
     relation_id: RelationId,
 ) -> RepositoryResult<Option<Keepsake>> {
     let row = sqlx::query(
         r"
-        select id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
+        select tenant_id, id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
             expires_at, fulfilled_at, revoked_at, metadata
         from keepsakes
-        where subject_kind = ? and subject_id = ? and relation_id = ? and state = 'applied'
+        where tenant_id = ? and subject_kind = ? and subject_id = ? and relation_id = ? and state = 'applied'
         for update
         ",
     )
+    .bind(tenant_id.as_str().as_bytes())
     .bind(subject.kind())
     .bind(subject.id())
     .bind(relation_id.to_string())
@@ -201,16 +229,18 @@ pub(super) async fn active_keepsake_for_subject_relation_tx(
 
 pub(super) async fn keepsake_by_id_tx(
     tx: &mut Transaction<'_, MySql>,
+    tenant_id: &keepsake::TenantId,
     keepsake_id: Uuid,
 ) -> RepositoryResult<Option<Keepsake>> {
     let row = sqlx::query(
         r"
-        select id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
+        select tenant_id, id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
             expires_at, fulfilled_at, revoked_at, metadata
         from keepsakes
-        where id = ?
+        where tenant_id = ? and id = ?
         ",
     )
+    .bind(tenant_id.as_str().as_bytes())
     .bind(keepsake_id.to_string())
     .fetch_optional(&mut **tx)
     .await?;
@@ -219,6 +249,7 @@ pub(super) async fn keepsake_by_id_tx(
 
 pub(super) async fn revoke_tx(
     tx: &mut Transaction<'_, MySql>,
+    tenant_id: &keepsake::TenantId,
     keepsake_id: Uuid,
     at: DateTime<Utc>,
 ) -> RepositoryResult<Option<Keepsake>> {
@@ -226,42 +257,50 @@ pub(super) async fn revoke_tx(
         r"
         update keepsakes
         set state = 'revoked', revoked_at = ?, updated_at = ?
-        where id = ? and state = 'applied'
+        where tenant_id = ? and id = ? and state = 'applied'
         ",
     )
     .bind(naive_timestamp(at))
     .bind(naive_timestamp(at))
+    .bind(tenant_id.as_str().as_bytes())
     .bind(keepsake_id.to_string())
     .execute(&mut **tx)
     .await?;
     if result.rows_affected() == 0 {
         return Ok(None);
     }
-    keepsake_by_id_tx(tx, keepsake_id).await
+    keepsake_by_id_tx(tx, tenant_id, keepsake_id).await
 }
 
 pub(super) async fn revoke_by_subject_tx(
     tx: &mut Transaction<'_, MySql>,
+    tenant_id: &keepsake::TenantId,
     subject: &SubjectRef,
     relation_id: RelationId,
     at: DateTime<Utc>,
 ) -> RepositoryResult<Option<Keepsake>> {
-    let row = sqlx::query(
+    let Some(existing) =
+        active_keepsake_for_subject_relation_tx(tx, tenant_id, subject, relation_id).await?
+    else {
+        return Ok(None);
+    };
+    let result = sqlx::query(
         r"
-        select id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
-            expires_at, fulfilled_at, revoked_at, metadata
-        from keepsakes
-        where subject_kind = ? and subject_id = ? and relation_id = ? and state = 'applied'
-        for update
+        update keepsakes
+        set state = 'revoked', revoked_at = ?, updated_at = ?
+        where tenant_id = ? and subject_kind = ? and subject_id = ? and relation_id = ? and state = 'applied'
         ",
     )
+    .bind(naive_timestamp(at))
+    .bind(naive_timestamp(at))
+    .bind(tenant_id.as_str().as_bytes())
     .bind(subject.kind())
     .bind(subject.id())
     .bind(relation_id.to_string())
-    .fetch_optional(&mut **tx)
+    .execute(&mut **tx)
     .await?;
-    let Some(keepsake) = row.as_ref().map(keepsake_from_row).transpose()? else {
+    if result.rows_affected() == 0 {
         return Ok(None);
-    };
-    revoke_tx(tx, keepsake.id(), at).await
+    }
+    keepsake_by_id_tx(tx, tenant_id, existing.id()).await
 }

@@ -28,6 +28,7 @@ async fn mysql_increment_counter_projection_is_atomic_and_returns_value() -> Tes
     let subject = SubjectRef::new("account", "mysql_acct_increment")?;
     let applied = repo
         .apply(&ApplyKeepsake::new(
+            MySqlHarness::tenant(),
             subject,
             relation.id,
             ts("2026-01-01T00:01:00Z")?,
@@ -75,6 +76,7 @@ async fn mysql_checklist_fulfillment_persists_and_expires() -> TestResult<()> {
     let subject = SubjectRef::new("account", "mysql_acct_checklist")?;
     let applied = repo
         .apply(&ApplyKeepsake::new(
+            MySqlHarness::tenant(),
             subject,
             relation.id,
             ts("2026-01-01T00:01:00Z")?,

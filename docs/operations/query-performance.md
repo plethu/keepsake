@@ -45,8 +45,9 @@ use std::time::Duration;
 
 use keepsake_sqlx::{KeepsakeRepository, LocalRelationCacheConfig};
 
-let repo = KeepsakeRepository::new(pool, "https://accounts.example.test/keepsake")?
+let root = KeepsakeRepository::new(pool, "https://accounts.example.test/keepsake")?
     .with_local_relation_cache(LocalRelationCacheConfig::new(Duration::from_mins(1)));
+let repo = root.for_tenant(keepsake::TenantId::new("account-group-a")?);
 ```
 
 The cache is local to the repository handle. Writes through that handle update

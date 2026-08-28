@@ -3,12 +3,12 @@ use keepsake::{RelationDefinition, RelationId, RelationKey, RelationSpec};
 
 use crate::repository::support::parse_uuid;
 use crate::repository::{
-    RelationCache, RepositoryError, RepositoryResult, SqliteKeepsakeRepository,
+    RelationCache, RepositoryError, RepositoryResult, SqliteBackend, TenantSqlxKeepsakeRepository,
 };
 
 use super::rows::{format_timestamp, relation_from_row};
 
-impl<C> SqliteKeepsakeRepository<C>
+impl<C> TenantSqlxKeepsakeRepository<'_, SqliteBackend, C>
 where
     C: RelationCache,
 {
@@ -18,29 +18,35 @@ where
         relation: &RelationDefinition,
         at: DateTime<Utc>,
     ) -> RepositoryResult<RelationDefinition> {
+        if relation.tenant_id != self.tenant_id {
+            return Err(RepositoryError::TenantScopeMismatch);
+        }
         let expiry_policy = serde_json::to_string(&relation.expiry)?;
         let row = sqlx::query(
             r"
             insert into keepsake_relation_definitions
-                (id, kind, key, enabled, expiry_policy, created_at, updated_at)
-            values (?1, ?2, ?3, ?4, ?5, ?6, ?6)
-            on conflict (kind, key) do update set
+                (tenant_id, id, kind, key, enabled, expiry_policy, created_at, updated_at)
+            values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+            on conflict (tenant_id, kind, key) do update set
                 enabled = excluded.enabled,
                 expiry_policy = excluded.expiry_policy,
-                updated_at = ?6
-            returning id, kind, key, enabled, expiry_policy
+                updated_at = ?7
+            returning tenant_id, id, kind, key, enabled, expiry_policy
             ",
         )
+        .bind(self.tenant_id.as_str())
         .bind(relation.id.to_string())
         .bind(relation.key.kind())
         .bind(relation.key.name())
         .bind(relation.enabled)
         .bind(expiry_policy)
         .bind(format_timestamp(at))
-        .fetch_one(&self.pool)
+        .fetch_one(self.pool)
         .await?;
         let relation = relation_from_row(&row)?;
-        self.relation_cache.remove_by_id(relation.id).await;
+        self.relation_cache
+            .remove_by_id(&self.tenant_id, relation.id)
+            .await;
         Ok(relation)
     }
 
@@ -52,22 +58,23 @@ where
     where
         Spec: RelationSpec,
     {
-        let relation = RelationDefinition::from_spec::<Spec>(at)?;
+        let relation = RelationDefinition::from_spec::<Spec>(self.tenant_id.clone(), at)?;
         let expiry_policy = serde_json::to_string(&relation.expiry)?;
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query(
             r"
             insert into keepsake_relation_definitions
-                (id, kind, key, enabled, expiry_policy, created_at, updated_at)
-            values (?1, ?2, ?3, ?4, ?5, ?6, ?6)
-            on conflict (kind, key) do update set
+                (tenant_id, id, kind, key, enabled, expiry_policy, created_at, updated_at)
+            values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+            on conflict (tenant_id, kind, key) do update set
                 enabled = excluded.enabled,
                 expiry_policy = excluded.expiry_policy,
-                updated_at = ?6
+                updated_at = ?7
             where keepsake_relation_definitions.id = excluded.id
-            returning id, kind, key, enabled, expiry_policy
+            returning tenant_id, id, kind, key, enabled, expiry_policy
             ",
         )
+        .bind(self.tenant_id.as_str())
         .bind(relation.id.to_string())
         .bind(relation.key.kind())
         .bind(relation.key.name())
@@ -82,9 +89,10 @@ where
                 r"
                 select id
                 from keepsake_relation_definitions
-                where kind = ?1 and key = ?2
+                where tenant_id = ?1 and kind = ?2 and key = ?3
                 ",
             )
+            .bind(self.tenant_id.as_str())
             .bind(relation.key.kind())
             .bind(relation.key.name())
             .fetch_one(&mut *tx)
@@ -99,7 +107,9 @@ where
 
         tx.commit().await?;
         let relation = relation_from_row(&row)?;
-        self.relation_cache.remove_by_id(relation.id).await;
+        self.relation_cache
+            .remove_by_id(&self.tenant_id, relation.id)
+            .await;
         Ok(relation)
     }
 
@@ -108,23 +118,28 @@ where
         &self,
         relation_id: RelationId,
     ) -> RepositoryResult<Option<RelationDefinition>> {
-        if let Some(relation) = self.relation_cache.get_by_id(relation_id).await {
+        if let Some(relation) = self
+            .relation_cache
+            .get_by_id(&self.tenant_id, relation_id)
+            .await
+        {
             return Ok(Some(relation));
         }
 
         let row = sqlx::query(
             r"
-            select id, kind, key, enabled, expiry_policy
+            select tenant_id, id, kind, key, enabled, expiry_policy
             from keepsake_relation_definitions
-            where id = ?1
+            where tenant_id = ?1 and id = ?2
             ",
         )
+        .bind(self.tenant_id.as_str())
         .bind(relation_id.to_string())
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.pool)
         .await?;
         let relation = row.map(|row| relation_from_row(&row)).transpose()?;
         if let Some(relation) = &relation {
-            self.relation_cache.store(relation).await;
+            self.relation_cache.store(&self.tenant_id, relation).await;
         }
         Ok(relation)
     }
@@ -134,24 +149,25 @@ where
         &self,
         key: &RelationKey,
     ) -> RepositoryResult<Option<RelationDefinition>> {
-        if let Some(relation) = self.relation_cache.get_by_key(key).await {
+        if let Some(relation) = self.relation_cache.get_by_key(&self.tenant_id, key).await {
             return Ok(Some(relation));
         }
 
         let row = sqlx::query(
             r"
-            select id, kind, key, enabled, expiry_policy
+            select tenant_id, id, kind, key, enabled, expiry_policy
             from keepsake_relation_definitions
-            where kind = ?1 and key = ?2
+            where tenant_id = ?1 and kind = ?2 and key = ?3
             ",
         )
+        .bind(self.tenant_id.as_str())
         .bind(key.kind())
         .bind(key.name())
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.pool)
         .await?;
         let relation = row.map(|row| relation_from_row(&row)).transpose()?;
         if let Some(relation) = &relation {
-            self.relation_cache.store(relation).await;
+            self.relation_cache.store(&self.tenant_id, relation).await;
         }
         Ok(relation)
     }
@@ -166,18 +182,21 @@ where
         let result = sqlx::query(
             r"
             update keepsake_relation_definitions
-            set enabled = ?2, updated_at = ?3
-            where id = ?1
+            set enabled = ?3, updated_at = ?4
+            where tenant_id = ?1 and id = ?2
             ",
         )
+        .bind(self.tenant_id.as_str())
         .bind(relation_id.to_string())
         .bind(enabled)
         .bind(format_timestamp(at))
-        .execute(&self.pool)
+        .execute(self.pool)
         .await?;
         let changed = result.rows_affected() == 1;
         if changed {
-            self.relation_cache.remove_by_id(relation_id).await;
+            self.relation_cache
+                .remove_by_id(&self.tenant_id, relation_id)
+                .await;
         }
         Ok(changed)
     }

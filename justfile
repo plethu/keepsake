@@ -40,5 +40,9 @@ test-db-all: test-db-postgres test-db-mysql
 check:
     scripts/check-project-gates.sh
 
+supply-chain:
+    if ! command -v cargo-deny >/dev/null 2>&1; then echo "cargo-deny is unavailable; run 'mise install'" >&2; exit 2; fi
+    cargo deny --all-features check advisories bans licenses sources
+
 clean:
     cargo clean

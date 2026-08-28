@@ -19,8 +19,10 @@ as the Keepsake mutation. Its defaults are:
 - content type: `application/json`.
 
 The application must configure a stable absolute source URI. The event id is
-`keepsake-audit-<audit event id>`. Consumers deduplicate at the CloudEvents
-`(source, id)` boundary because delivery remains at least once.
+`keepsake-audit-<audit event id>`. Consumers deduplicate at the tenant-scoped
+Dovecote `(tenant_id, source, event_id)` boundary because delivery remains at
+least once. A transport projection must preserve tenant routing alongside the
+CloudEvents `(source, id)` pair.
 
 ## Reading history and publishing
 
@@ -36,7 +38,7 @@ mix another source, stream, event type, or payload contract into typed history:
 let config = keepsake_sqlx::DovecoteAuditConfig::new("https://example.invalid/keepsake")?;
 let page = dovecote_sqlx_postgres::page(&pool, after_row_id, limit).await?;
 for stored in page {
-    let event = keepsake_sqlx::decode_audit_event(&config, stored.event())?;
+    let event = keepsake_sqlx::decode_audit_event(&config, &stored)?;
     // Use `stored.delivery()` for delivery state, not a Keepsake table.
 }
 ```

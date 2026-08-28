@@ -16,6 +16,7 @@ API reference: [docs.rs/keepsake](https://docs.rs/keepsake) and
 1. [Overview](overview.md) — what Keepsake is for
 2. [Installation](installation.md) — add the crates to a Rust service
 3. [Quickstart](quickstart.md) — apply a relation and read active state
+4. [Threat model](threat-model.md) — security boundaries and tenant risks
 
 ## Guides
 
@@ -38,6 +39,7 @@ API reference: [docs.rs/keepsake](https://docs.rs/keepsake) and
 ## Operations
 
 - [Migrations](operations/migrations.md)
+- [Security](../SECURITY.md)
 - [Versioning](operations/versioning.md)
 - [Indexes](operations/indexes.md)
 - [Cron and workers](operations/cron-workers.md)

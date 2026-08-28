@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::Result;
 use crate::policy::ExpiryPolicy;
 
-use super::{KeepsakeId, RelationDefinition, RelationId, SubjectRef};
+use super::{KeepsakeId, RelationDefinition, RelationId, SubjectRef, TenantId};
 
 mod record;
 
@@ -57,6 +57,8 @@ pub enum KeepsakeLifecycle {
 /// Policy-bearing relation assignment from an opaque subject to a relation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Keepsake {
+    /// Tenant that owns this keepsake.
+    tenant_id: TenantId,
     /// Stable keepsake id.
     id: KeepsakeId,
     /// Application-owned subject reference.
@@ -85,6 +87,7 @@ impl Keepsake {
         subject.validate()?;
         relation.expiry.validate()?;
         Ok(Self {
+            tenant_id: relation.tenant_id.clone(),
             id,
             subject,
             relation_id: relation.id,
@@ -93,6 +96,12 @@ impl Keepsake {
             lifecycle: KeepsakeLifecycle::Applied,
             metadata,
         })
+    }
+
+    /// Returns the owning tenant identity.
+    #[must_use]
+    pub const fn tenant_id(&self) -> &TenantId {
+        &self.tenant_id
     }
 
     /// Returns the stable keepsake id.

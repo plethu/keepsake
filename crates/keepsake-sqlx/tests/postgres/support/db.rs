@@ -1,10 +1,45 @@
 use super::*;
 
+use std::sync::OnceLock;
+
+const POSTGRES_TEST_DATABASE_LOCK_KEY: i64 = 0x4b45_4550_5341_4b45;
+static POSTGRES_TEST_DATABASE_LOCK: OnceLock<()> = OnceLock::new();
+
 pub async fn single_connection_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {
     PgPoolOptions::new()
         .max_connections(1)
         .connect(database_url)
         .await
+}
+
+/// Drops all Keepsake and Dovecote test objects so every integration test can
+/// select its migration track independently of the preceding test.
+///
+/// The first reset in a test process also takes a session-level advisory lock
+/// on the configured database and holds the connection until process exit.
+/// This serializes separate `cargo test` invocations targeting the same
+/// disposable URL; `--test-threads=1` remains required for ordering within one
+/// process. The connection is deliberately leaked because returning it to the
+/// pool would retain the session lock for an unrelated future checkout.
+pub async fn reset_schema(pool: &PgPool) -> TestResult<()> {
+    if POSTGRES_TEST_DATABASE_LOCK.get().is_none() {
+        let mut connection = pool.acquire().await?;
+        sqlx::query("select pg_advisory_lock($1::bigint)")
+            .bind(POSTGRES_TEST_DATABASE_LOCK_KEY)
+            .execute(&mut *connection)
+            .await?;
+        if POSTGRES_TEST_DATABASE_LOCK.set(()).is_ok() {
+            let _ = Box::leak(Box::new(connection.leak()));
+        } else {
+            connection.close().await?;
+        }
+    }
+    sqlx::raw_sql(
+        "drop table if exists dovecote_deliveries, dovecote_events, dovecote_schema, keepsake_upgrade_evidence, keepsake_dovecote_bridge_claims, keepsake_dovecote_bridge_ledger, keepsake_dovecote_bridge_config, keepsake_audit_outbox, keepsake_audit_context_attributes, keepsake_audit_events, keepsake_fulfillment_checklist, keepsake_fulfillment_counters, keepsakes, keepsake_relation_definitions, keepsake_schema_metadata cascade; drop table if exists _sqlx_migrations cascade",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 pub async fn reset_database(pool: &PgPool) -> TestResult<()> {
@@ -67,11 +102,12 @@ pub async fn insert_raw_keepsake_value(
     sqlx::query(
         r"
         insert into keepsakes
-          (id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
+          (tenant_id, id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
            expires_at, fulfilled_at, revoked_at, metadata, created_at, updated_at)
-        values ($1, 'user', $2, $3, $4, $5, $6, $7, $8, $9, '{}'::jsonb, $6, $6)
+        values ($1, $2, 'user', $3, $4, $5, $6, $7, $8, $9, $10, '{}'::jsonb, $7, $7)
         ",
     )
+    .bind(test_tenant().as_str())
     .bind(Uuid::now_v7())
     .bind(format!("invalid_{}", Uuid::now_v7()))
     .bind(relation_id)
@@ -102,10 +138,11 @@ pub async fn lock_relation_for_share(
         r"
         select id
         from keepsake_relation_definitions
-        where id = $1
+        where tenant_id = $1 and id = $2
         for share
         ",
     )
+    .bind(test_tenant().as_str())
     .bind(relation_id)
     .execute(&mut **tx)
     .await?;
@@ -120,8 +157,9 @@ pub async fn lock_due_keepsake_and_relation_for_expiry(
         r"
         select k.id
         from keepsakes k
-        join keepsake_relation_definitions r on r.id = k.relation_id
-        where k.relation_id = $1
+        join keepsake_relation_definitions r
+          on r.tenant_id = k.tenant_id and r.id = k.relation_id
+        where k.tenant_id = $1 and k.relation_id = $2
           and k.state = 'applied'
           and r.enabled
           and k.expires_at is not null
@@ -131,6 +169,7 @@ pub async fn lock_due_keepsake_and_relation_for_expiry(
         for share of r
         ",
     )
+    .bind(test_tenant().as_str())
     .bind(relation_id)
     .execute(&mut **tx)
     .await?;

@@ -10,7 +10,7 @@ use crate::error::KeepsakeError;
 use crate::model::KeepsakeRecord;
 use crate::model::{
     ActiveRelation, FulfillmentSnapshot, Keepsake, KeepsakeId, LifecycleState, RelationDefinition,
-    RelationId, RelationKey, RelationSpec, SubjectRef,
+    RelationId, RelationKey, RelationSpec, SubjectRef, TenantId,
 };
 use crate::policy::ExpiryPolicy;
 
@@ -81,7 +81,7 @@ pub enum InMemoryKeepsakeStoreError {
 /// In-memory keepsake store for adapter and application tests.
 #[derive(Debug, Clone, Default)]
 pub struct InMemoryKeepsakeStore {
-    keepsakes: Arc<RwLock<BTreeMap<KeepsakeId, Keepsake>>>,
+    keepsakes: Arc<RwLock<BTreeMap<(TenantId, KeepsakeId), Keepsake>>>,
 }
 
 /// Error returned by the in-memory fulfillment provider.
@@ -95,12 +95,13 @@ pub enum InMemoryFulfillmentProviderError {
 /// In-memory fulfillment snapshot provider for adapter and application tests.
 #[derive(Debug, Clone, Default)]
 pub struct InMemoryFulfillmentProvider {
-    snapshots: Arc<RwLock<BTreeMap<KeepsakeId, FulfillmentSnapshot>>>,
+    snapshots: Arc<RwLock<BTreeMap<(TenantId, KeepsakeId), FulfillmentSnapshot>>>,
 }
 
 /// Builder for seeding one active typed relation into [`InMemoryActiveRelations`].
 #[derive(Debug, Clone)]
 pub struct ActiveRelationSeed<Spec> {
+    tenant_id: TenantId,
     keepsake_id: KeepsakeId,
     subject: SubjectRef,
     active_at: DateTime<Utc>,
@@ -114,8 +115,14 @@ where
 {
     /// Starts an active relation seed with an explicit keepsake instance id.
     #[must_use]
-    pub fn new(keepsake_id: KeepsakeId, subject: SubjectRef, active_at: DateTime<Utc>) -> Self {
+    pub fn new(
+        tenant_id: TenantId,
+        keepsake_id: KeepsakeId,
+        subject: SubjectRef,
+        active_at: DateTime<Utc>,
+    ) -> Self {
         Self {
+            tenant_id,
             keepsake_id,
             subject,
             active_at,
@@ -126,8 +133,18 @@ where
 
     /// Starts an active relation seed from a deterministic UUID integer.
     #[must_use]
-    pub fn from_u128(instance_id: u128, subject: SubjectRef, active_at: DateTime<Utc>) -> Self {
-        Self::new(uuid::Uuid::from_u128(instance_id), subject, active_at)
+    pub fn from_u128(
+        tenant_id: TenantId,
+        instance_id: u128,
+        subject: SubjectRef,
+        active_at: DateTime<Utc>,
+    ) -> Self {
+        Self::new(
+            tenant_id,
+            uuid::Uuid::from_u128(instance_id),
+            subject,
+            active_at,
+        )
     }
 
     /// Adds one opaque application metadata attribute.
@@ -153,7 +170,7 @@ where
     }
 
     fn into_active_relation(self) -> Result<ActiveRelation, KeepsakeError> {
-        let relation = RelationDefinition::from_spec::<Spec>(self.active_at)?;
+        let relation = RelationDefinition::from_spec::<Spec>(self.tenant_id, self.active_at)?;
         let keepsake = Keepsake::applied(
             self.keepsake_id,
             self.subject,
@@ -195,6 +212,7 @@ impl InMemoryActiveRelations {
     /// Inserts an active keepsake for a typed relation spec with empty metadata.
     pub fn insert_active_for_spec<Spec>(
         &self,
+        tenant_id: TenantId,
         instance_id: u128,
         subject: SubjectRef,
         active_at: DateTime<Utc>,
@@ -203,6 +221,7 @@ impl InMemoryActiveRelations {
         Spec: RelationSpec,
     {
         self.insert_active_relation(ActiveRelationSeed::<Spec>::from_u128(
+            tenant_id,
             instance_id,
             subject,
             active_at,
@@ -223,6 +242,7 @@ impl InMemoryActiveRelations {
     /// Adds an active keepsake for a typed relation spec.
     pub fn insert_for_spec<Spec>(
         &self,
+        tenant_id: TenantId,
         keepsake_id: KeepsakeId,
         subject: SubjectRef,
         applied_at: DateTime<Utc>,
@@ -232,13 +252,14 @@ impl InMemoryActiveRelations {
         Spec: RelationSpec,
     {
         self.insert_active_relation(
-            ActiveRelationSeed::<Spec>::new(keepsake_id, subject, applied_at)
+            ActiveRelationSeed::<Spec>::new(tenant_id, keepsake_id, subject, applied_at)
                 .with_attributes(metadata),
         )
     }
 
     fn active_for_subject(
         &self,
+        tenant_id: &TenantId,
         subject: &SubjectRef,
     ) -> ProviderResult<Vec<ActiveRelation>, InMemoryActiveRelationsError> {
         let mut active = self
@@ -246,7 +267,9 @@ impl InMemoryActiveRelations {
             .read()
             .map_err(|_| InMemoryActiveRelationsError::Poisoned)?
             .iter()
-            .filter(|active| active.keepsake().subject() == subject)
+            .filter(|active| {
+                active.keepsake().tenant_id() == tenant_id && active.keepsake().subject() == subject
+            })
             .cloned()
             .collect::<Vec<_>>();
         sort_active_relations(&mut active);
@@ -255,6 +278,7 @@ impl InMemoryActiveRelations {
 
     fn active_for_subject_by_ids(
         &self,
+        tenant_id: &TenantId,
         subject: &SubjectRef,
         relation_ids: &[RelationId],
     ) -> ProviderResult<Vec<ActiveRelation>, InMemoryActiveRelationsError> {
@@ -269,7 +293,8 @@ impl InMemoryActiveRelations {
             .map_err(|_| InMemoryActiveRelationsError::Poisoned)?
             .iter()
             .filter(|active| {
-                active.keepsake().subject() == subject
+                active.keepsake().tenant_id() == tenant_id
+                    && active.keepsake().subject() == subject
                     && requested.contains(&active.keepsake().relation_id())
             })
             .cloned()
@@ -280,6 +305,7 @@ impl InMemoryActiveRelations {
 
     fn active_for_subject_by_keys(
         &self,
+        tenant_id: &TenantId,
         subject: &SubjectRef,
         keys: &[RelationKey],
     ) -> ProviderResult<Vec<ActiveRelation>, InMemoryActiveRelationsError> {
@@ -294,7 +320,9 @@ impl InMemoryActiveRelations {
             .map_err(|_| InMemoryActiveRelationsError::Poisoned)?
             .iter()
             .filter(|active| {
-                active.keepsake().subject() == subject && requested.contains(&active.relation().key)
+                active.keepsake().tenant_id() == tenant_id
+                    && active.keepsake().subject() == subject
+                    && requested.contains(&active.relation().key)
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -321,6 +349,14 @@ impl InMemoryKeepsakeStore {
     ) -> ProviderResult<Keepsake, InMemoryKeepsakeStoreError> {
         command.subject.validate()?;
         command.context.validate()?;
+        if command.tenant_id != relation.tenant_id {
+            return Err(InMemoryKeepsakeStoreError::Keepsake(
+                KeepsakeError::TenantMismatch {
+                    expected: relation.tenant_id.clone(),
+                    actual: command.tenant_id.clone(),
+                },
+            ));
+        }
         if command.relation_id != relation.id {
             return Err(InMemoryKeepsakeStoreError::RelationMismatch {
                 command_relation_id: command.relation_id,
@@ -332,7 +368,7 @@ impl InMemoryKeepsakeStore {
             .keepsakes
             .write()
             .map_err(|_| InMemoryKeepsakeStoreError::Poisoned)?;
-        if keepsakes.contains_key(&command.id) {
+        if keepsakes.contains_key(&(command.tenant_id.clone(), command.id)) {
             return Err(InMemoryKeepsakeStoreError::DuplicateKeepsakeId {
                 keepsake_id: command.id,
             });
@@ -340,6 +376,7 @@ impl InMemoryKeepsakeStore {
 
         if keepsakes.values().any(|keepsake| {
             keepsake.is_active()
+                && keepsake.tenant_id() == &command.tenant_id
                 && keepsake.subject() == &command.subject
                 && keepsake.relation_id() == command.relation_id
         }) {
@@ -358,13 +395,17 @@ impl InMemoryKeepsakeStore {
             command.at,
             command.metadata.clone(),
         )?;
-        keepsakes.insert(keepsake.id(), keepsake.clone());
+        keepsakes.insert(
+            (keepsake.tenant_id().clone(), keepsake.id()),
+            keepsake.clone(),
+        );
         drop(keepsakes);
         Ok(keepsake)
     }
 
     fn synthetic_relation(command: &ApplyKeepsake) -> Result<RelationDefinition, KeepsakeError> {
         RelationDefinition::enabled(
+            command.tenant_id.clone(),
             command.relation_id,
             RelationKey::new("relation", command.relation_id.to_string())?,
             ExpiryPolicy::ManualOnly,
@@ -386,11 +427,12 @@ impl KeepsakeStore for InMemoryKeepsakeStore {
             .keepsakes
             .write()
             .map_err(|_| InMemoryKeepsakeStoreError::Poisoned)?;
-        let keepsake = keepsakes.get(&command.keepsake_id).cloned().ok_or(
-            InMemoryKeepsakeStoreError::KeepsakeNotFound {
+        let keepsake = keepsakes
+            .get(&(command.tenant_id.clone(), command.keepsake_id))
+            .cloned()
+            .ok_or(InMemoryKeepsakeStoreError::KeepsakeNotFound {
                 keepsake_id: command.keepsake_id,
-            },
-        )?;
+            })?;
         if !keepsake.is_active() {
             return Err(InMemoryKeepsakeStoreError::AlreadyTerminal {
                 keepsake_id: command.keepsake_id,
@@ -398,6 +440,7 @@ impl KeepsakeStore for InMemoryKeepsakeStore {
         }
 
         let revoked: Keepsake = KeepsakeRecord {
+            tenant_id: keepsake.tenant_id().clone(),
             id: keepsake.id(),
             subject: keepsake.subject().clone(),
             relation_id: keepsake.relation_id(),
@@ -410,13 +453,17 @@ impl KeepsakeStore for InMemoryKeepsakeStore {
             metadata: keepsake.metadata().clone(),
         }
         .try_into()?;
-        keepsakes.insert(command.keepsake_id, revoked.clone());
+        keepsakes.insert(
+            (command.tenant_id.clone(), command.keepsake_id),
+            revoked.clone(),
+        );
         drop(keepsakes);
         Ok(revoked)
     }
 
     fn active_for_subject(
         &self,
+        tenant_id: &TenantId,
         subject: &SubjectRef,
     ) -> ProviderResult<Vec<Keepsake>, Self::Error> {
         let mut active = self
@@ -424,19 +471,27 @@ impl KeepsakeStore for InMemoryKeepsakeStore {
             .read()
             .map_err(|_| InMemoryKeepsakeStoreError::Poisoned)?
             .values()
-            .filter(|keepsake| keepsake.is_active() && keepsake.subject() == subject)
+            .filter(|keepsake| {
+                keepsake.is_active()
+                    && keepsake.tenant_id() == tenant_id
+                    && keepsake.subject() == subject
+            })
             .cloned()
             .collect::<Vec<_>>();
         active.sort_by_key(|keepsake| (keepsake.relation_id(), keepsake.id()));
         Ok(active)
     }
 
-    fn get(&self, id: KeepsakeId) -> ProviderResult<Option<Keepsake>, Self::Error> {
+    fn get(
+        &self,
+        tenant_id: &TenantId,
+        id: KeepsakeId,
+    ) -> ProviderResult<Option<Keepsake>, Self::Error> {
         Ok(self
             .keepsakes
             .read()
             .map_err(|_| InMemoryKeepsakeStoreError::Poisoned)?
-            .get(&id)
+            .get(&(tenant_id.clone(), id))
             .cloned())
     }
 }
@@ -451,13 +506,14 @@ impl InMemoryFulfillmentProvider {
     /// Inserts or replaces a test fulfillment snapshot.
     pub fn insert_snapshot(
         &self,
+        tenant_id: TenantId,
         keepsake_id: KeepsakeId,
         snapshot: FulfillmentSnapshot,
     ) -> ProviderResult<(), InMemoryFulfillmentProviderError> {
         self.snapshots
             .write()
             .map_err(|_| InMemoryFulfillmentProviderError::Poisoned)?
-            .insert(keepsake_id, snapshot);
+            .insert((tenant_id, keepsake_id), snapshot);
         Ok(())
     }
 }
@@ -473,7 +529,7 @@ impl FulfillmentProvider for InMemoryFulfillmentProvider {
             .snapshots
             .read()
             .map_err(|_| InMemoryFulfillmentProviderError::Poisoned)?
-            .get(&keepsake.id())
+            .get(&(keepsake.tenant_id().clone(), keepsake.id()))
             .cloned())
     }
 }
@@ -483,25 +539,28 @@ impl ActiveRelationSource for InMemoryActiveRelations {
 
     fn active_relations_for_subject<'a>(
         &'a self,
+        tenant_id: &'a TenantId,
         subject: &'a SubjectRef,
     ) -> impl Future<Output = ProviderResult<Vec<ActiveRelation>, Self::Error>> + Send + 'a {
-        ready(self.active_for_subject(subject))
+        ready(self.active_for_subject(tenant_id, subject))
     }
 
     fn active_relations_for_subject_by_ids<'a>(
         &'a self,
+        tenant_id: &'a TenantId,
         subject: &'a SubjectRef,
         relation_ids: &'a [RelationId],
     ) -> impl Future<Output = ProviderResult<Vec<ActiveRelation>, Self::Error>> + Send + 'a {
-        ready(self.active_for_subject_by_ids(subject, relation_ids))
+        ready(self.active_for_subject_by_ids(tenant_id, subject, relation_ids))
     }
 
     fn active_relations_for_subject_by_keys<'a>(
         &'a self,
+        tenant_id: &'a TenantId,
         subject: &'a SubjectRef,
         keys: &'a [RelationKey],
     ) -> impl Future<Output = ProviderResult<Vec<ActiveRelation>, Self::Error>> + Send + 'a {
-        ready(self.active_for_subject_by_keys(subject, keys))
+        ready(self.active_for_subject_by_keys(tenant_id, subject, keys))
     }
 }
 
@@ -571,13 +630,17 @@ mod tests {
         )?))
     }
 
+    fn tenant() -> crate::Result<TenantId> {
+        TenantId::new("tenant-a")
+    }
+
     fn apply_command(
         id: KeepsakeId,
         subject: SubjectRef,
         relation_id: RelationId,
         at: DateTime<Utc>,
     ) -> crate::Result<ApplyKeepsake> {
-        let mut command = ApplyKeepsake::new(subject, relation_id, at, context()?);
+        let mut command = ApplyKeepsake::new(tenant()?, subject, relation_id, at, context()?);
         command.id = id;
         Ok(command)
     }
@@ -589,26 +652,30 @@ mod tests {
         let other_subject = SubjectRef::new("account", "acct_456")?;
         let at = ts("2026-01-01T00:00:00Z")?;
 
+        let tenant = tenant()?;
         source.insert_for_spec::<TrustedTag>(
+            tenant.clone(),
             Uuid::from_u128(10),
             subject.clone(),
             at,
             BTreeMap::new(),
         )?;
         source.insert_for_spec::<AdminTag>(
+            tenant.clone(),
             Uuid::from_u128(20),
             subject.clone(),
             at,
             BTreeMap::new(),
         )?;
         source.insert_for_spec::<AdminTag>(
+            tenant.clone(),
             Uuid::from_u128(30),
             other_subject,
             at,
             BTreeMap::new(),
         )?;
 
-        let all = source.active_for_subject(&subject)?;
+        let all = source.active_for_subject(&tenant, &subject)?;
         assert_eq!(
             all.iter()
                 .map(|active| active.keepsake().id())
@@ -617,6 +684,7 @@ mod tests {
         );
 
         let by_ids = source.active_for_subject_by_ids(
+            &tenant,
             &subject,
             &[AdminTag::ID, AdminTag::ID, Uuid::from_u128(99)],
         )?;
@@ -628,12 +696,58 @@ mod tests {
             TrustedTag::KEY.to_relation_key()?,
             RelationKey::new("tag", "missing")?,
         ];
-        let by_keys = source.active_for_subject_by_keys(&subject, &keys)?;
+        let by_keys = source.active_for_subject_by_keys(&tenant, &subject, &keys)?;
         assert_eq!(by_keys.len(), 1);
         assert_eq!(by_keys[0].relation().id, TrustedTag::ID);
 
-        assert!(source.active_for_subject_by_ids(&subject, &[])?.is_empty());
-        assert!(source.active_for_subject_by_keys(&subject, &[])?.is_empty());
+        assert!(
+            source
+                .active_for_subject_by_ids(&tenant, &subject, &[])?
+                .is_empty()
+        );
+        assert!(
+            source
+                .active_for_subject_by_keys(&tenant, &subject, &[])?
+                .is_empty()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn in_memory_providers_isolate_same_ids_by_tenant() -> TestResult<()> {
+        let source = InMemoryActiveRelations::empty();
+        let subject = SubjectRef::new("account", "acct_123")?;
+        let tenant_a = TenantId::new("tenant-a")?;
+        let tenant_b = TenantId::new("tenant-b")?;
+        let at = ts("2026-01-01T00:00:00Z")?;
+
+        source.insert_for_spec::<TrustedTag>(
+            tenant_a.clone(),
+            Uuid::from_u128(10),
+            subject.clone(),
+            at,
+            BTreeMap::new(),
+        )?;
+        source.insert_for_spec::<TrustedTag>(
+            tenant_b.clone(),
+            Uuid::from_u128(10),
+            subject.clone(),
+            at,
+            BTreeMap::new(),
+        )?;
+
+        assert_eq!(source.active_for_subject(&tenant_a, &subject)?.len(), 1);
+        assert_eq!(source.active_for_subject(&tenant_b, &subject)?.len(), 1);
+
+        let store = InMemoryKeepsakeStore::empty();
+        let mut first = apply_command(Uuid::from_u128(20), subject, TrustedTag::ID, at)?;
+        first.tenant_id = tenant_a.clone();
+        let mut second = first.clone();
+        second.tenant_id = tenant_b.clone();
+        store.apply(&first)?;
+        store.apply(&second)?;
+        assert!(store.get(&tenant_a, first.id)?.is_some());
+        assert!(store.get(&tenant_b, second.id)?.is_some());
         Ok(())
     }
 
@@ -643,13 +757,15 @@ mod tests {
         let subject = SubjectRef::new("account", "acct_123")?;
         let at = ts("2026-01-01T00:00:00Z")?;
 
+        let tenant = tenant()?;
         source.insert_active_for_spec::<TrustedTag>(
+            tenant.clone(),
             0xaaaa_aaaa_aaaa_aaaa_aaaa_aaaa_aaaa_aaaa,
             subject.clone(),
             at,
         )?;
 
-        let active = source.active_for_subject(&subject)?;
+        let active = source.active_for_subject(&tenant, &subject)?;
         assert_eq!(active.len(), 1);
         assert_eq!(
             active[0].keepsake().id(),
@@ -669,6 +785,7 @@ mod tests {
 
         source.insert_active_relation(
             ActiveRelationSeed::<AdminTag>::new(
+                tenant()?,
                 Uuid::from_u128(0xbbbb_bbbb_bbbb_bbbb_bbbb_bbbb_bbbb_bbbb),
                 subject.clone(),
                 at,
@@ -677,7 +794,7 @@ mod tests {
             .with_attributes([("source", "fixture")]),
         )?;
 
-        let active = source.active_for_subject(&subject)?;
+        let active = source.active_for_subject(&tenant()?, &subject)?;
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].keepsake().applied_at(), at);
         assert_eq!(active[0].relation().id, AdminTag::ID);
@@ -709,7 +826,10 @@ mod tests {
 
         let keepsake = store.apply(&command)?;
 
-        assert_eq!(store.active_for_subject(&subject)?, vec![keepsake]);
+        assert_eq!(
+            store.active_for_subject(&command.tenant_id, &subject)?,
+            vec![keepsake]
+        );
         Ok(())
     }
 
@@ -770,7 +890,7 @@ mod tests {
         let store = InMemoryKeepsakeStore::empty();
         let subject = SubjectRef::new("account", "acct_123")?;
         let at = ts("2026-01-01T00:00:00Z")?;
-        let relation = RelationDefinition::from_spec::<TrustedTag>(at)?;
+        let relation = RelationDefinition::from_spec::<TrustedTag>(tenant()?, at)?;
         let command = apply_command(Uuid::from_u128(100), subject, AdminTag::ID, at)?;
 
         let error = store
@@ -796,12 +916,21 @@ mod tests {
         let at = ts("2026-01-01T00:00:00Z")?;
         let command = apply_command(Uuid::from_u128(100), subject.clone(), TrustedTag::ID, at)?;
         let keepsake = store.apply(&command)?;
-        let revoke = RevokeKeepsake::new(keepsake.id(), ts("2026-01-02T00:00:00Z")?, context()?);
+        let revoke = RevokeKeepsake::new(
+            keepsake.tenant_id().clone(),
+            keepsake.id(),
+            ts("2026-01-02T00:00:00Z")?,
+            context()?,
+        );
 
         let revoked = store.revoke(&revoke)?;
 
         assert!(revoked.is_revoked());
-        assert!(store.active_for_subject(&subject)?.is_empty());
+        assert!(
+            store
+                .active_for_subject(&revoke.tenant_id, &subject)?
+                .is_empty()
+        );
         Ok(())
     }
 
@@ -812,7 +941,12 @@ mod tests {
         let at = ts("2026-01-01T00:00:00Z")?;
         let command = apply_command(Uuid::from_u128(100), subject, TrustedTag::ID, at)?;
         let keepsake = store.apply(&command)?;
-        let revoke = RevokeKeepsake::new(keepsake.id(), ts("2026-01-02T00:00:00Z")?, context()?);
+        let revoke = RevokeKeepsake::new(
+            keepsake.tenant_id().clone(),
+            keepsake.id(),
+            ts("2026-01-02T00:00:00Z")?,
+            context()?,
+        );
 
         store.revoke(&revoke)?;
         let error = store
@@ -835,9 +969,9 @@ mod tests {
         let at = ts("2026-01-01T00:00:00Z")?;
         let command = apply_command(id, subject, TrustedTag::ID, at)?;
 
-        assert_eq!(store.get(id)?, None);
+        assert_eq!(store.get(&command.tenant_id, id)?, None);
         let keepsake = store.apply(&command)?;
-        assert_eq!(store.get(id)?, Some(keepsake));
+        assert_eq!(store.get(&command.tenant_id, id)?, Some(keepsake));
         Ok(())
     }
 
@@ -852,7 +986,11 @@ mod tests {
         let snapshot = FulfillmentSnapshot::empty().with_counter("steps", 3);
 
         assert_eq!(provider.snapshot(&keepsake)?, None);
-        provider.insert_snapshot(keepsake.id(), snapshot.clone())?;
+        provider.insert_snapshot(
+            keepsake.tenant_id().clone(),
+            keepsake.id(),
+            snapshot.clone(),
+        )?;
 
         assert_eq!(provider.snapshot(&keepsake)?, Some(snapshot));
         Ok(())
@@ -865,6 +1003,7 @@ mod tests {
         let subject = SubjectRef::new("account", "acct_123")?;
         let at = ts("2026-01-01T00:00:00Z")?;
         let relation = RelationDefinition::enabled(
+            tenant()?,
             Uuid::from_u128(300),
             RelationKey::new("tag", "steps_done")?,
             ExpiryPolicy::WhenFulfilled {
@@ -877,7 +1016,7 @@ mod tests {
         let command = apply_command(Uuid::from_u128(100), subject, relation.id, at)?;
         let keepsake = store.apply_with_relation(&command, &relation)?;
         let snapshot = FulfillmentSnapshot::empty().with_counter("steps", 3);
-        provider.insert_snapshot(keepsake.id(), snapshot)?;
+        provider.insert_snapshot(keepsake.tenant_id().clone(), keepsake.id(), snapshot)?;
 
         let decision = evaluate(
             ts("2026-01-02T00:00:00Z")?,

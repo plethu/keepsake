@@ -11,7 +11,11 @@ async fn active_relation_source_accepts_generic_and_erased_sqlx_repository() -> 
     }
 
     let pool = PgPoolOptions::new().connect_lazy("postgres://keepsake@example.invalid/keepsake")?;
-    let repo = KeepsakeRepository::new(pool, "https://tests.invalid/keepsake/postgres")?;
+    let root = Box::leak(Box::new(KeepsakeRepository::new(
+        pool,
+        "https://tests.invalid/keepsake/postgres",
+    )?));
+    let repo = root.for_tenant(test_tenant());
 
     assert_generic(&repo);
     let erased: Arc<dyn DynActiveRelationSource<Error = RepositoryError>> = Arc::new(repo);
@@ -22,7 +26,8 @@ async fn active_relation_source_accepts_generic_and_erased_sqlx_repository() -> 
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn active_membership_scan_uses_keyset_pagination() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let relation = timed_relation(&repo, "membership-pages", "2026-01-02T00:00:00Z").await?;
     let subjects = [
         SubjectRef::new("user", format!("a_{}", Uuid::now_v7()))?,
@@ -63,7 +68,8 @@ async fn active_membership_scan_uses_keyset_pagination() -> TestResult<()> {
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn active_relations_for_subject_returns_joined_relation_definitions() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let relation_a = timed_relation(&repo, "joined-a", "2026-01-02T00:00:00Z").await?;
     let relation_b = timed_relation(&repo, "joined-b", "2026-01-03T00:00:00Z").await?;
     let subject = SubjectRef::new("user", format!("joined_{}", Uuid::now_v7()))?;
@@ -95,7 +101,8 @@ async fn active_relations_for_subject_returns_joined_relation_definitions() -> T
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn active_relations_for_subject_by_ids_returns_requested_active_relations() -> TestResult<()>
 {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let relation_a = timed_relation(&repo, "ids-a", "2026-01-04T00:00:00Z").await?;
     let relation_b = timed_relation(&repo, "ids-b", "2026-01-05T00:00:00Z").await?;
     let disabled = timed_relation(&repo, "ids-disabled", "2026-01-06T00:00:00Z").await?;
@@ -151,7 +158,8 @@ async fn active_relations_for_subject_by_ids_returns_requested_active_relations(
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn active_relations_for_subject_by_keys_returns_requested_active_relations() -> TestResult<()>
 {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let relation_a = timed_relation(&repo, "keyed-a", "2026-01-04T00:00:00Z").await?;
     let relation_b = timed_relation(&repo, "keyed-b", "2026-01-05T00:00:00Z").await?;
     let disabled = timed_relation(&repo, "keyed-disabled", "2026-01-06T00:00:00Z").await?;
@@ -206,7 +214,8 @@ async fn active_relations_for_subject_by_keys_returns_requested_active_relations
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn batch_queries_reject_invalid_limits() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let relation = timed_relation(&repo, "invalid-limit", "2026-01-02T00:00:00Z").await?;
 
     let membership = repo.active_membership_scan(relation.id, 0).await;

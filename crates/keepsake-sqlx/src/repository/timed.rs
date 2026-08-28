@@ -18,44 +18,40 @@ use super::MySqlBackend;
 use super::PostgresBackend;
 #[cfg(feature = "sqlite")]
 use super::SqliteBackend;
-use super::{KeepsakeSqlxBackend, NoopRelationCache, SqlxKeepsakeRepository};
+use super::{KeepsakeSqlxBackend, NoopRelationCache, TenantSqlxKeepsakeRepository};
 
-/// Timestamp-scoped repository view.
-///
-/// This wrapper does not read the system clock. Callers choose the timestamp once
-/// at an operation boundary, then use the forwarding methods to keep related
-/// writes and expiry scans on the same deterministic instant.
+/// Timestamp-scoped view over one tenant handle.
 #[derive(Debug, Clone, Copy)]
-pub struct TimedSqlxKeepsakeRepository<'repo, B, C = NoopRelationCache>
+pub struct TimedTenantSqlxKeepsakeRepository<'tenant, 'root, B, C = NoopRelationCache>
 where
     B: KeepsakeSqlxBackend,
 {
-    pub(super) repository: &'repo SqlxKeepsakeRepository<B, C>,
+    pub(super) repository: &'tenant TenantSqlxKeepsakeRepository<'root, B, C>,
     pub(super) at: DateTime<Utc>,
 }
 
-/// Default Postgres timestamp-scoped repository view.
+/// Default Postgres timestamp-scoped view over one tenant.
 #[cfg(feature = "postgres")]
 pub type TimedKeepsakeRepository<'repo, C = NoopRelationCache> =
-    TimedSqlxKeepsakeRepository<'repo, PostgresBackend, C>;
+    TimedTenantSqlxKeepsakeRepository<'repo, 'repo, PostgresBackend, C>;
 
-/// `SQLite` timestamp-scoped repository view.
+/// `SQLite` timestamp-scoped view over one tenant.
 #[cfg(feature = "sqlite")]
 pub type TimedSqliteKeepsakeRepository<'repo, C = NoopRelationCache> =
-    TimedSqlxKeepsakeRepository<'repo, SqliteBackend, C>;
+    TimedTenantSqlxKeepsakeRepository<'repo, 'repo, SqliteBackend, C>;
 
-/// `MySQL` timestamp-scoped repository view.
+/// `MySQL` timestamp-scoped view over one tenant.
 #[cfg(feature = "mysql")]
 pub type TimedMySqlKeepsakeRepository<'repo, C = NoopRelationCache> =
-    TimedSqlxKeepsakeRepository<'repo, MySqlBackend, C>;
+    TimedTenantSqlxKeepsakeRepository<'repo, 'repo, MySqlBackend, C>;
 
-impl<'repo, B, C> TimedSqlxKeepsakeRepository<'repo, B, C>
+impl<B, C> TimedTenantSqlxKeepsakeRepository<'_, '_, B, C>
 where
     B: KeepsakeSqlxBackend,
 {
-    /// Returns the repository backing this timestamp-scoped view.
+    /// Returns the tenant repository backing this timestamp-scoped view.
     #[must_use]
-    pub const fn repository(&self) -> &'repo SqlxKeepsakeRepository<B, C> {
+    pub const fn repository(&self) -> &TenantSqlxKeepsakeRepository<'_, B, C> {
         self.repository
     }
 
@@ -67,7 +63,7 @@ where
 }
 
 #[cfg(feature = "postgres")]
-impl<C> TimedKeepsakeRepository<'_, C>
+impl<C> TimedTenantSqlxKeepsakeRepository<'_, '_, PostgresBackend, C>
 where
     C: super::RelationCache,
 {
@@ -176,7 +172,7 @@ where
 }
 
 #[cfg(feature = "sqlite")]
-impl<C> TimedSqliteKeepsakeRepository<'_, C>
+impl<C> TimedTenantSqlxKeepsakeRepository<'_, '_, SqliteBackend, C>
 where
     C: super::RelationCache,
 {
@@ -285,7 +281,7 @@ where
 }
 
 #[cfg(feature = "mysql")]
-impl<C> TimedMySqlKeepsakeRepository<'_, C>
+impl<C> TimedTenantSqlxKeepsakeRepository<'_, '_, MySqlBackend, C>
 where
     C: super::RelationCache,
 {

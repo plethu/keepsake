@@ -1,7 +1,7 @@
 //! Timed sanction example.
 
 use chrono::{Duration, Utc};
-use keepsake::{ActorRef, ApplyKeepsake, CommandContext, ExpiryPolicy, SubjectRef};
+use keepsake::{ActorRef, ApplyKeepsake, CommandContext, ExpiryPolicy, SubjectRef, TenantId};
 use keepsake_sqlx::{KeepsakeRepository, RepositoryError};
 use sqlx::{PgPool, raw_sql};
 
@@ -53,18 +53,21 @@ async fn main() -> Result<(), ExampleError> {
     let repo = KeepsakeRepository::new(pool, "https://example.invalid/keepsake")?;
     repo.migrate().await?;
     repo.check_schema().await?;
+    let tenant_id = TenantId::new("example-tenant")?;
+    let scoped_repo = repo.for_tenant(tenant_id.clone());
     let now = Utc::now();
-    let timed_repo = repo.at(now);
+    let timed_repo = scoped_repo.at(now);
 
     timed_repo.upsert_relation_spec::<Mute24hSanction>().await?;
 
     let subject = SubjectRef::new("user", "user_123")?;
     let command = ApplyKeepsake::for_spec::<Mute24hSanction>(
+        tenant_id,
         subject,
         now,
         CommandContext::new(ActorRef::new("system", "example")?),
     );
-    let applied = repo.apply(&command).await?;
+    let applied = scoped_repo.apply(&command).await?;
 
     println!("{}", applied.keepsake.id());
     Ok(())

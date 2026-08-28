@@ -3,7 +3,8 @@ use super::support::*;
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn duplicate_active_apply_returns_existing_keepsake() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let relation = timed_relation(&repo, "duplicate", "2026-01-02T00:00:00Z").await?;
     let subject = SubjectRef::new("user", format!("dup_{}", Uuid::now_v7()))?;
     let applied = apply_at(&repo, &subject, relation.id, "2026-01-01T00:00:00Z").await?;
@@ -57,7 +58,8 @@ fn actor_ref_constructor_rejects_empty_revoke_actor_id() {
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn duplicate_apply_after_disable_returns_existing_keepsake() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let relation = timed_relation(&repo, "disabled-duplicate", "2026-01-02T00:00:00Z").await?;
     let subject = SubjectRef::new("user", format!("disabled_dup_{}", Uuid::now_v7()))?;
     let applied = apply_at(&repo, &subject, relation.id, "2026-01-01T00:00:00Z").await?;
@@ -75,13 +77,26 @@ async fn duplicate_apply_after_disable_returns_existing_keepsake() -> TestResult
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn concurrent_duplicate_apply_creates_one_active_keepsake() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let relation = timed_relation(&repo, "concurrent-apply", "2026-01-02T00:00:00Z").await?;
     let subject = SubjectRef::new("user", format!("race_{}", Uuid::now_v7()))?;
 
     let applied_at = ts("2026-01-01T00:00:00Z")?;
-    let apply_a = spawn_apply(repo.clone(), subject.clone(), relation.id, applied_at);
-    let apply_b = spawn_apply(repo.clone(), subject.clone(), relation.id, applied_at);
+    let apply_a = spawn_apply(
+        root.clone(),
+        test_tenant(),
+        subject.clone(),
+        relation.id,
+        applied_at,
+    );
+    let apply_b = spawn_apply(
+        root.clone(),
+        test_tenant(),
+        subject.clone(),
+        relation.id,
+        applied_at,
+    );
 
     let result_a = apply_a.await??;
     let result_b = apply_b.await??;
@@ -98,8 +113,10 @@ async fn concurrent_duplicate_apply_creates_one_active_keepsake() -> TestResult<
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn disabled_relation_rejects_apply() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let relation = RelationDefinition::new(
+        test_tenant(),
         Uuid::now_v7(),
         RelationKey::new("tag", unique_key("disabled-apply"))?,
         false,
@@ -109,6 +126,7 @@ async fn disabled_relation_rejects_apply() -> TestResult<()> {
     let subject = SubjectRef::new("user", format!("disabled_{}", Uuid::now_v7()))?;
 
     let command = ApplyKeepsake::new(
+        test_tenant(),
         subject,
         relation.id,
         ts("2026-01-01T00:00:00Z")?,
@@ -126,17 +144,26 @@ async fn disabled_relation_rejects_apply() -> TestResult<()> {
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn concurrent_apply_and_disable_have_ordered_outcomes() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let relation = timed_relation(&repo, "apply-disable", "2026-01-02T00:00:00Z").await?;
     let subject = SubjectRef::new("user", format!("apply_disable_{}", Uuid::now_v7()))?;
     let applied_at = ts("2026-01-01T00:00:00Z")?;
 
-    let apply_task = spawn_apply(repo.clone(), subject.clone(), relation.id, applied_at);
+    let apply_task = spawn_apply(
+        root.clone(),
+        test_tenant(),
+        subject.clone(),
+        relation.id,
+        applied_at,
+    );
     let disable_task = tokio::spawn({
-        let repo = repo.clone();
+        let disable_root = root.clone();
         let disabled_at = ts("2026-01-01T00:01:00Z")?;
         async move {
-            repo.set_relation_enabled(relation.id, false, disabled_at)
+            disable_root
+                .for_tenant(test_tenant())
+                .set_relation_enabled(relation.id, false, disabled_at)
                 .await
         }
     });
@@ -164,15 +191,17 @@ async fn concurrent_apply_and_disable_have_ordered_outcomes() -> TestResult<()> 
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn relation_share_lock_blocks_disable_until_apply_order_is_resolved() -> TestResult<()> {
-    let repo = repo().await?;
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
     let relation = timed_relation(&repo, "apply-lock", "2026-01-02T00:00:00Z").await?;
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
     let disable_pool = single_connection_pool(&database_url).await?;
-    let disable_repo = KeepsakeRepository::new(
+    let disable_root = KeepsakeRepository::new(
         disable_pool.clone(),
         "https://tests.invalid/keepsake/postgres",
     )?;
+    let disable_repo = disable_root.for_tenant(test_tenant());
     let mut tx = pool.begin().await?;
 
     lock_relation_for_share(&mut tx, relation.id).await?;

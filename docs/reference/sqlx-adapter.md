@@ -8,14 +8,16 @@ counter projections. Audit persistence and delivery belong to Dovecote.
 Construct a repository with an application-owned, stable absolute source URI:
 
 ```rust
-let repo = KeepsakeRepository::new(pool, "https://accounts.example.test/keepsake")?;
+let root = KeepsakeRepository::new(pool, "https://accounts.example.test/keepsake")?;
+let repo = root.for_tenant(keepsake::TenantId::new("account-group-a")?);
 ```
 
 The adapter uses the `keepsake-audit` stream, the `keepsake.audit_event_recorded`
 event type, and `application/json` content. It does not invent a source. The
-same `AuditEventId` is carried from command construction into the CloudEvents
-id (`keepsake-audit-<audit id>`) so a retry of one logical operation remains
-deduplicable.
+same `AuditEventId` is carried from command construction into the Dovecote
+event id (`keepsake-audit-<audit id>`), alongside the tenant and configured
+source, so a retry of one logical operation remains deduplicable within its
+tenant.
 
 The schema stores opaque subject identifiers and does not join application
 entity tables.
@@ -79,6 +81,7 @@ let timed_repo = repo.at(now);
 timed_repo.upsert_relation_spec::<TrustedTag>().await?;
 
 let command = ApplyKeepsake::for_spec::<TrustedTag>(
+    repo.tenant_id().clone(),
     subject,
     now,
     CommandContext::new(ActorRef::new("system", "worker")?),
@@ -89,15 +92,17 @@ timed_repo.expire_due_timed(500).await?;
 
 ## Audit history and delivery
 
-Keepsake 2.0 does not expose `append_audit_event`, Keepsake audit repositories,
+Keepsake 3.0 does not expose `append_audit_event`, Keepsake audit repositories,
 outbox cursors, or claim/ack/release methods. Those APIs belonged to the 1.x
 schema and are deliberately absent from the maintained 2.0 SQLx surface.
 
 For typed history, page Dovecote's live or snapshot stream with the selected
 backend adapter and pass each stored event to
-`keepsake_sqlx::decode_audit_event`. The decoder validates the configured
-source, stream, event type, JSON content type, current `keepsake-audit-<UUID>`
-identity, and occurrence time before returning `keepsake::AuditEvent`.
+`keepsake_sqlx::decode_audit_event`. Pass the Dovecote `PagedEvent`, not only
+its `StoredEvent`, so the decoder can validate the storage tenant against the
+tenant in the JSON payload. It also validates the configured source, stream,
+event type, JSON content type, current `keepsake-audit-<UUID>` identity, and
+occurrence time before returning `keepsake::AuditEvent`.
 Migrated v1 identities (`keepsake-outbox-N` and `keepsake-audit-legacy-N`) are
 reported as a typed legacy error because their payloads may not contain the
 current event identity; handle those rows with application-specific legacy
@@ -105,12 +110,20 @@ decoding.
 The Dovecote delivery snapshot is the only durable delivery state. Publication
 workers and transport clients remain application concerns; Dovecote provides
 the lease and token-fenced lifecycle operations. Consumers deduplicate
-at-least-once delivery with CloudEvents `(source, id)`.
+at-least-once delivery with the tenant-scoped Dovecote identity
+`(tenant_id, source, event_id)`. Transport projections must carry tenant
+routing separately from the CloudEvents `(source, id)` pair.
 
 The Dovecote event is enqueued in the same SQLx transaction as the lifecycle
 mutation. A validation or enqueue failure rolls back the Keepsake state change.
 For SQLite, the repository starts Dovecote's required `BEGIN IMMEDIATE` write
 transaction before the domain mutation.
+
+Every ordinary operation is exposed only from a tenant-scoped handle. The root
+repository is limited to migration/schema checks and the explicit `admin()`
+construction escape hatch; it cannot issue an unscoped relation, lifecycle,
+expiry, or fulfillment query. For regulated deployments, MySQL separate
+databases and SQLite file-per-tenant are the strongest physical boundaries.
 
 ## Read Helpers
 
@@ -175,8 +188,9 @@ use std::time::Duration;
 
 use keepsake_sqlx::{KeepsakeRepository, LocalRelationCacheConfig};
 
-let repo = KeepsakeRepository::new(pool, "https://accounts.example.test/keepsake")?
+let root = KeepsakeRepository::new(pool, "https://accounts.example.test/keepsake")?
     .with_local_relation_cache(LocalRelationCacheConfig::new(Duration::from_mins(1)));
+let repo = root.for_tenant(keepsake::TenantId::new("account-group-a")?);
 ```
 
 The cache only affects relation read helpers. Lifecycle mutations still read

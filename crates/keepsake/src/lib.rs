@@ -1,5 +1,9 @@
 //! Deterministic relation lifecycle primitives.
 //!
+//! Domain values are tenant-owned. Callers must provide a validated
+//! [`TenantId`] for commands, stored identities, and provider queries; there
+//! is no implicit default or all-tenant scope.
+//!
 //! Human guides and reference material are in the `docs/` directory of the
 //! repository. API reference: <https://docs.rs/keepsake>.
 
@@ -20,6 +24,7 @@ pub mod prelude {
         FulfillmentSnapshot, Keepsake, KeepsakeError, KeepsakeId, KeepsakeLifecycle,
         KeepsakeRecord, KeepsakeStore, LifecycleState, RelationDefinition, RelationId, RelationKey,
         RelationKind, RelationName, RelationSpec, RevokeBySubject, StaticRelationKey, SubjectRef,
+        TenantId,
     };
 
     #[cfg(any(test, feature = "test"))]
@@ -90,7 +95,7 @@ pub use evaluation::{
 pub use model::{
     ActiveRelation, ActorRef, ExpiryCause, FulfillmentSnapshot, Keepsake, KeepsakeId,
     KeepsakeLifecycle, KeepsakeRecord, LifecycleState, RelationDefinition, RelationId, RelationKey,
-    RelationKind, RelationName, RelationSpec, StaticRelationKey, SubjectRef,
+    RelationKind, RelationName, RelationSpec, StaticRelationKey, SubjectRef, TenantId,
 };
 pub use observe::{
     MetricsRecorder, NoopMetricsRecorder, NoopTransitionObserver, TransitionObserver,

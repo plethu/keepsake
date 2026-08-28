@@ -14,7 +14,7 @@ persists those events through Dovecote.
 The core crate is persistence-agnostic and synchronous. The `keepsake-sqlx`
 adapter stores domain state through SQLx with migrations and query helpers.
 Postgres is the default backend; SQLite and MySQL are available behind feature
-flags. Dovecote is the sole SQL audit and delivery model in 2.0.
+flags. Dovecote is the sole SQL audit and delivery model in 3.0.
 
 I'd written this pattern ad-hoc across production services in compliance-heavy
 domains, where auditability and determinism are requirements. keepsake is the
@@ -35,12 +35,12 @@ those relations later.
 ## Install
 
 ```sh
-cargo add keepsake@2 keepsake-sqlx@2
-cargo add dovecote-sqlx-postgres@0.1
+cargo add keepsake@3 keepsake-sqlx@3
+cargo add dovecote-sqlx-postgres@0.2
 cargo add sqlx --features postgres,runtime-tokio,tls-rustls
 ```
 
-Dovecote 0.1 and its SQLx adapters are published on crates.io. Add the adapter
+Dovecote 0.2 and its SQLx adapters are published on crates.io. Add the adapter
 for the backend you use; the [installation guide](docs/installation.md) covers
 SQLite and MySQL as well as Postgres.
 
@@ -51,17 +51,19 @@ use keepsake_sqlx::KeepsakeRepository;
 use sqlx::PgPool;
 
 let pool = PgPool::connect(&database_url).await?;
-let repo = KeepsakeRepository::new(pool, "https://accounts.example.test/keepsake")?;
-repo.migrate().await?;
+let root = KeepsakeRepository::new(pool, "https://accounts.example.test/keepsake")?;
+root.migrate().await?;
 // Install the selected Dovecote schema before this check.
-repo.check_schema().await?;
+root.check_schema().await?;
+let tenant = keepsake::TenantId::new("account-group-a")?;
+let repo = root.for_tenant(tenant);
 ```
 
 For SQLite or MySQL, disable default features and enable the target backend and
 matching Dovecote SQLx adapter. Construct `SqliteKeepsakeRepository` or
 `MySqlKeepsakeRepository` with the matching SQLx pool and the same kind of
-application-owned absolute source URI. The source is part of event identity;
-there is no library-owned default.
+application-owned absolute source URI. The tenant, source, and event id form
+the Dovecote event identity; there is no library-owned source default.
 
 See [docs/installation.md](docs/installation.md) and
 [docs/reference/feature-flags.md](docs/reference/feature-flags.md) for backend
@@ -78,7 +80,7 @@ Examples: `examples/postgres-tags`, `examples/postgres-sanctions` (require
 
 ## Operations
 
-- Migrations: a new installation uses the explicit 2.0 clean domain baseline
+- Migrations: a new installation uses the explicit 3.0 clean domain baseline
   and a separately installed Dovecote schema. Upgrades use
   `upgrade_migrate()` and retain historical audit tables for reconciliation;
   they are never selected implicitly.

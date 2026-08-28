@@ -8,15 +8,6 @@ async fn seed_importer_evidence(pool: &PgPool, source: &str) -> TestResult<()> {
     Ok(())
 }
 
-async fn reset_schema_fixture(pool: &PgPool) -> TestResult<()> {
-    sqlx::raw_sql(
-        "drop table if exists dovecote_deliveries, dovecote_events, dovecote_schema, keepsake_upgrade_evidence, keepsake_dovecote_bridge_claims, keepsake_dovecote_bridge_ledger, keepsake_dovecote_bridge_config, keepsake_audit_outbox, keepsake_audit_context_attributes, keepsake_audit_events, keepsake_fulfillment_checklist, keepsake_fulfillment_counters, keepsakes, keepsake_relation_definitions, keepsake_schema_metadata cascade; drop table if exists _sqlx_migrations cascade",
-    )
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
 /// This ignored check deliberately mutates the configured integration
 /// database; run it only against an isolated URL and alone.
 #[tokio::test]
@@ -24,7 +15,7 @@ async fn reset_schema_fixture(pool: &PgPool) -> TestResult<()> {
 async fn catalog_check_rejects_changed_column_index_and_constraint() -> TestResult<()> {
     let database_url = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
-    reset_schema_fixture(&pool).await?;
+    reset_schema(&pool).await?;
     let repo = KeepsakeRepository::new(
         pool.clone(),
         "https://tests.invalid/keepsake/postgres-schema-catalog",
@@ -65,7 +56,7 @@ async fn catalog_check_rejects_changed_column_index_and_constraint() -> TestResu
         .execute(&pool)
         .await?;
     sqlx::query(
-        "create index keepsakes_active_subject_lookup on keepsakes (subject_kind, subject_id, relation_id, id) where state = 'applied'",
+        "create index keepsakes_active_subject_lookup on keepsakes (tenant_id, subject_kind, subject_id, relation_id, id) where state = 'applied'",
     )
     .execute(&pool)
     .await?;
@@ -104,7 +95,7 @@ async fn upgrade_track_activates_after_importer_evidence() -> TestResult<()> {
     // The clean and upgrade tracks share SQLx's metadata table. Isolate this
     // destructive upgrade-path test so a preceding clean test cannot make
     // `upgrade_migrate` believe the historical track is already applied.
-    reset_schema_fixture(&pool).await?;
+    reset_schema(&pool).await?;
     repo.upgrade_migrate().await?;
     let has_dovecote =
         sqlx::query_scalar::<_, bool>("select to_regclass('public.dovecote_events') is not null")
@@ -117,6 +108,132 @@ async fn upgrade_track_activates_after_importer_evidence() -> TestResult<()> {
     }
     seed_importer_evidence(&pool, "https://tests.invalid/keepsake/postgres-upgrade").await?;
     repo.activate_upgrade().await?;
+    assert!(repo.check_schema().await.is_err());
+    Ok(())
+}
+
+async fn seed_v2_tenant_upgrade_fixture(pool: &PgPool) -> TestResult<Uuid> {
+    let relation_id = Uuid::from_u128(42);
+    let keepsake_id = Uuid::from_u128(43);
+    let observed_at = ts("2026-01-01T00:00:00Z")?;
+    let expiry_policy = serde_json::json!({"type": "manual_only"});
+    sqlx::raw_sql(include_str!(
+        "../../migrations/v2/postgres/2000_clean_baseline.sql"
+    ))
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "insert into keepsake_relation_definitions (id, kind, key, enabled, expiry_policy, created_at, updated_at) values ($1, 'tag', 'mapped', true, $2, $3, $3)",
+    )
+    .bind(relation_id)
+    .bind(expiry_policy.clone())
+    .bind(observed_at)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "insert into keepsakes (id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at, expires_at, fulfilled_at, revoked_at, metadata, created_at, updated_at) values ($1, 'account', 'legacy-subject', $2, 'applied', $3, $4, null, null, null, $5, $4, $4)",
+    )
+    .bind(keepsake_id)
+    .bind(relation_id)
+    .bind(expiry_policy)
+    .bind(observed_at)
+    .bind(serde_json::json!({"origin": "v2-fixture"}))
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "insert into keepsake_fulfillment_counters (keepsake_id, key, value, observed_at) values ($1, 'review', 1, $2)",
+    )
+    .bind(keepsake_id)
+    .bind(observed_at)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "insert into keepsake_fulfillment_checklist (keepsake_id, item, complete, observed_at) values ($1, 'identity', true, $2)",
+    )
+    .bind(keepsake_id)
+    .bind(observed_at)
+    .execute(pool)
+    .await?;
+    Ok(relation_id)
+}
+
+/// This ignored check deliberately mutates the configured integration
+/// database; run it only against an isolated URL and alone.
+#[tokio::test]
+#[ignore = "requires an isolated PostgreSQL URL; run explicitly with --ignored --test-threads=1"]
+async fn tenant_upgrade_activates_v3_schema_with_explicit_backfill() -> TestResult<()> {
+    let database_url = std::env::var("DATABASE_URL")?;
+    let pool = PgPool::connect(&database_url).await?;
+    reset_schema(&pool).await?;
+    let relation_id = seed_v2_tenant_upgrade_fixture(&pool).await?;
+
+    let repo = KeepsakeRepository::new(
+        pool.clone(),
+        "https://tests.invalid/keepsake/postgres-tenant-upgrade",
+    )?;
+    repo.prepare_tenant_upgrade().await?;
+    assert!(repo.activate_tenant_upgrade().await.is_err());
+
+    let tenant = TenantId::new("tenant-upgrade")?;
+    sqlx::query("update keepsake_relation_definitions set tenant_id = $1")
+        .bind(tenant.as_str())
+        .execute(&pool)
+        .await?;
+    sqlx::query("update keepsakes set tenant_id = $1")
+        .bind(tenant.as_str())
+        .execute(&pool)
+        .await?;
+    sqlx::query("update keepsake_fulfillment_counters set tenant_id = $1")
+        .bind(tenant.as_str())
+        .execute(&pool)
+        .await?;
+    // The checklist remains unmapped until this final explicit backfill, so
+    // activation must continue to reject the prepared schema.
+    assert!(repo.activate_tenant_upgrade().await.is_err());
+    sqlx::query("update keepsake_fulfillment_checklist set tenant_id = $1")
+        .bind(tenant.as_str())
+        .execute(&pool)
+        .await?;
+
+    repo.activate_tenant_upgrade().await?;
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "select value from keepsake_schema_metadata where key = 'api_track'",
+        )
+        .fetch_one(&pool)
+        .await?,
+        "3"
+    );
+    sqlx::raw_sql(dovecote_sqlx_postgres::MIGRATIONS[0].sql())
+        .execute(&pool)
+        .await?;
     repo.check_schema().await?;
+
+    let scoped = repo.for_tenant(tenant.clone());
+    assert_eq!(
+        scoped
+            .relation_by_id(relation_id)
+            .await?
+            .map(|relation| relation.tenant_id),
+        Some(tenant.clone())
+    );
+    assert!(
+        repo.for_tenant(TenantId::new("other-tenant")?)
+            .relation_by_id(relation_id)
+            .await?
+            .is_none()
+    );
+
+    let subject = SubjectRef::new("account", "post-upgrade-subject")?;
+    let command = ApplyKeepsake::new(
+        tenant.clone(),
+        subject.clone(),
+        relation_id,
+        ts("2026-01-01T00:05:00Z")?,
+        test_context("upgrade-test")?,
+    );
+    let applied = scoped.apply(&command).await?;
+    assert_eq!(applied.keepsake.tenant_id(), &tenant);
+    assert_eq!(scoped.active_for_subject(&subject).await?.len(), 1);
     Ok(())
 }
