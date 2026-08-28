@@ -47,6 +47,170 @@ impl DovecoteAuditConfig {
     pub fn source(&self) -> &str {
         self.source.as_str()
     }
+
+    /// Returns the configured Dovecote stream.
+    #[must_use]
+    pub fn stream(&self) -> &str {
+        self.stream.as_str()
+    }
+
+    /// Returns the configured Dovecote event type.
+    #[must_use]
+    pub fn event_type(&self) -> &str {
+        self.event_type.as_str()
+    }
+}
+
+/// A typed failure while projecting one Dovecote event into a current
+/// [`keepsake::AuditEvent`].
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum AuditEventDecodeError {
+    /// A required `CloudEvents` envelope member did not match the configuration.
+    #[error("invalid Keepsake audit event envelope: {field}")]
+    InvalidEnvelope {
+        /// Envelope member which failed validation.
+        field: &'static str,
+    },
+
+    /// The event did not contain structured JSON data.
+    #[error("Keepsake audit event has no JSON payload")]
+    MissingJsonPayload,
+
+    /// The JSON payload was not a current `AuditEvent`.
+    #[error("invalid current Keepsake audit payload: {0}")]
+    Json(#[from] serde_json::Error),
+
+    /// A v1 migrated event identity was recognized, but its historical
+    /// payload is deliberately not silently reinterpreted as a v2 event.
+    #[error(
+        "Keepsake audit event {event_id} uses a migrated legacy identity; the current-event decoder cannot reinterpret its payload"
+    )]
+    LegacyEvent {
+        /// Legacy outer Dovecote event identity.
+        event_id: String,
+    },
+}
+
+/// Decodes and validates one Dovecote event emitted by Keepsake 2.0.
+///
+/// This projection is backend-independent: callers can pass an event from a
+/// live or snapshot Dovecote page regardless of which `SQLx` adapter produced
+/// it. Source, stream, type, JSON content, event identity, and occurrence time
+/// are all checked before the typed value is returned. Historical identities
+/// (`keepsake-outbox-N` and `keepsake-audit-legacy-N`) return
+/// [`AuditEventDecodeError::LegacyEvent`] because v1 payloads do not carry the
+/// current event identity and require an application-specific legacy decoder.
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// use chrono::{TimeZone, Utc};
+/// use keepsake::{ActorRef, AuditContext, AuditDecision, AuditEvent, AuditEventId,
+///     AuditEventType, SubjectRef};
+/// use keepsake_sqlx::{decode_audit_event, DovecoteAuditConfig};
+///
+/// let event = AuditEvent {
+///     id: AuditEventId::from_uuid(uuid::Uuid::nil()),
+///     event_type: AuditEventType::Apply,
+///     at: Utc.timestamp_opt(1_700_000_000, 0).single().ok_or("timestamp")?,
+///     actor: ActorRef::new("system", "example")?,
+///     keepsake_id: uuid::Uuid::nil(),
+///     subject: SubjectRef::new("account", "acct-1")?,
+///     relation_id: uuid::Uuid::nil(),
+///     decision: AuditDecision::Applied { duplicate_prevented: false },
+///     context: AuditContext::default(),
+/// };
+/// let config = DovecoteAuditConfig::new("https://example.invalid/keepsake")?;
+/// let stored = dovecote::NewEvent::builder(
+///     dovecote::StreamName::new(config.stream())?,
+///     dovecote::EventId::new(format!("keepsake-audit-{}", event.id.as_uuid()))?,
+///     dovecote::EventSource::new(config.source())?,
+///     dovecote::EventType::new(config.event_type())?,
+/// )
+/// .time(time::OffsetDateTime::from_unix_timestamp(event.at.timestamp())?)
+/// .datacontenttype(dovecote::ContentType::new("application/json")?)
+/// .data(dovecote::EventData::json(serde_json::to_vec(&event)?)?)
+/// .build()?.into_stored()?;
+/// assert_eq!(decode_audit_event(&config, &stored)?, event);
+/// # Ok(())
+/// # }
+/// ```
+pub fn decode_audit_event(
+    config: &DovecoteAuditConfig,
+    event: &dovecote::StoredEvent,
+) -> Result<AuditEvent, AuditEventDecodeError> {
+    if event.source().as_str() != config.source() {
+        return Err(AuditEventDecodeError::InvalidEnvelope { field: "source" });
+    }
+
+    if event.stream().as_str() != config.stream() {
+        return Err(AuditEventDecodeError::InvalidEnvelope { field: "stream" });
+    }
+
+    if event.event_type().as_str() != config.event_type() {
+        return Err(AuditEventDecodeError::InvalidEnvelope { field: "type" });
+    }
+
+    if !event
+        .datacontenttype()
+        .is_some_and(dovecote::ContentType::is_json)
+    {
+        return Err(AuditEventDecodeError::InvalidEnvelope {
+            field: "JSON content type",
+        });
+    }
+
+    let Some(dovecote::EventData::Json(payload)) = event.data() else {
+        return Err(AuditEventDecodeError::MissingJsonPayload);
+    };
+
+    if is_legacy_event_id(event.id().as_str()) {
+        return Err(AuditEventDecodeError::LegacyEvent {
+            event_id: event.id().as_str().to_owned(),
+        });
+    }
+
+    let value: serde_json::Value = serde_json::from_slice(payload.as_bytes())?;
+    let decoded: AuditEvent = serde_json::from_value(value)?;
+    let expected_id = format!("keepsake-audit-{}", decoded.id.as_uuid());
+    if event.id().as_str() != expected_id {
+        return Err(AuditEventDecodeError::InvalidEnvelope {
+            field: "event identity",
+        });
+    }
+
+    let Some(event_time) = event.time() else {
+        return Err(AuditEventDecodeError::InvalidEnvelope {
+            field: "occurrence time",
+        });
+    };
+
+    if chrono_to_dovecote_for_decode(decoded.at) != Some(event_time) {
+        return Err(AuditEventDecodeError::InvalidEnvelope {
+            field: "occurrence time",
+        });
+    }
+
+    Ok(decoded)
+}
+
+fn is_legacy_event_id(value: &str) -> bool {
+    ["keepsake-outbox-", "keepsake-audit-legacy-"]
+        .iter()
+        .any(|prefix| {
+            value
+                .strip_prefix(prefix)
+                .and_then(|suffix| suffix.parse::<u64>().ok())
+                .is_some_and(|sequence| sequence > 0)
+        })
+}
+
+fn chrono_to_dovecote_for_decode(value: DateTime<Utc>) -> Option<time::OffsetDateTime> {
+    let nanos = value.timestamp_subsec_nanos();
+    time::OffsetDateTime::from_unix_timestamp(value.timestamp())
+        .ok()
+        .and_then(|value| value.replace_nanosecond(nanos).ok())
+        .map(|value| value.to_offset(time::UtcOffset::UTC))
 }
 
 /// Parses a stored lifecycle state token.

@@ -39,7 +39,20 @@ where
         .execute(&self.pool)
         .await?;
 
-        let relation = self.relation_by_key(&relation.key).await?.ok_or(
+        // Read the row directly: a cache-aware lookup could return the stale
+        // enabled or expiry projection that existed before this upsert.
+        let row = sqlx::query(
+            r"
+            select id, kind, `key`, enabled, expiry_policy
+            from keepsake_relation_definitions
+            where kind = ? and `key` = ?
+            ",
+        )
+        .bind(relation.key.kind())
+        .bind(relation.key.name())
+        .fetch_optional(&self.pool)
+        .await?;
+        let relation = row.map(|row| relation_from_row(&row)).transpose()?.ok_or(
             RepositoryError::RelationDefinitionMissing {
                 relation_id: relation.id,
             },

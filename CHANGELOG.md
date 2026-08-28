@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.1.0 - 2026-08-28
+
+- Fixed MySQL relation upserts with an enabled relation cache so natural-key
+  and id lookups return the freshly persisted enabled and expiry state.
+- Added a backend-independent, envelope-validating Dovecote decoder for typed
+  Keepsake audit history. Migrated v1 identities are reported as an explicit
+  legacy outcome and are not reinterpreted as current events.
+- Made both PostgreSQL examples install and check the Dovecote schema before
+  their first audited write, and raised the Dovecote dependency floor to 0.1.1.
+
 ## 2.0.0 - 2026-08-27
 
 - Moved SQL audit persistence and delivery to Dovecote. Keepsake lifecycle

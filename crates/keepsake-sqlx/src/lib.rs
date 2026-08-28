@@ -36,10 +36,10 @@ pub mod prelude {
 }
 
 pub use repository::{
-    ActiveRelation, AppliedKeepsake, DovecoteAuditConfig, DovecoteEnqueueError,
-    DovecoteSchemaError, FulfilledExpiryCandidate, KeepsakeSqlxBackend, MembershipCursor,
-    NoopRelationCache, RelationCache, RepositoryError, RepositoryResult, SqlxKeepsakeRepository,
-    TimedExpiryCandidate, TimedSqlxKeepsakeRepository,
+    ActiveRelation, AppliedKeepsake, AuditEventDecodeError, DovecoteAuditConfig,
+    DovecoteEnqueueError, DovecoteSchemaError, FulfilledExpiryCandidate, KeepsakeSqlxBackend,
+    MembershipCursor, NoopRelationCache, RelationCache, RepositoryError, RepositoryResult,
+    SqlxKeepsakeRepository, TimedExpiryCandidate, TimedSqlxKeepsakeRepository, decode_audit_event,
 };
 #[cfg(feature = "postgres")]
 pub use repository::{

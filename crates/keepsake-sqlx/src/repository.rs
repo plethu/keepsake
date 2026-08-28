@@ -47,7 +47,7 @@ pub use cache::{NoopRelationCache, RelationCache};
 pub use keepsake::ActiveRelation;
 #[cfg(feature = "postgres")]
 use rows::{ActiveRelationRow, AppliedKeepsakeRow, AppliedKeepsakeWriteRow, RelationRow};
-pub use support::DovecoteAuditConfig;
+pub use support::{AuditEventDecodeError, DovecoteAuditConfig, decode_audit_event};
 #[cfg(feature = "postgres")]
 pub use timed::TimedKeepsakeRepository;
 #[cfg(feature = "mysql")]
