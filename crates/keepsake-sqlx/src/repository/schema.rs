@@ -247,7 +247,7 @@ mod mysql_normalization_tests {
     }
 }
 
-#[cfg(all(test, feature = "postgres"))]
+#[cfg(all(test, feature = "postgres", feature = "migrations"))]
 mod postgres_artifact_tests {
     use super::artifact_check_expression;
 
@@ -312,23 +312,23 @@ mod postgres_artifact_tests {
     }
 }
 
-#[cfg(feature = "postgres")]
+#[cfg(all(feature = "postgres", feature = "migrations"))]
 const PG_CLEAN_ARTIFACT: &str =
     include_str!("../../migrations/v2/postgres/2000_clean_baseline.sql");
 
-#[cfg(all(test, feature = "postgres"))]
+#[cfg(all(test, feature = "postgres", feature = "migrations"))]
 const PG_V3_CLEAN_ARTIFACT: &str =
     include_str!("../../migrations/v3/postgres/3000_clean_baseline.sql");
 
-#[cfg(all(test, feature = "postgres"))]
+#[cfg(all(test, feature = "postgres", feature = "migrations"))]
 const PG_V3_UPGRADE_ACTIVATE_ARTIFACT: &str =
     include_str!("../../migrations/upgrade/v2_to_v3/postgres/activate.sql");
 
-#[cfg(all(test, feature = "postgres"))]
+#[cfg(all(test, feature = "postgres", feature = "migrations"))]
 const PG_V3_UPGRADE_PREPARE_ARTIFACT: &str =
     include_str!("../../migrations/upgrade/v2_to_v3/postgres/prepare.sql");
 
-#[cfg(feature = "postgres")]
+#[cfg(all(feature = "postgres", feature = "migrations"))]
 const PG_UPGRADE_ARTIFACT: &str = concat!(
     include_str!("../../migrations/postgres/0001_init.sql"),
     include_str!("../../migrations/postgres/0002_lifecycle_invariants.sql"),
@@ -361,7 +361,7 @@ const MYSQL_UPGRADE_ARTIFACT: &str = concat!(
     include_str!("../../migrations/mysql/0006_dovecote_bridge.sql"),
 );
 
-#[cfg(any(feature = "postgres", feature = "mysql"))]
+#[cfg(any(feature = "mysql", all(feature = "postgres", feature = "migrations")))]
 fn artifact_check_expression(artifact: &str, marker: &str) -> Option<String> {
     let artifact = normalize_sql(artifact);
     let lower = artifact.to_ascii_lowercase();
@@ -1334,7 +1334,7 @@ const PG_CLEAN_COLUMNS: &[PgColumn<'_>] = &[
     },
 ];
 
-#[cfg(feature = "postgres")]
+#[cfg(all(feature = "postgres", feature = "migrations"))]
 const PG_LEGACY_COLUMNS: &[PgColumn<'_>] = &[
     PgColumn {
         table: "keepsake_audit_events",
@@ -1553,7 +1553,7 @@ fn pg_default_matches(actual: Option<&str>, expected: Option<&str>, sequence: bo
     }
 }
 
-#[cfg(feature = "postgres")]
+#[cfg(all(feature = "postgres", feature = "migrations"))]
 #[allow(clippy::too_many_lines)]
 async fn postgres_catalog_shape_check(
     pool: &sqlx::PgPool,
@@ -1682,7 +1682,7 @@ async fn postgres_catalog_shape_check(
     Ok(())
 }
 
-#[cfg(feature = "postgres")]
+#[cfg(all(feature = "postgres", feature = "migrations"))]
 fn pg_expected_check_expression(activated_upgrade: bool, name: &str) -> Option<String> {
     let artifact = if activated_upgrade {
         PG_UPGRADE_ARTIFACT
@@ -1701,7 +1701,7 @@ fn pg_expected_check_expression(activated_upgrade: bool, name: &str) -> Option<S
     artifact_check_expression(artifact, marker)
 }
 
-#[cfg(feature = "postgres")]
+#[cfg(all(feature = "postgres", feature = "migrations"))]
 fn pg_catalog_check_matches(
     activated_upgrade: bool,
     name: &str,
@@ -1769,7 +1769,7 @@ fn mysql_catalog_check_matches(
     actual == normalize_check_expression(expected)
 }
 
-#[cfg(feature = "postgres")]
+#[cfg(all(feature = "postgres", feature = "migrations"))]
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::excessive_nesting)]
 async fn pg_constraints_check(
@@ -1923,7 +1923,7 @@ async fn pg_constraints_check(
     Ok(())
 }
 
-#[cfg(feature = "postgres")]
+#[cfg(all(feature = "postgres", feature = "migrations"))]
 #[allow(clippy::too_many_lines)]
 async fn pg_indexes_check(pool: &sqlx::PgPool, activated_upgrade: bool) -> RepositoryResult<()> {
     use sqlx::Row;
