@@ -28,12 +28,14 @@ impl TenantId {
                 actual: value.len(),
             });
         }
+
         for character in value.chars() {
             if character.is_control() {
                 return Err(crate::KeepsakeError::TenantIdControlCharacter {
                     code_point: character as u32,
                 });
             }
+
             let code_point = character as u32;
             if (0xFDD0..=0xFDEF).contains(&code_point) || (code_point & 0xFFFF) >= 0xFFFE {
                 return Err(crate::KeepsakeError::TenantIdNoncharacter { code_point });

@@ -241,6 +241,7 @@ async fn upgrade_track_activates_after_importer_evidence() -> TestResult<()> {
         // by MariaDB 11.8; MariaDB uses the forward v3 baseline instead.
         return Ok(());
     }
+
     let repo =
         MySqlKeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/mysql-upgrade")?;
     repo.upgrade_migrate().await?;

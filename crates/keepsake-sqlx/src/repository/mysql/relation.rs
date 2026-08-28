@@ -20,6 +20,7 @@ where
         if relation.tenant_id != self.tenant_id {
             return Err(RepositoryError::TenantScopeMismatch);
         }
+
         let expiry_policy = serde_json::to_value(&relation.expiry)?;
         sqlx::query(
             r"
@@ -165,6 +166,7 @@ where
         {
             return Ok(Some(relation));
         }
+
         let row = sqlx::query(
             r"
             select tenant_id, id, kind, `key`, enabled, expiry_policy
@@ -180,6 +182,7 @@ where
         if let Some(relation) = &relation {
             self.relation_cache.store(&self.tenant_id, relation).await;
         }
+
         Ok(relation)
     }
 
@@ -191,6 +194,7 @@ where
         if let Some(relation) = self.relation_cache.get_by_key(&self.tenant_id, key).await {
             return Ok(Some(relation));
         }
+
         let row = sqlx::query(
             r"
             select tenant_id, id, kind, `key`, enabled, expiry_policy

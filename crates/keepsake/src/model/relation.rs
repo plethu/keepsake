@@ -252,6 +252,7 @@ impl ActiveRelation {
                 actual: keepsake.tenant_id().clone(),
             });
         }
+
         if keepsake.relation_id() != relation.id {
             return Err(KeepsakeError::ActiveRelationMismatch {
                 keepsake_relation_id: keepsake.relation_id(),

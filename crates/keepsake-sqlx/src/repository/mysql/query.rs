@@ -62,6 +62,7 @@ where
         if relation_ids.is_empty() {
             return Ok(Vec::new());
         }
+
         let relation_ids = relation_ids.iter().copied().collect::<BTreeSet<_>>();
         let mut query = QueryBuilder::<MySql>::new(ACTIVE_RELATION_SELECT);
         query
@@ -92,6 +93,7 @@ where
         if keys.is_empty() {
             return Ok(Vec::new());
         }
+
         let keys = keys
             .iter()
             .map(|key| (key.kind(), key.name()))

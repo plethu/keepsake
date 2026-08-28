@@ -21,6 +21,7 @@ where
         if relation.tenant_id != self.tenant_id {
             return Err(RepositoryError::TenantScopeMismatch);
         }
+
         let expiry_policy = serde_json::to_string(&relation.expiry)?;
         let row = sqlx::query(
             r"

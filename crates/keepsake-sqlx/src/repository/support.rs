@@ -205,6 +205,7 @@ pub fn decode_audit_event(
             payload_tenant: decoded.tenant_id.as_str().to_owned(),
         });
     }
+
     let expected_id = format!("keepsake-audit-{}", decoded.id.as_uuid());
     if event.id().as_str() != expected_id {
         return Err(AuditEventDecodeError::InvalidEnvelope {

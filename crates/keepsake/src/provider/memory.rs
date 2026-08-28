@@ -357,6 +357,7 @@ impl InMemoryKeepsakeStore {
                 },
             ));
         }
+
         if command.relation_id != relation.id {
             return Err(InMemoryKeepsakeStoreError::RelationMismatch {
                 command_relation_id: command.relation_id,

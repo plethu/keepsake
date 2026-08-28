@@ -188,6 +188,7 @@ where
     let ExpiryPolicy::WhenFulfilled { policy } = candidate.expiry_policy else {
         return Ok(0);
     };
+
     let snapshot =
         fulfillment_snapshot_tx(tx, &repository.tenant_id, candidate.keepsake_id).await?;
     if !policy.is_fulfilled(&snapshot) {

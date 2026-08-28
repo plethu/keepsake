@@ -756,6 +756,7 @@ async fn sqlite_v3_domain_shape_check(pool: &sqlx::SqlitePool) -> RepositoryResu
             }
             _ => unreachable!("table list is static"),
         };
+
         let tenant = columns
             .iter()
             .find(|row| row.try_get::<String, _>("name").ok().as_deref() == Some("tenant_id"))
@@ -763,6 +764,7 @@ async fn sqlite_v3_domain_shape_check(pool: &sqlx::SqlitePool) -> RepositoryResu
         if tenant.try_get::<i64, _>("notnull")? != 1 {
             return Err(mismatch(format!("{table}.tenant_id is nullable")));
         }
+
         let definition = sqlx::query_scalar::<_, Option<String>>(
             "select sql from sqlite_master where type = 'table' and name = ?",
         )
@@ -888,6 +890,7 @@ pub(super) async fn sqlite_runtime_schema_check(pool: &sqlx::SqlitePool) -> Repo
         sqlite_v3_domain_shape_check(pool).await?;
         return Ok(());
     }
+
     if track.as_deref() != Some("2") {
         return Err(RepositoryError::BackendMismatch {
             expected: "2.0 active schema",
@@ -983,6 +986,7 @@ pub(super) async fn sqlite_upgrade_schema_preflight(
             actual: "2.0 clean track".to_owned(),
         });
     }
+
     let has_v3 = sqlx::query_scalar::<_, Option<String>>(
         "select value from keepsake_schema_metadata where key = 'api_track'",
     )
@@ -1740,10 +1744,12 @@ fn mysql_catalog_check_matches(
         return actual
             == "(json_unquote(json_extract(expiry_policy,'$.type'))=any(array['manual_only','at','when_fulfilled'])and(json_unquote(json_extract(expiry_policy,'$.type'))='at'andexpires_atisnotnullandcast(replace(replace(json_unquote(json_extract(expiry_policy,'$.timestamp')),'t',''),'z','')asdatetime(6))=expires_atorjson_unquote(json_extract(expiry_policy,'$.type'))=any(array['manual_only','when_fulfilled'])andexpires_atisnull))istrue";
     }
+
     if maria_db && name == "keepsakes_lifecycle_timestamps" && !activated_upgrade {
         return actual
             == "(state='applied'andrevoked_atisnullandfulfilled_atisnullorstate='revoked'andrevoked_atisnotnullandfulfilled_atisnullorstate='expired'andrevoked_atisnulland(json_unquote(json_extract(expiry_policy,'$.type'))='at'andexpires_atisnotnullandfulfilled_atisnullorjson_unquote(json_extract(expiry_policy,'$.type'))='when_fulfilled'andfulfilled_atisnotnullandexpires_atisnull))istrue";
     }
+
     if name == "keepsakes_expiry_policy_projection" {
         return actual
             == "((json_unquote(json_extract(expiry_policy,'$.type'))=any(array['manual_only','at','when_fulfilled']))and(((json_unquote(json_extract(expiry_policy,'$.type'))='at')and(expires_atisnotnull)and(cast(replace(replace(json_unquote(json_extract(expiry_policy,'$.timestamp')),'t',''),'z','')asdatetime(6))=expires_at))or((json_unquote(json_extract(expiry_policy,'$.type'))=any(array['manual_only','when_fulfilled']))and(expires_atisnull))))istrue";
@@ -2532,12 +2538,14 @@ pub(super) async fn postgres_upgrade_schema_preflight(pool: &sqlx::PgPool) -> Re
     } else {
         false
     };
+
     if has_v2 {
         return Err(RepositoryError::BackendMismatch {
             expected: "legacy upgrade track",
             actual: "2.0 clean track".to_owned(),
         });
     }
+
     let has_v3 = if metadata.is_some() {
         sqlx::query_scalar::<_, bool>(
             "select exists (select 1 from keepsake_schema_metadata where key = 'api_track' and value = '3')",
@@ -2547,6 +2555,7 @@ pub(super) async fn postgres_upgrade_schema_preflight(pool: &sqlx::PgPool) -> Re
     } else {
         false
     };
+
     if has_v3 {
         return Err(RepositoryError::BackendMismatch {
             expected: "legacy upgrade track",
@@ -3998,6 +4007,7 @@ async fn mysql_v3_domain_shape_check(pool: &sqlx::MySqlPool) -> RepositoryResult
             "v3 schema has {tenant_columns} of 4 tenant_id columns"
         )));
     }
+
     let tenant_checks = sqlx::query_scalar::<_, i64>(
         "select count(*) from information_schema.table_constraints where constraint_schema = database() and constraint_type = 'CHECK' and constraint_name in (?,?,?,?,?,?,?,?)",
     )
@@ -4170,6 +4180,7 @@ async fn mysql_v3_indexes_check(pool: &sqlx::MySqlPool) -> RepositoryResult<()> 
                 "index {table}.{name} column count differs"
             )));
         }
+
         for (offset, row) in rows.iter().enumerate() {
             let non_unique: i64 = row.try_get("non_unique")?;
             let seq_in_index: i64 = row.try_get("seq_in_index")?;
@@ -4262,6 +4273,7 @@ async fn mysql_v3_foreign_keys_check(pool: &sqlx::MySqlPool) -> RepositoryResult
                 "foreign key {table}.{name} column count differs"
             )));
         }
+
         for (offset, row) in rows.iter().enumerate() {
             let ordinal: i64 = row.try_get("ordinal_position")?;
             let local: String = row.try_get("column_name")?;
@@ -4284,11 +4296,13 @@ async fn mysql_v3_foreign_keys_check(pool: &sqlx::MySqlPool) -> RepositoryResult
                     "foreign key {table}.{name} columns or target differ"
                 )));
             }
+
             if !mysql_v3_referential_action_matches(delete_rule, &actual_rule) {
                 return Err(mismatch(format!(
                     "foreign key {table}.{name} delete action differs: actual={actual_rule}, expected={delete_rule}"
                 )));
             }
+
             if !mysql_v3_referential_action_matches("NO ACTION", &actual_update_rule) {
                 return Err(mismatch(format!(
                     "foreign key {table}.{name} update action differs: actual={actual_update_rule}, expected=NO ACTION"
@@ -4472,6 +4486,7 @@ pub(super) async fn mysql_runtime_schema_check(pool: &sqlx::MySqlPool) -> Reposi
         mysql_v3_domain_shape_check(pool).await?;
         return Ok(());
     }
+
     if track.as_deref() != Some("2") {
         return Err(RepositoryError::BackendMismatch {
             expected: "2.0 active schema",
@@ -4544,6 +4559,7 @@ pub(super) async fn mysql_upgrade_schema_preflight(pool: &sqlx::MySqlPool) -> Re
             actual: "2.0 clean track".to_owned(),
         });
     }
+
     let has_v3 = sqlx::query_scalar::<_, Option<String>>(
         "select value from keepsake_schema_metadata where `key` = 'api_track'",
     )

@@ -158,6 +158,7 @@ async fn existing_audit_event_tx(
     .fetch_optional(&mut **tx)
     .await?;
     let Some(row) = row else { return Ok(None) };
+
     let data: Option<Vec<u8>> = sqlx::Row::try_get(&row, "data")?;
     data.map(|data| serde_json::from_slice(&data).map_err(RepositoryError::from))
         .transpose()
