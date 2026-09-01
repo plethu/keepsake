@@ -82,3 +82,37 @@ async fn sqlite_tenants_isolate_same_ids_and_reject_wrong_scope() -> TestResult<
     ));
     Ok(())
 }
+
+#[tokio::test]
+async fn sqlite_relation_upsert_rejects_same_id_with_a_different_key_without_mutation()
+-> TestResult<()> {
+    let (repo, _pool) = SqliteHarness::repo().await?;
+    let first = RelationDefinition::enabled(
+        SqliteHarness::tenant(),
+        Uuid::now_v7(),
+        RelationKey::new("tag", "original")?,
+        ExpiryPolicy::ManualOnly,
+    )?;
+    let stored = repo
+        .upsert_relation(&first, ts("2026-01-01T00:00:00Z")?)
+        .await?;
+    let incoming = RelationDefinition::enabled(
+        SqliteHarness::tenant(),
+        stored.id,
+        RelationKey::new("tag", "different")?,
+        ExpiryPolicy::ManualOnly,
+    )?;
+
+    let result = repo
+        .upsert_relation(&incoming, ts("2026-01-02T00:00:00Z")?)
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(keepsake_sqlx::RepositoryError::RelationIdentityConflict { relation_id, .. })
+            if relation_id == stored.id
+    ));
+    assert_eq!(repo.relation_by_id(stored.id).await?, Some(stored));
+    assert_eq!(repo.relation_by_key(&incoming.key).await?, None);
+    Ok(())
+}

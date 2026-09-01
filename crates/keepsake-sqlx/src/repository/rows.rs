@@ -9,7 +9,7 @@ use sqlx::FromRow;
 use uuid::Uuid;
 
 use super::RepositoryResult;
-use super::support::parse_state;
+use super::support::{canonical_expiry_policy, parse_state};
 
 #[derive(Debug, FromRow)]
 pub(super) struct RelationRow {
@@ -24,7 +24,8 @@ pub(super) struct RelationRow {
 impl RelationRow {
     pub(super) fn try_into_relation(self) -> RepositoryResult<RelationDefinition> {
         let tenant_id = TenantId::new(self.tenant_id)?;
-        let expiry = serde_json::from_value::<ExpiryPolicy>(self.expiry_policy)?;
+        let expiry =
+            canonical_expiry_policy(serde_json::from_value::<ExpiryPolicy>(self.expiry_policy)?);
         Ok(RelationDefinition::new(
             tenant_id,
             self.id,
@@ -131,7 +132,9 @@ pub(super) struct ActiveRelationRow {
 
 impl ActiveRelationRow {
     pub(super) fn try_into_active_relation(self) -> RepositoryResult<ActiveRelation> {
-        let relation_expiry = serde_json::from_value::<ExpiryPolicy>(self.relation_expiry_policy)?;
+        let relation_expiry = canonical_expiry_policy(serde_json::from_value::<ExpiryPolicy>(
+            self.relation_expiry_policy,
+        )?);
         let keepsake = row_into_keepsake(KeepsakeRow {
             tenant_id: self.tenant_id.clone(),
             id: self.id,
@@ -173,7 +176,8 @@ struct KeepsakeRow {
 }
 
 fn row_into_keepsake(row: KeepsakeRow) -> RepositoryResult<Keepsake> {
-    let expiry = serde_json::from_value::<ExpiryPolicy>(row.expiry_policy)?;
+    let expiry =
+        canonical_expiry_policy(serde_json::from_value::<ExpiryPolicy>(row.expiry_policy)?);
     let metadata = serde_json::from_value::<BTreeMap<String, String>>(row.metadata)?;
     Ok(KeepsakeRecord {
         tenant_id: TenantId::new(row.tenant_id)?,

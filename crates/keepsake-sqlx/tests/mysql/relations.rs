@@ -6,8 +6,45 @@ use keepsake::{ExpiryPolicy, RelationDefinition, RelationKey};
 use keepsake_sqlx::{LocalRelationCacheConfig, MySqlKeepsakeRepository};
 #[cfg(feature = "cache")]
 use std::time::Duration;
-#[cfg(feature = "cache")]
 use uuid::Uuid;
+
+#[tokio::test]
+#[ignore = "requires docker mysql; run `mise run test-db`"]
+async fn relation_upsert_rejects_same_id_with_a_different_key_without_mutation() -> TestResult<()> {
+    let (repo, _) = MySqlHarness::repo().await?;
+    let first = keepsake::RelationDefinition::new(
+        MySqlHarness::tenant(),
+        Uuid::now_v7(),
+        keepsake::RelationKey::new("tag", "original")?,
+        true,
+        keepsake::ExpiryPolicy::ManualOnly,
+    )?;
+    let stored = repo
+        .upsert_relation(&first, ts("2026-01-01T00:00:00Z")?)
+        .await?;
+    let incoming = keepsake::RelationDefinition::new(
+        MySqlHarness::tenant(),
+        stored.id,
+        keepsake::RelationKey::new("tag", "different")?,
+        false,
+        keepsake::ExpiryPolicy::At {
+            timestamp: ts("2026-02-01T00:00:00Z")?,
+        },
+    )?;
+
+    let result = repo
+        .upsert_relation(&incoming, ts("2026-01-02T00:00:00Z")?)
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(keepsake_sqlx::RepositoryError::RelationIdentityConflict { relation_id, .. })
+            if relation_id == stored.id
+    ));
+    assert_eq!(repo.relation_by_id(stored.id).await?, Some(stored));
+    assert_eq!(repo.relation_by_key(&incoming.key).await?, None);
+    Ok(())
+}
 
 #[cfg(feature = "cache")]
 #[tokio::test]

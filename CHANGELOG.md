@@ -1,5 +1,29 @@
 # Changelog
 
+## 3.0.1 - 2026-09-01
+
+- Canonicalised lifecycle occurrence timestamps to microseconds before both
+  SQL persistence and Dovecote event construction, so exact retries remain
+  idempotent on every supported backend.
+- Canonicalised timed-expiry policies at SQL write and read boundaries so
+  nanosecond inputs and previously stored policy JSON remain compatible with
+  microsecond database columns on every backend.
+- Prevented relation upserts on every backend from mutating an existing row
+  when a stable id is reused with a different natural key, returning a typed
+  identity conflict instead.
+- Enforced tenant ownership on PostgreSQL relation upserts and revalidated
+  relation definitions at every SQL write boundary.
+- Closed Serde construction paths that could create empty relation keys or
+  invalid fulfillment policies without running their domain validators.
+- Removed sibling-worktree paths from Dovecote dependencies while retaining
+  compatibility with the published Dovecote 0.2 series.
+- Replaced the bespoke lock-and-map TTL cache with the optional Moka 0.12
+  implementation while retaining the existing `cache` feature and public
+  configuration API.
+- Split the monolithic cross-dialect schema verifier into backend-owned
+  `PostgreSQL`, `MySQL`/`MariaDB`, and `SQLite` modules and corrected its stale
+  schema-version diagnostic.
+
 ## 3.0.0 - 2026-08-28
 
 - **Breaking SQLx API:** Keepsake SQLx moved to the tenant-scoped 3.0

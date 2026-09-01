@@ -209,6 +209,23 @@ pub enum RepositoryError {
         stored_relation_id: Uuid,
     },
 
+    /// An upsert reused a stable id for a different natural relation key.
+    #[error(
+        "relation id {relation_id} already belongs to {stored_kind}/{stored_name}, not {incoming_kind}/{incoming_name}"
+    )]
+    RelationIdentityConflict {
+        /// Conflicting stable relation id.
+        relation_id: Uuid,
+        /// Existing relation kind.
+        stored_kind: String,
+        /// Existing relation name.
+        stored_name: String,
+        /// Requested relation kind.
+        incoming_kind: String,
+        /// Requested relation name.
+        incoming_name: String,
+    },
+
     /// A keepsake row referenced a missing relation definition.
     #[error("relation definition {relation_id} was not found")]
     RelationDefinitionMissing {

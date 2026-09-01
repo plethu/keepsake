@@ -7,7 +7,7 @@ use sqlx::{Sqlite, Transaction};
 use uuid::Uuid;
 
 use crate::repository::support::{
-    apply_event, dovecote_event, dovecote_tenant_id, expires_at, replay_event,
+    apply_event, canonical_timestamp, dovecote_event, dovecote_tenant_id, expires_at, replay_event,
     revoke_by_subject_event, revoke_event,
 };
 use crate::repository::{
@@ -28,6 +28,9 @@ where
         }
         command.subject.validate()?;
         command.context.validate()?;
+        let mut command = command.clone();
+        command.at = canonical_timestamp(command.at);
+        let command = &command;
 
         let mut tx = begin_write_tx(self.pool).await?;
         let relation =
@@ -124,6 +127,9 @@ where
             return Err(RepositoryError::TenantScopeMismatch);
         }
         command.context.validate()?;
+        let mut command = command.clone();
+        command.at = canonical_timestamp(command.at);
+        let command = &command;
 
         let mut tx = begin_write_tx(self.pool).await?;
         let revoked = revoke_tx(&mut tx, &self.tenant_id, command.keepsake_id, command.at).await?;
@@ -145,6 +151,9 @@ where
         }
         command.subject.validate()?;
         command.context.validate()?;
+        let mut command = command.clone();
+        command.at = canonical_timestamp(command.at);
+        let command = &command;
 
         let mut tx = begin_write_tx(self.pool).await?;
         let revoked = revoke_by_subject_tx(

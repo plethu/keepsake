@@ -47,7 +47,7 @@ impl RelationKey {
 }
 
 /// Relation category, such as `tag`, `sanction`, `entitlement`, or `feature_gate`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 pub struct RelationKind(String);
 
@@ -83,8 +83,17 @@ impl fmt::Display for RelationKind {
     }
 }
 
+impl<'de> Deserialize<'de> for RelationKind {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::new(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
 /// Relation name within a relation kind.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 pub struct RelationName(String);
 
@@ -117,6 +126,15 @@ impl AsRef<str> for RelationName {
 impl fmt::Display for RelationName {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for RelationName {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::new(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
     }
 }
 
@@ -166,7 +184,7 @@ const fn assert_valid_static_relation_component(value: &str) {
 }
 
 /// Configured relation definition.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RelationDefinition {
     /// Tenant that owns this relation definition.
     pub tenant_id: TenantId,
@@ -189,6 +207,7 @@ impl RelationDefinition {
         enabled: bool,
         expiry: ExpiryPolicy,
     ) -> Result<Self> {
+        key.validate()?;
         expiry.validate()?;
         Ok(Self {
             tenant_id,
@@ -197,6 +216,12 @@ impl RelationDefinition {
             enabled,
             expiry,
         })
+    }
+
+    /// Revalidates a relation definition received across a trust boundary.
+    pub fn validate(&self) -> Result<()> {
+        self.key.validate()?;
+        self.expiry.validate()
     }
 
     /// Builds an enabled relation definition.
@@ -231,6 +256,26 @@ impl RelationDefinition {
             Spec::ENABLED,
             Spec::expiry(at),
         )
+    }
+}
+
+impl<'de> Deserialize<'de> for RelationDefinition {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct WireRelationDefinition {
+            tenant_id: TenantId,
+            id: RelationId,
+            key: RelationKey,
+            enabled: bool,
+            expiry: ExpiryPolicy,
+        }
+
+        let wire = WireRelationDefinition::deserialize(deserializer)?;
+        Self::new(wire.tenant_id, wire.id, wire.key, wire.enabled, wire.expiry)
+            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -317,4 +362,31 @@ pub trait RelationSpec {
 
     /// Expiry policy for this relation at materialization time.
     fn expiry(at: DateTime<Utc>) -> ExpiryPolicy;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serde_rejects_whitespace_relation_components() {
+        let kind = serde_json::from_str::<RelationKind>(r#""   ""#);
+        let name = serde_json::from_str::<RelationName>(r#""\n\t""#);
+
+        assert!(kind.is_err());
+        assert!(name.is_err());
+    }
+
+    #[test]
+    fn serde_rejects_invalid_nested_fulfillment_policy() {
+        let json = r#"{
+            "tenant_id":"tenant-a",
+            "id":"00000000-0000-0000-0000-000000000001",
+            "key":{"kind":"tag","name":"trusted"},
+            "enabled":true,
+            "expiry":{"type":"when_fulfilled","policy":{"type":"counter_at_least","key":"steps","threshold":0}}
+        }"#;
+
+        assert!(serde_json::from_str::<RelationDefinition>(json).is_err());
+    }
 }

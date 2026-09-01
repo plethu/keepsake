@@ -8,12 +8,14 @@ use sqlx::Row;
 
 #[cfg(feature = "fulfillment-counters")]
 use crate::repository::FulfilledExpiryCandidate;
-use crate::repository::support::{parse_state, parse_uuid};
+use crate::repository::support::{canonical_expiry_policy, parse_state, parse_uuid};
 use crate::repository::{RepositoryResult, TimedExpiryCandidate};
 pub(super) fn relation_from_row(
     row: &sqlx::sqlite::SqliteRow,
 ) -> RepositoryResult<RelationDefinition> {
-    let expiry = serde_json::from_str::<ExpiryPolicy>(row.try_get("expiry_policy")?)?;
+    let expiry = canonical_expiry_policy(serde_json::from_str::<ExpiryPolicy>(
+        row.try_get("expiry_policy")?,
+    )?);
     Ok(RelationDefinition::new(
         TenantId::new(row.try_get::<String, _>("tenant_id")?)?,
         parse_uuid(row.try_get("id")?)?,
@@ -28,7 +30,9 @@ pub(super) fn relation_from_row(
 
 pub(super) fn keepsake_from_row(row: &sqlx::sqlite::SqliteRow) -> RepositoryResult<Keepsake> {
     let metadata = serde_json::from_str::<BTreeMap<String, String>>(row.try_get("metadata")?)?;
-    let expiry = serde_json::from_str::<ExpiryPolicy>(row.try_get("expiry_policy")?)?;
+    let expiry = canonical_expiry_policy(serde_json::from_str::<ExpiryPolicy>(
+        row.try_get("expiry_policy")?,
+    )?);
     Ok(KeepsakeRecord {
         tenant_id: TenantId::new(row.try_get::<String, _>("tenant_id")?)?,
         id: parse_uuid(row.try_get("id")?)?,
@@ -51,7 +55,9 @@ pub(super) fn keepsake_from_row(row: &sqlx::sqlite::SqliteRow) -> RepositoryResu
 pub(super) fn relation_definition_from_active_row(
     row: &sqlx::sqlite::SqliteRow,
 ) -> RepositoryResult<RelationDefinition> {
-    let expiry = serde_json::from_str::<ExpiryPolicy>(row.try_get("relation_expiry_policy")?)?;
+    let expiry = canonical_expiry_policy(serde_json::from_str::<ExpiryPolicy>(
+        row.try_get("relation_expiry_policy")?,
+    )?);
     Ok(RelationDefinition::new(
         TenantId::new(row.try_get::<String, _>("tenant_id")?)?,
         parse_uuid(row.try_get("relation_definition_id")?)?,
@@ -85,7 +91,9 @@ pub(super) fn fulfilled_expiry_candidate_from_row(
         relation_id: parse_uuid(row.try_get("relation_id")?)?,
         subject_kind: row.try_get("subject_kind")?,
         subject_id: row.try_get("subject_id")?,
-        expiry_policy: serde_json::from_str(row.try_get("expiry_policy")?)?,
+        expiry_policy: canonical_expiry_policy(serde_json::from_str(
+            row.try_get("expiry_policy")?,
+        )?),
     })
 }
 

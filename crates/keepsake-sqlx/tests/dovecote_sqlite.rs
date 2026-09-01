@@ -72,7 +72,7 @@ async fn clean_track_writes_one_exact_typed_dovecote_event()
         tenant(),
         SubjectRef::new("account", "café")?,
         relation.id,
-        timestamp("2026-01-01T00:01:00.123456Z")?,
+        timestamp("2026-01-01T00:01:00.123456789Z")?,
         CommandContext::new(ActorRef::new("operator", "mari")?),
     );
     let expected_id = command.audit_id;
@@ -122,7 +122,7 @@ async fn clean_track_writes_one_exact_typed_dovecote_event()
     let decoded: keepsake::AuditEvent = serde_json::from_slice(&bytes)?;
     assert_eq!(decoded.id, expected_id);
     assert_eq!(decoded.keepsake_id, expected.keepsake.id());
-    assert_eq!(decoded.at, command.at);
+    assert_eq!(decoded.at, timestamp("2026-01-01T00:01:00.123456Z")?);
     assert_eq!(decoded.subject.id(), "café");
     assert_eq!(
         sqlx::query_scalar::<_, i64>("select count(*) from dovecote_events")

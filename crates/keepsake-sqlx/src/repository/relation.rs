@@ -3,6 +3,7 @@ use keepsake::{RelationDefinition, RelationId, RelationKey, RelationSpec};
 use uuid::Uuid;
 
 use super::PostgresBackend;
+use super::support::{canonical_relation, canonical_timestamp};
 use super::{
     RelationCache, RelationRow, RepositoryError, RepositoryResult, TenantSqlxKeepsakeRepository,
 };
@@ -20,7 +21,38 @@ where
         relation: &RelationDefinition,
         at: DateTime<Utc>,
     ) -> RepositoryResult<RelationDefinition> {
+        if relation.tenant_id != self.tenant_id {
+            return Err(RepositoryError::TenantScopeMismatch);
+        }
+        relation.validate()?;
+        let relation = canonical_relation(relation);
+        let at = canonical_timestamp(at);
         let expiry_policy = serde_json::to_value(&relation.expiry)?;
+        let mut tx = self.pool.begin().await?;
+        let existing_by_id = sqlx::query_as::<_, RelationRow>(
+            r"
+            select tenant_id, id, kind, key, enabled, expiry_policy
+            from keepsake_relation_definitions
+            where tenant_id = $1 and id = $2
+            for update
+            ",
+        )
+        .bind(self.tenant_id.as_str())
+        .bind(relation.id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(row) = existing_by_id {
+            let stored = row.try_into_relation()?;
+            if stored.key != relation.key {
+                return Err(RepositoryError::RelationIdentityConflict {
+                    relation_id: relation.id,
+                    stored_kind: stored.key.kind().to_owned(),
+                    stored_name: stored.key.name().to_owned(),
+                    incoming_kind: relation.key.kind().to_owned(),
+                    incoming_name: relation.key.name().to_owned(),
+                });
+            }
+        }
         let row = sqlx::query_as::<_, RelationRow>(
             r"
             insert into keepsake_relation_definitions
@@ -40,8 +72,9 @@ where
         .bind(relation.enabled)
         .bind(expiry_policy)
         .bind(at)
-        .fetch_one(self.pool)
+        .fetch_one(&mut *tx)
         .await?;
+        tx.commit().await?;
         let relation = row.try_into_relation()?;
         self.relation_cache
             .remove_by_id(&self.tenant_id, relation.id)
@@ -57,7 +90,11 @@ where
     where
         Spec: RelationSpec,
     {
-        let relation = RelationDefinition::from_spec::<Spec>(self.tenant_id.clone(), at)?;
+        let relation = canonical_relation(&RelationDefinition::from_spec::<Spec>(
+            self.tenant_id.clone(),
+            at,
+        )?);
+        let at = canonical_timestamp(at);
         let expiry_policy = serde_json::to_value(&relation.expiry)?;
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query_as::<_, RelationRow>(

@@ -1,6 +1,6 @@
 [package]
 name = "keepsake-sqlx"
-version = "3.0.0"
+version = "3.0.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -15,7 +15,7 @@ documentation = "https://docs.rs/keepsake-sqlx"
 
 [features]
 default = ["postgres", "cache", "fulfillment-counters", "migrations"]
-cache = []
+cache = ["dep:moka"]
 postgres = ["sqlx/postgres", "sqlx/uuid", "sqlx/chrono", "sqlx/json", "dep:dovecote-sqlx-postgres"]
 sqlite = ["sqlx/sqlite", "sqlx/chrono", "sqlx/json", "dep:dovecote-sqlx-sqlite"]
 mysql = ["sqlx/mysql", "sqlx/chrono", "sqlx/json", "dep:dovecote-sqlx-mysql"]
@@ -33,6 +33,7 @@ mysql-tests = ["mysql", "cache", "fulfillment-counters", "migrations"]
 async-trait.workspace = true
 chrono.workspace = true
 keepsake.workspace = true
+moka = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true

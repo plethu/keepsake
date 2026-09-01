@@ -1,12 +1,8 @@
 use keepsake::{RelationDefinition, RelationId, RelationKey, TenantId};
 
-#[cfg(feature = "cache")]
-use std::collections::BTreeMap;
 use std::fmt::Debug;
 #[cfg(feature = "cache")]
-use std::sync::{Arc, RwLock};
-#[cfg(feature = "cache")]
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Adapter for relation definition caching.
 #[async_trait::async_trait]
@@ -80,11 +76,8 @@ impl LocalRelationCacheConfig {
 #[cfg(feature = "cache")]
 #[derive(Debug, Clone)]
 pub struct LocalRelationCache {
-    config: LocalRelationCacheConfig,
-    // Local cache handles may be cloned or shared across repository clones.
-    // Locks protect a small in-process map and are never held across `.await`.
-    // Cross-pod invalidation belongs in another `RelationCache` adapter.
-    state: Arc<RwLock<LocalRelationCacheState>>,
+    by_id: moka::sync::Cache<(TenantId, RelationId), RelationDefinition>,
+    by_key: moka::sync::Cache<(TenantId, RelationKey), RelationDefinition>,
 }
 
 #[cfg(feature = "cache")]
@@ -93,8 +86,12 @@ impl LocalRelationCache {
     #[must_use]
     pub fn new(config: LocalRelationCacheConfig) -> Self {
         Self {
-            config,
-            state: Arc::new(RwLock::new(LocalRelationCacheState::default())),
+            by_id: moka::sync::Cache::builder()
+                .time_to_live(config.ttl)
+                .build(),
+            by_key: moka::sync::Cache::builder()
+                .time_to_live(config.ttl)
+                .build(),
         }
     }
 }
@@ -107,11 +104,7 @@ impl RelationCache for LocalRelationCache {
         tenant_id: &TenantId,
         relation_id: RelationId,
     ) -> Option<RelationDefinition> {
-        self.state
-            .read()
-            .ok()
-            .and_then(|state| state.by_id.get(&(tenant_id.clone(), relation_id)).cloned())
-            .and_then(CacheEntry::fresh_relation)
+        self.by_id.get(&(tenant_id.clone(), relation_id))
     }
 
     async fn get_by_key(
@@ -119,57 +112,33 @@ impl RelationCache for LocalRelationCache {
         tenant_id: &TenantId,
         key: &RelationKey,
     ) -> Option<RelationDefinition> {
-        self.state
-            .read()
-            .ok()
-            .and_then(|state| state.by_key.get(&(tenant_id.clone(), key.clone())).cloned())
-            .and_then(CacheEntry::fresh_relation)
+        self.by_key.get(&(tenant_id.clone(), key.clone()))
     }
 
     async fn store(&self, tenant_id: &TenantId, relation: &RelationDefinition) {
-        let entry = CacheEntry {
-            relation: relation.clone(),
-            expires_at: Instant::now() + self.config.ttl,
-        };
-        if let Ok(mut state) = self.state.write() {
-            state
-                .by_id
-                .insert((tenant_id.clone(), relation.id), entry.clone());
-            state
-                .by_key
-                .insert((tenant_id.clone(), relation.key.clone()), entry);
-        }
+        self.by_id
+            .insert((tenant_id.clone(), relation.id), relation.clone());
+        self.by_key
+            .insert((tenant_id.clone(), relation.key.clone()), relation.clone());
     }
 
     async fn remove_by_id(&self, tenant_id: &TenantId, relation_id: RelationId) {
-        if let Ok(mut state) = self.state.write()
-            && let Some(entry) = state.by_id.remove(&(tenant_id.clone(), relation_id))
-        {
-            state
-                .by_key
-                .remove(&(tenant_id.clone(), entry.relation.key));
+        let id_key = (tenant_id.clone(), relation_id);
+        let relation_key = self
+            .by_id
+            .get(&id_key)
+            .map(|relation| relation.key)
+            .or_else(|| {
+                self.by_key.iter().find_map(|(cache_key, relation)| {
+                    let (cached_tenant, cached_key) = cache_key.as_ref();
+                    (cached_tenant == tenant_id && relation.id == relation_id)
+                        .then(|| cached_key.clone())
+                })
+            });
+        if let Some(relation_key) = relation_key {
+            self.by_key.invalidate(&(tenant_id.clone(), relation_key));
         }
-    }
-}
-
-#[cfg(feature = "cache")]
-#[derive(Debug, Default)]
-struct LocalRelationCacheState {
-    by_id: BTreeMap<(TenantId, RelationId), CacheEntry>,
-    by_key: BTreeMap<(TenantId, RelationKey), CacheEntry>,
-}
-
-#[cfg(feature = "cache")]
-#[derive(Debug, Clone)]
-struct CacheEntry {
-    relation: RelationDefinition,
-    expires_at: Instant,
-}
-
-#[cfg(feature = "cache")]
-impl CacheEntry {
-    fn fresh_relation(self) -> Option<RelationDefinition> {
-        (Instant::now() <= self.expires_at).then_some(self.relation)
+        self.by_id.invalidate(&id_key);
     }
 }
 
@@ -180,22 +149,50 @@ mod tests {
     use std::thread;
     use uuid::Uuid;
 
-    #[test]
-    fn cache_entry_expires_after_ttl() -> keepsake::Result<()> {
+    #[tokio::test]
+    async fn local_cache_expires_entries_after_ttl() -> keepsake::Result<()> {
         let relation = RelationDefinition::enabled(
             keepsake::TenantId::new("tenant-test")?,
             Uuid::nil(),
             RelationKey::new("tag", "trusted")?,
             ExpiryPolicy::ManualOnly,
         )?;
-        let entry = CacheEntry {
-            relation,
-            expires_at: Instant::now() + Duration::from_millis(1),
-        };
-
+        let cache =
+            LocalRelationCache::new(LocalRelationCacheConfig::new(Duration::from_millis(1)));
+        cache.store(&relation.tenant_id, &relation).await;
         thread::sleep(Duration::from_millis(5));
 
-        assert_eq!(entry.fresh_relation(), None);
+        assert_eq!(
+            cache.get_by_id(&relation.tenant_id, relation.id).await,
+            None
+        );
+        assert_eq!(
+            cache.get_by_key(&relation.tenant_id, &relation.key).await,
+            None
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remove_by_id_invalidates_a_surviving_key_entry() -> keepsake::Result<()> {
+        let relation = RelationDefinition::enabled(
+            keepsake::TenantId::new("tenant-test")?,
+            Uuid::nil(),
+            RelationKey::new("tag", "trusted")?,
+            ExpiryPolicy::ManualOnly,
+        )?;
+        let cache = LocalRelationCache::new(LocalRelationCacheConfig::new(Duration::from_mins(1)));
+        cache.store(&relation.tenant_id, &relation).await;
+        cache
+            .by_id
+            .invalidate(&(relation.tenant_id.clone(), relation.id));
+
+        cache.remove_by_id(&relation.tenant_id, relation.id).await;
+
+        assert_eq!(
+            cache.get_by_key(&relation.tenant_id, &relation.key).await,
+            None
+        );
         Ok(())
     }
 }

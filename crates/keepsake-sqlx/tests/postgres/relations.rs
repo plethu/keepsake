@@ -2,6 +2,28 @@ use super::support::*;
 
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
+async fn relation_upsert_rejects_a_relation_owned_by_another_tenant() -> TestResult<()> {
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
+    let relation = RelationDefinition::new(
+        TenantId::new("different-tenant")?,
+        Uuid::now_v7(),
+        RelationKey::new("tag", unique_key("tenant-mismatch"))?,
+        true,
+        ExpiryPolicy::ManualOnly,
+    )?;
+
+    assert!(matches!(
+        repo.upsert_relation(&relation, ts("2026-01-01T00:00:00Z")?)
+            .await,
+        Err(RepositoryError::TenantScopeMismatch)
+    ));
+    assert_eq!(repo.relation_by_id(relation.id).await?, None);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn relation_upsert_is_idempotent_by_natural_key() -> TestResult<()> {
     let root = repo().await?;
     let repo = root.for_tenant(test_tenant());
@@ -29,6 +51,39 @@ async fn relation_upsert_is_idempotent_by_natural_key() -> TestResult<()> {
     assert_eq!(inserted.id, updated.id);
     assert!(!updated.enabled);
     assert!(matches!(updated.expiry, ExpiryPolicy::At { .. }));
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
+async fn relation_upsert_rejects_same_id_with_a_different_key_without_mutation() -> TestResult<()> {
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
+    let first = RelationDefinition::enabled(
+        test_tenant(),
+        Uuid::now_v7(),
+        RelationKey::new("tag", unique_key("original"))?,
+        ExpiryPolicy::ManualOnly,
+    )?;
+    let stored = upsert_relation(&repo, &first).await?;
+    let incoming = RelationDefinition::enabled(
+        test_tenant(),
+        stored.id,
+        RelationKey::new("tag", unique_key("different"))?,
+        ExpiryPolicy::ManualOnly,
+    )?;
+
+    let result = upsert_relation(&repo, &incoming).await;
+
+    assert!(matches!(
+        result,
+        Err(TestError::Repository(RepositoryError::RelationIdentityConflict {
+            relation_id,
+            ..
+        })) if relation_id == stored.id
+    ));
+    assert_eq!(repo.relation_by_id(stored.id).await?, Some(stored));
+    assert_eq!(repo.relation_by_key(&incoming.key).await?, None);
     Ok(())
 }
 

@@ -1,13 +1,13 @@
 //! Expiry and fulfillment policy types.
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::{KeepsakeError, Result};
 use crate::model::FulfillmentSnapshot;
 
 /// Expiry policy for a keepsake.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ExpiryPolicy {
     /// Never expires automatically.
@@ -22,6 +22,29 @@ pub enum ExpiryPolicy {
         /// Fulfillment rule.
         policy: FulfillmentPolicy,
     },
+}
+
+impl<'de> Deserialize<'de> for ExpiryPolicy {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(tag = "type", rename_all = "snake_case")]
+        enum WireExpiryPolicy {
+            ManualOnly,
+            At { timestamp: DateTime<Utc> },
+            WhenFulfilled { policy: FulfillmentPolicy },
+        }
+
+        let policy = match WireExpiryPolicy::deserialize(deserializer)? {
+            WireExpiryPolicy::ManualOnly => Self::ManualOnly,
+            WireExpiryPolicy::At { timestamp } => Self::At { timestamp },
+            WireExpiryPolicy::WhenFulfilled { policy } => Self::WhenFulfilled { policy },
+        };
+        policy.validate().map_err(serde::de::Error::custom)?;
+        Ok(policy)
+    }
 }
 
 impl ExpiryPolicy {
@@ -44,7 +67,7 @@ impl ExpiryPolicy {
 }
 
 /// Fulfillment rule evaluated from a snapshot.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FulfillmentPolicy {
     /// True when a named counter reaches a threshold.
@@ -59,6 +82,31 @@ pub enum FulfillmentPolicy {
         /// Prefix for checklist entries.
         list_key: String,
     },
+}
+
+impl<'de> Deserialize<'de> for FulfillmentPolicy {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(tag = "type", rename_all = "snake_case")]
+        enum WireFulfillmentPolicy {
+            CounterAtLeast { key: String, threshold: i64 },
+            ChecklistComplete { list_key: String },
+        }
+
+        let policy = match WireFulfillmentPolicy::deserialize(deserializer)? {
+            WireFulfillmentPolicy::CounterAtLeast { key, threshold } => {
+                Self::CounterAtLeast { key, threshold }
+            }
+            WireFulfillmentPolicy::ChecklistComplete { list_key } => {
+                Self::ChecklistComplete { list_key }
+            }
+        };
+        policy.validate().map_err(serde::de::Error::custom)?;
+        Ok(policy)
+    }
 }
 
 impl FulfillmentPolicy {

@@ -2,6 +2,76 @@ use super::support::*;
 
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
+async fn nanosecond_timed_policy_round_trips_at_sql_precision() -> TestResult<()> {
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
+    let raw_expiry = ts("2026-02-01T00:00:00.123456789Z")?;
+    let canonical_expiry = ts("2026-02-01T00:00:00.123456Z")?;
+    let relation = RelationDefinition::enabled(
+        test_tenant(),
+        Uuid::now_v7(),
+        RelationKey::new("tag", unique_key("nanos"))?,
+        ExpiryPolicy::At {
+            timestamp: raw_expiry,
+        },
+    )?;
+    let relation = upsert_relation(&repo, &relation).await?;
+    let subject = SubjectRef::new("account", unique_key("nanos-subject"))?;
+    let applied = apply_at(&repo, &subject, relation.id, "2026-01-01T00:00:00Z").await?;
+
+    assert_eq!(
+        relation.expiry,
+        ExpiryPolicy::At {
+            timestamp: canonical_expiry
+        }
+    );
+    assert_eq!(applied.keepsake.expiry(), &relation.expiry);
+    assert_eq!(applied.keepsake.expires_at(), Some(canonical_expiry));
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
+async fn legacy_nanosecond_relation_policy_applies_at_sql_precision() -> TestResult<()> {
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
+    let pool = PgPool::connect(&std::env::var("DATABASE_URL")?).await?;
+    let relation = RelationDefinition::enabled(
+        test_tenant(),
+        Uuid::now_v7(),
+        RelationKey::new("tag", unique_key("legacy-nanos"))?,
+        ExpiryPolicy::ManualOnly,
+    )?;
+    let relation = upsert_relation(&repo, &relation).await?;
+    let legacy_policy = serde_json::json!({
+        "type": "at",
+        "timestamp": "2026-02-01T00:00:00.123456789Z"
+    });
+    sqlx::query(
+        "update keepsake_relation_definitions set expiry_policy = $1 where tenant_id = $2 and id = $3",
+    )
+    .bind(&legacy_policy)
+    .bind(test_tenant().as_str())
+    .bind(relation.id)
+    .execute(&pool)
+    .await?;
+
+    let subject = SubjectRef::new("account", unique_key("legacy-nanos-subject"))?;
+    let applied = apply_at(&repo, &subject, relation.id, "2026-01-01T00:00:00Z").await?;
+    let canonical_expiry = ts("2026-02-01T00:00:00.123456Z")?;
+    assert_eq!(applied.keepsake.expires_at(), Some(canonical_expiry));
+
+    assert_eq!(
+        applied.keepsake.expiry(),
+        &ExpiryPolicy::At {
+            timestamp: canonical_expiry
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn duplicate_active_apply_returns_existing_keepsake() -> TestResult<()> {
     let root = repo().await?;
     let repo = root.for_tenant(test_tenant());

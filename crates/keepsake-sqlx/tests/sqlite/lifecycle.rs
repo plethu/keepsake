@@ -6,6 +6,62 @@ use uuid::Uuid;
 async fn sqlite_apply_duplicate_and_active_read() -> TestResult<()> {
     backend_cases::apply_duplicate_and_active_read::<SqliteHarness>().await
 }
+
+#[tokio::test]
+async fn sqlite_nanosecond_timed_policy_round_trips_at_sql_precision() -> TestResult<()> {
+    backend_cases::nanosecond_timed_policy_round_trips_at_sql_precision::<SqliteHarness>().await
+}
+
+#[tokio::test]
+async fn sqlite_legacy_nanosecond_policy_rows_decode_at_sql_precision() -> TestResult<()> {
+    use keepsake::{ActorRef, ApplyKeepsake, CommandContext, SubjectRef};
+
+    let (repo, pool) = SqliteHarness::repo().await?;
+    let relation = upsert_relation::<SqliteHarness>(&repo, ExpiryPolicy::ManualOnly).await?;
+    let legacy_policy = serde_json::json!({
+        "type": "at",
+        "timestamp": "2026-02-01T00:00:00.123456789Z"
+    });
+    sqlx::query(
+        "update keepsake_relation_definitions set expiry_policy = ?1 where tenant_id = ?2 and id = ?3",
+    )
+    .bind(legacy_policy.to_string())
+    .bind(SqliteHarness::tenant().as_str())
+    .bind(relation.id.to_string())
+    .execute(&pool)
+    .await?;
+
+    let subject = SubjectRef::new("account", "sqlite-legacy-nanos")?;
+    let applied = repo
+        .apply(&ApplyKeepsake::new(
+            SqliteHarness::tenant(),
+            subject.clone(),
+            relation.id,
+            ts("2026-01-01T00:01:00Z")?,
+            CommandContext::new(ActorRef::new("test", "worker")?),
+        ))
+        .await?;
+    let canonical_expiry = ts("2026-02-01T00:00:00.123456Z")?;
+    assert_eq!(applied.keepsake.expires_at(), Some(canonical_expiry));
+
+    sqlx::query("update keepsakes set expiry_policy = ?1 where tenant_id = ?2 and id = ?3")
+        .bind(legacy_policy.to_string())
+        .bind(SqliteHarness::tenant().as_str())
+        .bind(applied.keepsake.id().to_string())
+        .execute(&pool)
+        .await?;
+
+    let active = repo.active_for_subject(&subject).await?;
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].expires_at(), Some(canonical_expiry));
+    assert_eq!(
+        active[0].expiry(),
+        &ExpiryPolicy::At {
+            timestamp: canonical_expiry
+        }
+    );
+    Ok(())
+}
 #[tokio::test]
 async fn sqlite_lifecycle_invariants_reject_invalid_rows() -> TestResult<()> {
     let (repo, pool) = SqliteHarness::repo().await?;

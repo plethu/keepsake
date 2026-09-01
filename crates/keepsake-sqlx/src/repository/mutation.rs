@@ -7,8 +7,8 @@ use uuid::Uuid;
 
 use super::PostgresBackend;
 use super::support::{
-    apply_event, dovecote_event, dovecote_tenant_id, replay_event, revoke_by_subject_event,
-    revoke_event,
+    apply_event, canonical_timestamp, dovecote_event, dovecote_tenant_id, expires_at, replay_event,
+    revoke_by_subject_event, revoke_event,
 };
 use super::{
     AppliedKeepsake, AppliedKeepsakeRow, AppliedKeepsakeWriteRow, RelationCache, RelationRow,
@@ -30,9 +30,14 @@ where
         }
         command.subject.validate()?;
         command.context.validate()?;
+        let mut command = command.clone();
+        command.at = canonical_timestamp(command.at);
+        let command = &command;
 
         let mut tx = self.pool.begin().await?;
         let relation = relation_for_share_tx(&mut tx, &self.tenant_id, command.relation_id).await?;
+        let expiry_policy = serde_json::to_value(&relation.expiry)?;
+        let expires_at = expires_at(&relation.expiry);
         let metadata = serde_json::to_value(&command.metadata)?;
 
         let applied = sqlx::query_as::<_, AppliedKeepsakeWriteRow>(
@@ -46,18 +51,14 @@ where
                 $4,
                 r.id,
                 'applied',
-                r.expiry_policy,
                 $5,
-                case
-                    when r.expiry_policy->>'type' = 'at'
-                    then (r.expiry_policy->>'timestamp')::timestamptz
-                    else null
-                end,
                 $6,
-                $5,
-                $5
+                $7,
+                $8,
+                $6,
+                $6
             from keepsake_relation_definitions r
-            where r.tenant_id = $1 and r.id = $7
+            where r.tenant_id = $1 and r.id = $9
             on conflict (tenant_id, subject_kind, subject_id, relation_id) where state = 'applied'
             do update set updated_at = keepsakes.updated_at
             returning tenant_id, id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
@@ -68,7 +69,9 @@ where
         .bind(command.id)
         .bind(command.subject.kind())
         .bind(command.subject.id())
+        .bind(expiry_policy)
         .bind(command.at)
+        .bind(expires_at)
         .bind(metadata)
         .bind(command.relation_id)
         .fetch_one(&mut *tx)
@@ -99,6 +102,9 @@ where
             return Err(RepositoryError::TenantScopeMismatch);
         }
         command.context.validate()?;
+        let mut command = command.clone();
+        command.at = canonical_timestamp(command.at);
+        let command = &command;
 
         let mut tx = self.pool.begin().await?;
         let revoked = revoke_tx(&mut tx, &self.tenant_id, command.keepsake_id, command.at).await?;
@@ -123,6 +129,9 @@ where
         }
         command.subject.validate()?;
         command.context.validate()?;
+        let mut command = command.clone();
+        command.at = canonical_timestamp(command.at);
+        let command = &command;
 
         let mut tx = self.pool.begin().await?;
         let revoked = revoke_by_subject_tx(

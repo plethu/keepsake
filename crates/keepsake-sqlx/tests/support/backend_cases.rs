@@ -166,6 +166,41 @@ where
     Ok(())
 }
 
+pub async fn nanosecond_timed_policy_round_trips_at_sql_precision<H>() -> TestResult<()>
+where
+    H: BackendHarness,
+{
+    let (repo, _pool) = H::repo().await?;
+    let raw_expiry = ts("2026-02-01T00:00:00.123456789Z")?;
+    let canonical_expiry = ts("2026-02-01T00:00:00.123456Z")?;
+    let relation = upsert_relation::<H>(
+        &repo,
+        ExpiryPolicy::At {
+            timestamp: raw_expiry,
+        },
+    )
+    .await?;
+    assert_eq!(
+        relation.expiry,
+        ExpiryPolicy::At {
+            timestamp: canonical_expiry
+        }
+    );
+
+    let command = ApplyKeepsake::new(
+        H::tenant(),
+        SubjectRef::new("account", format!("{}_nanos", H::BACKEND))?,
+        relation.id,
+        ts("2026-01-01T00:01:00.987654321Z")?,
+        context()?,
+    );
+    let applied = H::apply(&repo, &command).await?;
+
+    assert_eq!(applied.keepsake.expiry(), &relation.expiry);
+    assert_eq!(applied.keepsake.expires_at(), Some(canonical_expiry));
+    Ok(())
+}
+
 pub async fn bounded_relation_reads_filter_in_the_database<H>() -> TestResult<()>
 where
     H: BackendHarness,

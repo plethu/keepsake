@@ -10,6 +10,52 @@ async fn mysql_apply_duplicate_and_active_read() -> TestResult<()> {
 
 #[tokio::test]
 #[ignore = "requires docker mysql; run `mise run test-db`"]
+async fn mysql_nanosecond_timed_policy_round_trips_at_sql_precision() -> TestResult<()> {
+    backend_cases::nanosecond_timed_policy_round_trips_at_sql_precision::<MySqlHarness>().await
+}
+
+#[tokio::test]
+#[ignore = "requires docker mysql; run `mise run test-db`"]
+async fn mysql_legacy_nanosecond_relation_policy_applies_at_sql_precision() -> TestResult<()> {
+    let (repo, pool) = MySqlHarness::repo().await?;
+    let relation = upsert_relation::<MySqlHarness>(&repo, ExpiryPolicy::ManualOnly).await?;
+    let legacy_policy = serde_json::json!({
+        "type": "at",
+        "timestamp": "2026-02-01T00:00:00.123456789Z"
+    });
+    sqlx::query(
+        "update keepsake_relation_definitions set expiry_policy = ? where tenant_id = ? and id = ?",
+    )
+    .bind(&legacy_policy)
+    .bind(MySqlHarness::tenant().as_str().as_bytes())
+    .bind(relation.id.to_string())
+    .execute(&pool)
+    .await?;
+
+    let subject = SubjectRef::new("account", "mysql-legacy-nanos")?;
+    let applied = repo
+        .apply(&ApplyKeepsake::new(
+            MySqlHarness::tenant(),
+            subject.clone(),
+            relation.id,
+            ts("2026-01-01T00:01:00Z")?,
+            CommandContext::new(ActorRef::new("test", "worker")?),
+        ))
+        .await?;
+    let canonical_expiry = ts("2026-02-01T00:00:00.123456Z")?;
+    assert_eq!(applied.keepsake.expires_at(), Some(canonical_expiry));
+
+    assert_eq!(
+        applied.keepsake.expiry(),
+        &ExpiryPolicy::At {
+            timestamp: canonical_expiry
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires docker mysql; run `mise run test-db`"]
 async fn mysql_concurrent_duplicate_apply_creates_one_active_keepsake() -> TestResult<()> {
     let (repo, _pool) = MySqlHarness::repo().await?;
     let relation = upsert_relation::<MySqlHarness>(&repo, ExpiryPolicy::ManualOnly).await?;

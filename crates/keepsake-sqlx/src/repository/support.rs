@@ -5,17 +5,14 @@
 //! decoding; this module owns the parts of those flows that do not vary by
 //! dialect so they are written and tested once.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Timelike, Utc};
 use keepsake::{
     ActorRef, ApplyKeepsake, AuditContext, AuditDecision, AuditEvent, AuditEventId, AuditEventType,
-    CommandContext, ExpiryCause, Keepsake, KeepsakeId, LifecycleState, RelationId, RevokeBySubject,
-    RevokeKeepsake, SubjectRef,
+    CommandContext, ExpiryCause, ExpiryPolicy, Keepsake, KeepsakeId, LifecycleState,
+    RelationDefinition, RelationId, RevokeBySubject, RevokeKeepsake, SubjectRef,
 };
 #[cfg(any(feature = "mysql", feature = "sqlite"))]
 use uuid::Uuid;
-
-#[cfg(any(feature = "mysql", feature = "sqlite"))]
-use keepsake::ExpiryPolicy;
 
 use super::{RepositoryError, RepositoryResult};
 
@@ -268,9 +265,8 @@ pub(super) fn parse_uuid(value: &str) -> RepositoryResult<Uuid> {
 
 /// Projects the materialized `expires_at` column from an expiry policy.
 ///
-/// Postgres derives this inside SQL; the text-store backends compute it here so
-/// the projection rule lives in exactly one place.
-#[cfg(any(feature = "mysql", feature = "sqlite"))]
+/// All backends compute this from the canonical policy before persistence so
+/// database-specific timestamp rounding cannot split the two representations.
 pub(super) const fn expires_at(expiry: &ExpiryPolicy) -> Option<DateTime<Utc>> {
     match expiry {
         ExpiryPolicy::At { timestamp } => Some(*timestamp),
@@ -314,6 +310,30 @@ pub(super) fn dovecote_event(
     .map_err(RepositoryError::DovecoteValidation)
 }
 
+/// Canonicalises occurrence timestamps to the precision shared by
+/// `PostgreSQL`, `MySQL`, `SQLite`, and Dovecote's durable event contract.
+pub(super) fn canonical_timestamp(value: DateTime<Utc>) -> DateTime<Utc> {
+    let micros = value.timestamp_subsec_micros();
+    value.with_nanosecond(micros * 1_000).unwrap_or(value)
+}
+
+pub(super) fn canonical_expiry_policy(policy: ExpiryPolicy) -> ExpiryPolicy {
+    match policy {
+        ExpiryPolicy::At { timestamp } => ExpiryPolicy::At {
+            timestamp: canonical_timestamp(timestamp),
+        },
+        policy => policy,
+    }
+}
+
+/// Canonicalises timestamps embedded in a relation before storing its policy
+/// beside microsecond-precision SQL timestamp columns.
+pub(super) fn canonical_relation(relation: &RelationDefinition) -> RelationDefinition {
+    let mut relation = relation.clone();
+    relation.expiry = canonical_expiry_policy(relation.expiry);
+    relation
+}
+
 /// Converts Keepsake's domain-owned tenant value at the Dovecote adapter
 /// boundary. The two crates intentionally do not share a public identity type.
 pub(super) fn dovecote_tenant_id(
@@ -347,7 +367,7 @@ pub(super) fn apply_event(
         } else {
             AuditEventType::Apply
         },
-        at: command.at,
+        at: canonical_timestamp(command.at),
         actor: command.context.actor.clone(),
         keepsake_id: keepsake.id(),
         subject: keepsake.subject().clone(),
@@ -400,7 +420,7 @@ fn revoke_audit_event(
         tenant_id: keepsake.tenant_id().clone(),
         id,
         event_type: AuditEventType::Revoke,
-        at,
+        at: canonical_timestamp(at),
         actor: context.actor.clone(),
         keepsake_id: keepsake.id(),
         subject: keepsake.subject().clone(),
@@ -433,6 +453,7 @@ pub(super) fn expiry_event(
     subject_kind: impl Into<String>,
     subject_id: impl Into<String>,
 ) -> RepositoryResult<AuditEvent> {
+    let at = canonical_timestamp(at);
     Ok(AuditEvent {
         tenant_id,
         id: AuditEventId::deterministic(
