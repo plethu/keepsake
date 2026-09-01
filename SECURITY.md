@@ -23,7 +23,7 @@ provider.
 Tenant identifiers in the core contract are explicit, validated values. The
 matching SQLx and Dovecote releases must also bind the tenant in every query,
 event, delivery, and migration operation. A core-only update is not a
-multi-tenant deployment recipe; do not deploy the current 2.x SQLx schema as
+multi-tenant deployment recipe; do not deploy an older 2.x SQLx schema as
 tenant-isolated storage without the coordinated tenant-aware migration track.
 
 RLS or connection-session tenant settings can provide useful defense in depth,

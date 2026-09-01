@@ -5,7 +5,7 @@ Keepsake stores relations that have lifecycle rules. A relation can be simple:
 `account:acct_123` has the `sanction:mute_24h` relation until 24 hours after it
 was applied.
 
-Several services may need the same data:
+The same relation data often has to answer several questions:
 
 - is this subject active in this relation right now?
 - can a retry safely run the same apply command again?
@@ -13,12 +13,12 @@ Several services may need the same data:
 - which subjects currently have this relation?
 - where should audit history live?
 
-Keepsake models these operations as one relation lifecycle. The core crate
-provides the types, commands, expiry policies, evaluator, audit traits, and
-errors. The SQLx adapter stores relation state in Postgres, SQLite, or MySQL
-and provides query helpers for request paths and workers. In 2.0, Dovecote
-stores immutable audit events and delivery state; Keepsake does not maintain a
-second SQL audit shape.
+Keepsake treats these operations as one relation lifecycle. The core crate owns
+the types, commands, expiry policies, evaluator, audit traits, and errors. The
+SQLx adapter stores relation state in Postgres, SQLite, or MySQL and supplies
+query helpers for request paths and workers.
+[Dovecote](https://github.com/plethu/dovecote) stores the immutable audit events
+and delivery state; Keepsake has no second SQL audit shape.
 
 ## Core Model
 
@@ -49,6 +49,6 @@ workflows.
 Use application tables for display data, permissions, tenant scope, and product
 context. Keepsake stores relation lifecycle state for opaque subjects.
 
-Use the Rust crates directly when Rust and Postgres fit your service. Use the
-docs as implementation guidance when another language, database, migration
-framework, cache layer, or audit pipeline needs the same contracts.
+Use the Rust crates directly with Postgres, SQLite, or MySQL. The documented
+lifecycle and storage contracts can also guide ports to another language or
+database without pretending that the Rust adapter itself is portable.

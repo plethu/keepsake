@@ -10,9 +10,9 @@ caller retries the same logical operation. `AuditContext` carries application
 values such as an operator id, ticket id, reason code, tenant id, or request
 id. The core crate does not choose a product vocabulary or tracing stack.
 
-The 2.0 SQLx adapter serializes the complete event to exact JSON bytes and
-enqueues one CloudEvents-compatible Dovecote event in the same SQL transaction
-as the Keepsake mutation. Its defaults are:
+The SQLx adapter serializes the complete event to exact JSON bytes and enqueues
+one CloudEvents-compatible [Dovecote](https://github.com/plethu/dovecote) event
+in the same transaction as the Keepsake mutation. Its defaults are:
 
 - stream: `keepsake-audit`;
 - type: `keepsake.audit_event_recorded`;
@@ -26,9 +26,8 @@ CloudEvents `(source, id)` pair.
 
 ## Reading history and publishing
 
-Keepsake does not maintain SQL audit tables, normalized context rows, a second
-outbox, or project-specific claim/ack/release methods. Those 1.x APIs are not
-part of the 2.0 SQLx surface.
+Keepsake leaves SQL history, delivery state, and claim operations to Dovecote.
+It has no second audit table or outbox.
 
 Use the selected Dovecote SQLx adapter for live paging or a finite snapshot.
 Pass each stored event through Keepsake's decoder so a page cannot silently

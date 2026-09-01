@@ -93,8 +93,7 @@ timed_repo.expire_due_timed(500).await?;
 ## Audit history and delivery
 
 Keepsake 3.0 does not expose `append_audit_event`, Keepsake audit repositories,
-outbox cursors, or claim/ack/release methods. Those APIs belonged to the 1.x
-schema and are deliberately absent from the maintained 2.0 SQLx surface.
+outbox cursors, or claim/ack/release methods. Those APIs belonged to 1.x.
 
 For typed history, page Dovecote's live or snapshot stream with the selected
 backend adapter and pass each stored event to

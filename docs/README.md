@@ -4,7 +4,7 @@ Keepsake stores relation lifecycles for Rust applications: tags, sanctions,
 entitlements, holds, risk flags, feature gates, and other cases where a subject
 has a relation until policy changes.
 
-It gives you deterministic writes, expiry, reads, worker scans, and typed audit
+It handles deterministic writes, expiry, reads, worker scans, and typed audit
 records. Users, accounts, authorization, tenancy, display data, and
 product-specific joins stay in your application.
 

@@ -1,7 +1,7 @@
 # Threat model
 
-This document describes the security assumptions and failure boundaries for
-Keepsake. It is an engineering aid, not a security audit or compliance claim.
+This threat model records Keepsake's security assumptions and failure
+boundaries. It is not a security audit or compliance claim.
 
 ## Assets
 

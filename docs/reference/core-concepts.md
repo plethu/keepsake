@@ -20,7 +20,7 @@ methods, audit events, and database rows.
 | `ExpiryPolicy` | Manual, timed, or fulfillment-based lifecycle policy. |
 | `FulfillmentSnapshot` | App-owned progress state evaluated by Keepsake. |
 | `AuditEventId` | Stable project-owned identity generated before persistence and reused on retries. |
-| `AuditEventType` and `AuditDecision` | Stable audit category and decision payload for a Dovecote event. |
+| `AuditEventType` and `AuditDecision` | Stable audit category and decision payload for a [Dovecote](https://github.com/plethu/dovecote) event. |
 | `AuditContext` | Deterministic application attributes carried in the typed Dovecote payload. |
 | `ActiveRelationSource` | Async read-side contract for active relation state. |
 

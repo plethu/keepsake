@@ -4,7 +4,8 @@ This example defines a manual `tag:trusted` relation, applies it to an account,
 then reads the active relations for that account.
 
 Start with a migrated repository. `pool` is a `sqlx::PgPool` connected to the
-Postgres database where Keepsake and Dovecote store lifecycle and audit rows.
+Postgres database where Keepsake and
+[Dovecote](https://github.com/plethu/dovecote) store lifecycle and audit rows.
 
 ```rust
 use keepsake_sqlx::KeepsakeRepository;

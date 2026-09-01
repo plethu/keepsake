@@ -15,7 +15,7 @@ dovecote-sqlx-postgres = "0.2"
 sqlx = { version = "0.9", features = ["postgres", "runtime-tokio", "tls-rustls"] }
 ```
 
-The normal setup is deliberately small:
+A clean Postgres setup is short:
 
 ```rust
 use keepsake_sqlx::KeepsakeRepository;
