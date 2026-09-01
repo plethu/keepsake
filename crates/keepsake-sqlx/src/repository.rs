@@ -1,7 +1,7 @@
 //! `SQLx` repository implementation.
 
-use chrono::{DateTime, Utc};
 use sqlx::Pool;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 #[cfg(feature = "migrations")]
@@ -70,17 +70,31 @@ static POSTGRES_MIGRATOR: Migrator = sqlx::migrate!("./migrations/postgres");
 #[cfg(all(feature = "migrations", feature = "postgres"))]
 static POSTGRES_V3_MIGRATOR: Migrator = sqlx::migrate!("./migrations/v3/postgres");
 
+#[cfg(all(feature = "migrations", feature = "postgres"))]
+static POSTGRES_V4_MIGRATOR: Migrator = sqlx::migrate!("./migrations/v4/postgres");
+
 #[cfg(all(feature = "migrations", feature = "sqlite"))]
 static SQLITE_MIGRATOR: Migrator = sqlx::migrate!("./migrations/sqlite");
 
 #[cfg(all(feature = "migrations", feature = "sqlite"))]
 static SQLITE_V3_MIGRATOR: Migrator = sqlx::migrate!("./migrations/v3/sqlite");
 
+#[cfg(all(feature = "migrations", feature = "sqlite"))]
+static SQLITE_V4_MIGRATOR: Migrator = sqlx::migrate!("./migrations/v4/sqlite");
+
 #[cfg(all(feature = "migrations", feature = "mysql"))]
 static MYSQL_MIGRATOR: Migrator = sqlx::migrate!("./migrations/mysql");
 
 #[cfg(all(feature = "migrations", feature = "mysql"))]
 static MYSQL_V3_MIGRATOR: Migrator = sqlx::migrate!("./migrations/v3/mysql");
+
+#[cfg(all(feature = "migrations", feature = "mysql"))]
+static MYSQL_V4_MIGRATOR: Migrator = sqlx::migrate!("./migrations/v4/mysql");
+
+#[cfg(feature = "migrations")]
+fn keepsake_v4_migrator(v3: &Migrator, v4: &Migrator) -> Migrator {
+    Migrator::with_migrations(v3.iter().chain(v4.iter()).cloned().collect())
+}
 
 #[allow(dead_code)]
 const MAX_BATCH_LIMIT: i64 = 10_000;
@@ -140,6 +154,10 @@ pub enum RepositoryError {
     /// JSON policy could not be encoded or decoded.
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+
+    /// A stored audit payload could not be reused as a current event.
+    #[error("stored audit payload cannot be replayed as a current event: {0}")]
+    AuditPayload(#[from] AuditEventDecodeError),
 
     /// A Keepsake core model could not be built.
     #[error(transparent)]
@@ -478,7 +496,7 @@ where
     #[must_use]
     pub const fn at(
         &self,
-        at: DateTime<Utc>,
+        at: OffsetDateTime,
     ) -> TimedTenantSqlxKeepsakeRepository<'_, 'repo, B, C> {
         TimedTenantSqlxKeepsakeRepository {
             repository: self,
@@ -492,7 +510,7 @@ impl<C> PostgresKeepsakeRepository<C>
 where
     C: RelationCache,
 {
-    /// Verifies the Keepsake 3.0 domain schema and the selected Dovecote schema.
+    /// Verifies the Keepsake 4.0 domain schema and the selected Dovecote schema.
     pub async fn check_schema(&self) -> RepositoryResult<()> {
         schema::postgres_runtime_schema_check(&self.pool).await?;
         dovecote_sqlx_postgres::check_schema(&self.pool)
@@ -504,7 +522,9 @@ where
     #[cfg(feature = "migrations")]
     pub async fn migrate(&self) -> RepositoryResult<()> {
         schema::postgres_clean_schema_preflight(&self.pool).await?;
-        POSTGRES_V3_MIGRATOR.run(&self.pool).await?;
+        keepsake_v4_migrator(&POSTGRES_V3_MIGRATOR, &POSTGRES_V4_MIGRATOR)
+            .run(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -533,7 +553,7 @@ where
     }
 
     /// Runs the explicit 1.x upgrade track, preserving legacy audit tables as
-    /// read-only migration material. New 3.0 operations never use this track.
+    /// read-only migration material. New 4.0 operations never use this track.
     #[cfg(feature = "migrations")]
     pub async fn upgrade_migrate(&self) -> RepositoryResult<()> {
         schema::postgres_upgrade_schema_preflight(&self.pool).await?;
@@ -566,7 +586,7 @@ impl<C> SqliteKeepsakeRepository<C>
 where
     C: RelationCache,
 {
-    /// Verifies the Keepsake 3.0 domain schema and the selected Dovecote schema.
+    /// Verifies the Keepsake 4.0 domain schema and the selected Dovecote schema.
     pub async fn check_schema(&self) -> RepositoryResult<()> {
         schema::sqlite_runtime_schema_check(&self.pool).await?;
         dovecote_sqlx_sqlite::check_schema(&self.pool)
@@ -578,7 +598,9 @@ where
     #[cfg(feature = "migrations")]
     pub async fn migrate(&self) -> RepositoryResult<()> {
         schema::sqlite_clean_schema_preflight(&self.pool).await?;
-        SQLITE_V3_MIGRATOR.run(&self.pool).await?;
+        keepsake_v4_migrator(&SQLITE_V3_MIGRATOR, &SQLITE_V4_MIGRATOR)
+            .run(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -659,7 +681,7 @@ impl<C> MySqlKeepsakeRepository<C>
 where
     C: RelationCache,
 {
-    /// Verifies the Keepsake 3.0 domain schema and the selected Dovecote schema.
+    /// Verifies the Keepsake 4.0 domain schema and the selected Dovecote schema.
     pub async fn check_schema(&self) -> RepositoryResult<()> {
         schema::mysql_runtime_schema_check(&self.pool).await?;
         dovecote_sqlx_mysql::check_schema(&self.pool)
@@ -671,7 +693,9 @@ where
     #[cfg(feature = "migrations")]
     pub async fn migrate(&self) -> RepositoryResult<()> {
         schema::mysql_clean_schema_preflight(&self.pool).await?;
-        MYSQL_V3_MIGRATOR.run(&self.pool).await?;
+        keepsake_v4_migrator(&MYSQL_V3_MIGRATOR, &MYSQL_V4_MIGRATOR)
+            .run(&self.pool)
+            .await?;
         Ok(())
     }
 

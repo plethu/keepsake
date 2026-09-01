@@ -1,14 +1,17 @@
 # Versioning
 
-Keepsake uses crate versions for API and schema expectations. 2.0 is a breaking
-boundary: the SQLx adapter no longer owns a Keepsake audit/outbox schema and
-uses Dovecote for all SQL audit persistence and delivery.
+Keepsake uses crate versions for API and schema expectations. 4.0 is the
+current breaking boundary: public timestamps use `time::OffsetDateTime`,
+persisted textual identifiers have an explicit portable contract, and the
+SQLx adapter requires the additive v4 schema track alongside Dovecote.
 
 ## Semver
 
 - **Major**: breaking changes to public API types, command semantics, storage
-  record layout, or migration ordering. Keepsake 2.0 removes the maintained
-  SQL audit repositories, audit history cursors, outbox paging, and
+  record layout, or migration ordering. Keepsake 4.0 replaces public
+  `chrono::DateTime<Utc>` with `time::OffsetDateTime` and adds the v4
+  identifier/schema contract. The historical Keepsake 2.0 release removed the
+  maintained SQL audit repositories, audit history cursors, outbox paging, and
   claim/ack/release methods.
 - **Minor**: additive API, new query helpers, new migrations that existing code
   can ignore until adopted.
@@ -22,9 +25,13 @@ the new audit contract.
 
 - Read the changelog for API changes, new migration files, changed indexes, and
   required ordering.
-- For new databases, apply the clean 2.0 domain baseline and Dovecote schema.
+- For new databases, apply the clean 4.0 domain baseline, v4 contract, and
+  Dovecote schema.
+- For existing v3 databases, run `repo.migrate()` to apply the additive v4
+  track. Resolve the migration's incompatible-row preflight before deploying
+  4.0 writers; do not edit historical v3 SQL.
 - For 1.x databases, select `upgrade_migrate()` explicitly and complete the
-  documented history import before deploying 2.0 writers.
+  documented history import before deploying the historical 2.0 writers.
 - Never edit or reorder published historical migrations.
 - Test request paths and workers that use changed query helpers.
 

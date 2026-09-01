@@ -37,11 +37,15 @@ async fn catalog_check_rejects_changed_column_index_and_constraint() -> TestResu
         .await?;
     assert_eq!(clean_state_checks, 1);
 
-    sqlx::query("alter table keepsakes modify subject_id varchar(190) not null")
+    sqlx::query(
+        "alter table keepsakes modify subject_id varchar(190) character set utf8mb4 collate utf8mb4_bin not null",
+    )
         .execute(&pool)
         .await?;
     assert!(repo.check_schema().await.is_err());
-    sqlx::query("alter table keepsakes modify subject_id varchar(191) not null")
+    sqlx::query(
+        "alter table keepsakes modify subject_id varchar(191) character set utf8mb4 collate utf8mb4_bin not null",
+    )
         .execute(&pool)
         .await?;
     repo.check_schema().await?;
@@ -146,6 +150,16 @@ async fn catalog_check_rejects_changed_column_index_and_constraint() -> TestResu
     } else {
         "alter table keepsake_fulfillment_counters drop check keepsake_fulfillment_counter_tenant_nonempty"
     };
+    let drop_identifier_check = if version.to_ascii_lowercase().contains("mariadb") {
+        "alter table keepsakes drop constraint keepsakes_identifier_contract"
+    } else {
+        "alter table keepsakes drop check keepsakes_identifier_contract"
+    };
+    let drop_counter_identifier_check = if version.to_ascii_lowercase().contains("mariadb") {
+        "alter table keepsake_fulfillment_counters drop constraint keepsake_fulfillment_counter_identifier_contract"
+    } else {
+        "alter table keepsake_fulfillment_counters drop check keepsake_fulfillment_counter_identifier_contract"
+    };
     sqlx::query(drop_tenant_check).execute(&pool).await?;
     sqlx::query(drop_tenant_nonempty_check)
         .execute(&pool)
@@ -154,6 +168,10 @@ async fn catalog_check_rejects_changed_column_index_and_constraint() -> TestResu
         .execute(&pool)
         .await?;
     sqlx::query(drop_counter_tenant_nonempty_check)
+        .execute(&pool)
+        .await?;
+    sqlx::query(drop_identifier_check).execute(&pool).await?;
+    sqlx::query(drop_counter_identifier_check)
         .execute(&pool)
         .await?;
     sqlx::query(
@@ -168,7 +186,7 @@ async fn catalog_check_rejects_changed_column_index_and_constraint() -> TestResu
     .await?;
     // The action-bearing FK cannot coexist with MySQL's CHECK constraints on
     // the affected columns, so the rejected state intentionally also lacks
-    // these two pairs of checks. The verifier must still reject it before the
+    // the affected tenant and identifier checks. The verifier must still reject it before the
     // fixture is restored below.
     let error = repo.check_schema().await;
     assert!(
@@ -197,8 +215,10 @@ async fn catalog_check_rejects_changed_column_index_and_constraint() -> TestResu
     for query in [
         "alter table keepsakes add constraint keepsakes_tenant_size check (octet_length(tenant_id) <= 255)",
         "alter table keepsakes add constraint keepsakes_tenant_nonempty check (octet_length(tenant_id) > 0)",
+        "alter table keepsakes add constraint keepsakes_identifier_contract check (octet_length(tenant_id) > 0 and octet_length(tenant_id) <= 191 and tenant_id = trim(tenant_id) and octet_length(subject_kind) > 0 and octet_length(subject_kind) <= 191 and subject_kind = trim(subject_kind) and octet_length(subject_id) > 0 and octet_length(subject_id) <= 191 and subject_id = trim(subject_id))",
         "alter table keepsake_fulfillment_counters add constraint keepsake_fulfillment_counter_tenant_size check (octet_length(tenant_id) <= 255)",
         "alter table keepsake_fulfillment_counters add constraint keepsake_fulfillment_counter_tenant_nonempty check (octet_length(tenant_id) > 0)",
+        "alter table keepsake_fulfillment_counters add constraint keepsake_fulfillment_counter_identifier_contract check (octet_length(tenant_id) > 0 and octet_length(tenant_id) <= 191 and tenant_id = trim(tenant_id) and octet_length(`key`) > 0 and octet_length(`key`) <= 191 and `key` = trim(`key`))",
     ] {
         sqlx::query(query).execute(&pool).await?;
     }
@@ -267,6 +287,6 @@ async fn upgrade_track_activates_after_importer_evidence() -> TestResult<()> {
         .await?;
     seed_importer_evidence(&pool, "https://tests.invalid/keepsake/mysql-upgrade").await?;
     repo.activate_upgrade().await?;
-    repo.check_schema().await?;
+    assert!(repo.check_schema().await.is_err());
     Ok(())
 }

@@ -24,6 +24,7 @@ so normal call sites do not repeat strings.
 
 ```rust
 use keepsake::{ActorRef, ApplyKeepsake, CommandContext, ExpiryPolicy, SubjectRef};
+use time::OffsetDateTime;
 
 keepsake::relation_spec! {
     struct TrustedTag {
@@ -37,7 +38,7 @@ keepsake::relation_spec! {
 Apply the relation using one explicit timestamp for the operation:
 
 ```rust
-let now = chrono::Utc::now();
+let now = OffsetDateTime::now_utc();
 let timed_repo = repo.at(now);
 
 timed_repo.upsert_relation_spec::<TrustedTag>().await?;

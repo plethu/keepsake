@@ -24,6 +24,17 @@ methods, audit events, and database rows.
 | `AuditContext` | Deterministic application attributes carried in the typed Dovecote payload. |
 | `ActiveRelationSource` | Async read-side contract for active relation state. |
 
+## Persisted textual identifiers
+
+Keepsake 4.0 applies one portable contract to tenant ids, relation kind/name
+components, subject and actor components, and built-in fulfillment keys. Each
+value is non-empty, has no leading or trailing Unicode whitespace, and is at
+most 191 UTF-8 bytes. The supplied bytes are retained exactly: Keepsake does
+not trim, case-fold, or Unicode-normalize identifiers. Equality and uniqueness
+are therefore case-sensitive and distinguish composed from decomposed Unicode
+sequences. Constructors and serde boundaries reject values outside this
+contract before a write is attempted.
+
 For a trusted tag, the subject might be `account:acct_123`, the relation key
 might be `tag:trusted`, and the keepsake is the active row connecting them. The
 application decides what "trusted" means. Keepsake stores whether that subject

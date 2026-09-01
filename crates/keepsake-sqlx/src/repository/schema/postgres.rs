@@ -3,7 +3,10 @@
 #[cfg(all(feature = "mysql", not(feature = "postgres")))]
 use super::normalize_check_expression;
 #[cfg(all(feature = "postgres", feature = "migrations"))]
-use super::{PG_CLEAN_ARTIFACT, PG_UPGRADE_ARTIFACT, artifact_check_expression};
+use super::{
+    IDENTIFIER_SCAN_BATCH_SIZE, PERSISTED_IDENTIFIERS, PG_CLEAN_ARTIFACT, PG_UPGRADE_ARTIFACT,
+    artifact_check_expression, validate_persisted_identifier_bytes,
+};
 #[cfg(feature = "postgres")]
 use super::{
     RepositoryError, RepositoryResult, compact_sql, default_sql, mismatch,
@@ -1059,25 +1062,43 @@ pub(in crate::repository) async fn postgres_runtime_schema_check(
     .await?
     .flatten();
     match track.as_deref() {
-        Some("3") => postgres_v3_runtime_schema_check(pool).await,
+        Some("4") => postgres_v4_runtime_schema_check(pool).await,
+        Some("3") => Err(RepositoryError::BackendMismatch {
+            expected: "4.0 active schema",
+            actual: "schema is still on the 3.0 API track; run migrate to activate the 4.0 schema"
+                .to_owned(),
+        }),
         Some("2") => Err(RepositoryError::BackendMismatch {
-            expected: "3.0 active schema",
+            expected: "4.0 active schema",
             actual: "schema is still on the 2.0 API track; run the explicit tenant upgrade route"
                 .to_owned(),
         }),
         Some(actual) => Err(RepositoryError::BackendMismatch {
-            expected: "3.0 active schema",
+            expected: "4.0 active schema",
             actual: format!("unsupported Keepsake API track {actual}"),
         }),
         None => Err(RepositoryError::BackendMismatch {
-            expected: "3.0 active schema",
-            actual: "schema is not activated for the 3.0 API".to_owned(),
+            expected: "4.0 active schema",
+            actual: "schema is not activated for the 4.0 API".to_owned(),
         }),
     }
 }
 
-#[cfg(feature = "postgres")]
+#[cfg(all(feature = "postgres", feature = "migrations"))]
 async fn postgres_v3_runtime_schema_check(pool: &sqlx::PgPool) -> RepositoryResult<()> {
+    postgres_runtime_schema_check_for_track(pool, false).await
+}
+
+#[cfg(feature = "postgres")]
+async fn postgres_v4_runtime_schema_check(pool: &sqlx::PgPool) -> RepositoryResult<()> {
+    postgres_runtime_schema_check_for_track(pool, true).await
+}
+
+#[cfg(feature = "postgres")]
+async fn postgres_runtime_schema_check_for_track(
+    pool: &sqlx::PgPool,
+    identifier_contract: bool,
+) -> RepositoryResult<()> {
     let expected_tables = [
         "keepsake_relation_definitions",
         "keepsakes",
@@ -1110,6 +1131,9 @@ async fn postgres_v3_runtime_schema_check(pool: &sqlx::PgPool) -> RepositoryResu
     }
 
     postgres_v3_columns_check(pool).await?;
+    if identifier_contract {
+        postgres_v4_identifier_columns_check(pool).await?;
+    }
 
     let indexes = sqlx::query_scalar::<_, i64>(
         "select count(*) from pg_indexes where schemaname = 'public' and indexname = any($1)",
@@ -1131,8 +1155,95 @@ async fn postgres_v3_runtime_schema_check(pool: &sqlx::PgPool) -> RepositoryResu
             actual: "one or more tenant-aware indexes are missing".to_owned(),
         });
     }
-    postgres_v3_constraints_check(pool).await?;
+    postgres_v3_constraints_check(pool, identifier_contract).await?;
     postgres_v3_indexes_check(pool).await?;
+    Ok(())
+}
+
+#[cfg(feature = "postgres")]
+async fn postgres_v4_identifier_columns_check(pool: &sqlx::PgPool) -> RepositoryResult<()> {
+    let expected = [
+        ("keepsake_relation_definitions", "tenant_id"),
+        ("keepsake_relation_definitions", "kind"),
+        ("keepsake_relation_definitions", "key"),
+        ("keepsakes", "tenant_id"),
+        ("keepsakes", "subject_kind"),
+        ("keepsakes", "subject_id"),
+        ("keepsake_fulfillment_counters", "tenant_id"),
+        ("keepsake_fulfillment_counters", "key"),
+        ("keepsake_fulfillment_checklist", "tenant_id"),
+        ("keepsake_fulfillment_checklist", "item"),
+    ];
+    for (table, column) in expected {
+        let collation = sqlx::query_scalar::<_, Option<String>>(
+            "select collation_name from information_schema.columns where table_schema = 'public' and table_name = $1 and column_name = $2",
+        )
+        .bind(table)
+        .bind(column)
+        .fetch_optional(pool)
+        .await?
+        .flatten();
+        if collation.as_deref() != Some("C") {
+            return Err(mismatch(format!(
+                "column {table}.{column} lacks v4 C collation"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(all(feature = "postgres", feature = "migrations"))]
+async fn postgres_v4_identifier_preflight(pool: &sqlx::PgPool) -> RepositoryResult<()> {
+    // PostgreSQL text values are already validated as UTF-8 by the server.
+    // Read every v3 value through the same Rust validator used by new writes so
+    // Unicode edge whitespace, controls, and noncharacters cannot survive the
+    // v4 constraint activation. The v3 catalog shape check runs first and
+    // rejects a changed column type before this scan.
+    for identifier in PERSISTED_IDENTIFIERS {
+        postgres_scan_identifier(pool, *identifier).await?;
+    }
+    Ok(())
+}
+
+#[cfg(all(feature = "postgres", feature = "migrations"))]
+async fn postgres_scan_identifier(
+    pool: &sqlx::PgPool,
+    identifier: super::PersistedIdentifier,
+) -> RepositoryResult<()> {
+    use sqlx::Row;
+
+    let query = format!(
+        "select ctid::text as __keepsake_row, \"{}\" from \"{}\" order by ctid limit {IDENTIFIER_SCAN_BATCH_SIZE} offset $1",
+        identifier.column, identifier.table
+    );
+    let mut offset: i64 = 0;
+
+    loop {
+        let rows = sqlx::query(sqlx::AssertSqlSafe(query.clone()))
+            .bind(offset)
+            .fetch_all(pool)
+            .await?;
+        if rows.is_empty() {
+            break;
+        }
+
+        for row in rows {
+            let row_locator: String = row.try_get("__keepsake_row")?;
+            let value: Option<String> = row.try_get(identifier.column)?;
+            let Some(value) = value else {
+                return Err(super::persisted_identifier_type_mismatch(
+                    identifier,
+                    row_locator,
+                    "NULL",
+                ));
+            };
+            validate_persisted_identifier_bytes(identifier, row_locator, value.as_bytes())?;
+        }
+        offset = offset
+            .checked_add(IDENTIFIER_SCAN_BATCH_SIZE)
+            .ok_or_else(|| mismatch("identifier preflight row offset overflow"))?;
+    }
+
     Ok(())
 }
 
@@ -1232,7 +1343,10 @@ async fn postgres_v3_columns_check(pool: &sqlx::PgPool) -> RepositoryResult<()> 
 
 #[cfg(feature = "postgres")]
 #[allow(clippy::too_many_lines)]
-async fn postgres_v3_constraints_check(pool: &sqlx::PgPool) -> RepositoryResult<()> {
+async fn postgres_v3_constraints_check(
+    pool: &sqlx::PgPool,
+    identifier_contract: bool,
+) -> RepositoryResult<()> {
     use sqlx::Row;
 
     // Compare catalog definitions rather than only constraint names. Names
@@ -1251,7 +1365,9 @@ async fn postgres_v3_constraints_check(pool: &sqlx::PgPool) -> RepositoryResult<
     ])
     .fetch_all(pool)
     .await?;
-    if rows.len() != 20 {
+    let expected_constraint_count = if identifier_contract { 24 } else { 20 };
+
+    if rows.len() != expected_constraint_count {
         return Err(RepositoryError::BackendMismatch {
             expected: "complete Keepsake 3.0 PostgreSQL constraints",
             actual: "primary, foreign, unique, or check constraint count differs".to_owned(),
@@ -1304,9 +1420,8 @@ async fn postgres_v3_constraints_check(pool: &sqlx::PgPool) -> RepositoryResult<
         let name: String = row.try_get("conname")?;
         let definition: String = row.try_get("definition")?;
         let normalized = normalize_sql(&definition).replace("public.", "");
-        let matches = if kind == "c" {
-            let check = normalize_check_expression(&definition);
-            match name.as_str() {
+        let matches = match kind.as_str() {
+            "c" => match name.as_str() {
                 "keepsake_relation_definitions_tenant_size"
                 | "keepsake_relation_definitions_tenant_nonempty"
                 | "keepsakes_tenant_size"
@@ -1319,20 +1434,38 @@ async fn postgres_v3_constraints_check(pool: &sqlx::PgPool) -> RepositoryResult<
                     | "keepsakes_tenant_nonempty"
                     | "keepsake_fulfillment_counter_tenant_nonempty"
                     | "keepsake_fulfillment_checklist_tenant_nonempty" => {
-                        check.contains("octet_length(tenant_id)>0")
+                        normalize_check_expression(&definition)
+                            .contains("octet_length(tenant_id)>0")
                     }
-                    _ => check.contains("octet_length(tenant_id)<=255"),
+
+                    _ => normalize_check_expression(&definition)
+                        .contains("octet_length(tenant_id)<=255"),
                 },
-                "keepsakes_state_check" => {
-                    check.contains("state=any(array['applied','revoked','expired'])")
+
+                "keepsake_relation_definitions_identifier_contract"
+                | "keepsakes_identifier_contract"
+                | "keepsake_fulfillment_counter_identifier_contract"
+                | "keepsake_fulfillment_checklist_identifier_contract" => {
+                    let check = normalize_check_expression(&definition);
+                    identifier_contract
+                        && check.contains("octet_length")
+                        && check.contains("<=191")
+                        && check.contains("btrim")
                 }
+
+                "keepsakes_state_check" => normalize_check_expression(&definition)
+                    .contains("state=any(array['applied','revoked','expired'])"),
+
                 "keepsakes_expiry_policy_projection" => {
+                    let check = normalize_check_expression(&definition);
                     check.contains(
                         "(expiry_policy->>'type')=any(array['manual_only','at','when_fulfilled'])",
                     ) && check.contains("expires_atisnotnull")
                         && check.contains("expires_atisnull")
                 }
+
                 "keepsakes_lifecycle_timestamps" => {
+                    let check = normalize_check_expression(&definition);
                     check.contains("state='applied'andrevoked_atisnullandfulfilled_atisnull")
                         && check
                             .contains("state='revoked'andrevoked_atisnotnullandfulfilled_atisnull")
@@ -1340,24 +1473,29 @@ async fn postgres_v3_constraints_check(pool: &sqlx::PgPool) -> RepositoryResult<
                         && check.contains("(expiry_policy->>'type')='at'")
                         && check.contains("(expiry_policy->>'type')='when_fulfilled'")
                 }
+
                 _ => false,
-            }
-        } else {
-            expected
+            },
+
+            _ => expected
                 .iter()
                 .any(|(expected_table, expected_kind, definition)| {
                     *expected_table == table
                         && *expected_kind == kind
                         && normalize_sql(definition) == normalized
-                })
+                }),
         };
-        if !matches {
-            return Err(RepositoryError::BackendMismatch {
-                expected: "complete Keepsake 3.0 PostgreSQL constraints",
-                actual: format!("unexpected or altered constraint {table}.{name}"),
-            });
+
+        if matches {
+            continue;
         }
+
+        return Err(RepositoryError::BackendMismatch {
+            expected: "complete Keepsake 3.0 PostgreSQL constraints",
+            actual: format!("unexpected or altered constraint {table}.{name}"),
+        });
     }
+
     Ok(())
 }
 
@@ -1466,6 +1604,11 @@ pub(in crate::repository) async fn postgres_clean_schema_preflight(
     .await?
     .flatten();
     match track.as_deref() {
+        Some("4") => postgres_v4_runtime_schema_check(pool).await,
+        Some("3") => {
+            postgres_v3_runtime_schema_check(pool).await?;
+            postgres_v4_identifier_preflight(pool).await
+        }
         Some("2") => {
             let legacy = sqlx::query_scalar::<_, bool>(
                 "select to_regclass('public.keepsake_audit_events') is not null",
@@ -1481,11 +1624,11 @@ pub(in crate::repository) async fn postgres_clean_schema_preflight(
             postgres_catalog_shape_check(pool, false).await
         }
         Some(actual) => Err(RepositoryError::BackendMismatch {
-            expected: "2.0 clean track",
+            expected: "4.0 clean track",
             actual: actual.to_owned(),
         }),
         None => Err(RepositoryError::BackendMismatch {
-            expected: "2.0 clean track",
+            expected: "4.0 clean track",
             actual: "legacy schema; call upgrade_migrate".to_owned(),
         }),
     }

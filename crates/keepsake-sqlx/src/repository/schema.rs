@@ -12,12 +12,126 @@
 #[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 use super::{RepositoryError, RepositoryResult};
 
+#[cfg(all(
+    feature = "migrations",
+    any(feature = "postgres", feature = "mysql", feature = "sqlite")
+))]
+#[derive(Debug, Clone, Copy)]
+pub(super) struct PersistedIdentifier {
+    pub(super) table: &'static str,
+    pub(super) column: &'static str,
+    pub(super) field: &'static str,
+}
+
+#[cfg(all(
+    feature = "migrations",
+    any(feature = "postgres", feature = "mysql", feature = "sqlite")
+))]
+pub(super) const PERSISTED_IDENTIFIERS: &[PersistedIdentifier] = &[
+    PersistedIdentifier {
+        table: "keepsake_relation_definitions",
+        column: "tenant_id",
+        field: "tenant_id",
+    },
+    PersistedIdentifier {
+        table: "keepsake_relation_definitions",
+        column: "kind",
+        field: "relation.kind",
+    },
+    PersistedIdentifier {
+        table: "keepsake_relation_definitions",
+        column: "key",
+        field: "relation.name",
+    },
+    PersistedIdentifier {
+        table: "keepsakes",
+        column: "tenant_id",
+        field: "tenant_id",
+    },
+    PersistedIdentifier {
+        table: "keepsakes",
+        column: "subject_kind",
+        field: "subject.kind",
+    },
+    PersistedIdentifier {
+        table: "keepsakes",
+        column: "subject_id",
+        field: "subject.id",
+    },
+    PersistedIdentifier {
+        table: "keepsake_fulfillment_counters",
+        column: "tenant_id",
+        field: "tenant_id",
+    },
+    PersistedIdentifier {
+        table: "keepsake_fulfillment_counters",
+        column: "key",
+        field: "fulfillment.key",
+    },
+    PersistedIdentifier {
+        table: "keepsake_fulfillment_checklist",
+        column: "tenant_id",
+        field: "tenant_id",
+    },
+    PersistedIdentifier {
+        table: "keepsake_fulfillment_checklist",
+        column: "item",
+        field: "fulfillment.list_key",
+    },
+];
+
+/// Keep migration preflight memory bounded even when an installation contains
+/// a large historical relation catalogue.
+#[cfg(all(
+    feature = "migrations",
+    any(feature = "postgres", feature = "mysql", feature = "sqlite")
+))]
+pub(super) const IDENTIFIER_SCAN_BATCH_SIZE: i64 = 256;
+
 #[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 fn mismatch(detail: impl Into<String>) -> RepositoryError {
     RepositoryError::BackendMismatch {
-        expected: "complete Keepsake 3.0 domain schema",
+        expected: "complete Keepsake domain schema for the selected track",
         actual: detail.into(),
     }
+}
+
+#[cfg(all(
+    feature = "migrations",
+    any(feature = "postgres", feature = "mysql", feature = "sqlite")
+))]
+pub(super) fn validate_persisted_identifier_bytes(
+    identifier: PersistedIdentifier,
+    row: impl std::fmt::Display,
+    bytes: &[u8],
+) -> RepositoryResult<()> {
+    let value = std::str::from_utf8(bytes).map_err(|error| {
+        mismatch(format!(
+            "v4 identifier migration preflight rejected {}.{} row {}: invalid UTF-8 ({error})",
+            identifier.table, identifier.column, row
+        ))
+    })?;
+    keepsake::validate_persisted_identifier(identifier.field, value).map_err(|error| {
+        mismatch(format!(
+            "v4 identifier migration preflight rejected {}.{} row {}: {error}",
+            identifier.table, identifier.column, row
+        ))
+    })
+}
+
+#[cfg(all(
+    feature = "migrations",
+    any(feature = "postgres", feature = "mysql", feature = "sqlite")
+))]
+pub(super) fn persisted_identifier_type_mismatch(
+    identifier: PersistedIdentifier,
+    row: impl std::fmt::Display,
+    actual_type: &str,
+) -> RepositoryError {
+    mismatch(format!(
+        "v4 identifier migration preflight rejected {}.{} row {}: expected text, found {actual_type}",
+        identifier.table, identifier.column, row
+    ))
 }
 
 fn normalize_sql(sql: &str) -> String {
@@ -177,6 +291,20 @@ mod mysql_normalization_tests {
     }
 
     #[test]
+    fn v4_mysql_identifier_contract_is_explicit_and_binary() {
+        let contract = super::normalize_sql(super::MYSQL_V4_IDENTIFIER_ARTIFACT);
+        assert_eq!(contract.matches("collate utf8mb4_bin").count(), 10);
+        for marker in [
+            "keepsake_relation_definitions_identifier_contract",
+            "keepsakes_identifier_contract",
+            "keepsake_fulfillment_counter_identifier_contract",
+            "keepsake_fulfillment_checklist_identifier_contract",
+        ] {
+            assert!(contract.contains(marker));
+        }
+    }
+
+    #[test]
     fn generated_case_deparser_forms_compare_equal() {
         assert_eq!(
             normalize_mysql_generated_expression(
@@ -308,6 +436,95 @@ mod postgres_artifact_tests {
             );
         }
     }
+
+    #[test]
+    fn v4_postgres_identifier_contract_is_byte_bounded() {
+        let contract = super::normalize_sql(super::PG_V4_IDENTIFIER_ARTIFACT);
+        assert_eq!(contract.matches("collate \"c\"").count(), 10);
+        assert_eq!(contract.matches("<= 191").count(), 10);
+        for marker in [
+            "keepsake_relation_definitions_identifier_contract",
+            "keepsakes_identifier_contract",
+            "keepsake_fulfillment_counter_identifier_contract",
+            "keepsake_fulfillment_checklist_identifier_contract",
+        ] {
+            assert!(contract.contains(marker));
+        }
+    }
+}
+
+#[cfg(all(test, feature = "sqlite", feature = "migrations"))]
+mod sqlite_artifact_tests {
+    #[test]
+    fn v4_sqlite_identifier_contract_covers_every_domain_table() {
+        let contract = super::normalize_sql(super::SQLITE_V4_IDENTIFIER_ARTIFACT);
+        let compact = super::compact_sql(super::SQLITE_V4_IDENTIFIER_ARTIFACT);
+        for table in [
+            "keepsake_relation_definitions",
+            "keepsakes",
+            "keepsake_fulfillment_counters",
+            "keepsake_fulfillment_checklist",
+        ] {
+            assert!(contract.contains(&format!(
+                "create trigger {table}_identifier_contract_insert"
+            )));
+            assert!(contract.contains(&format!(
+                "create trigger {table}_identifier_contract_update"
+            )));
+        }
+        assert_eq!(
+            contract
+                .matches("raise(abort, 'keepsake_identifier_contract')")
+                .count(),
+            8
+        );
+        assert!(compact.contains("length(cast(new.tenant_idasblob))<=191"));
+        assert!(contract.contains("update keepsake_schema_metadata set value = '4'"));
+    }
+}
+
+#[cfg(all(
+    test,
+    feature = "migrations",
+    any(feature = "postgres", feature = "mysql", feature = "sqlite")
+))]
+mod persisted_identifier_tests {
+    use super::{PERSISTED_IDENTIFIERS, validate_persisted_identifier_bytes};
+
+    #[test]
+    fn byte_reader_matches_core_identifier_contract() {
+        let identifier = PERSISTED_IDENTIFIERS[0];
+        let valid = format!("{}a", "é".repeat(95));
+        assert_eq!(valid.len(), 191);
+        assert!(validate_persisted_identifier_bytes(identifier, "row-1", valid.as_bytes()).is_ok());
+
+        for (value, expected) in [
+            ("", "must not be empty"),
+            ("\u{2003}tenant", "leading or trailing whitespace"),
+            ("tenant\u{2003}", "leading or trailing whitespace"),
+            ("tenant\u{007f}", "control character"),
+            ("tenant\u{fdd0}", "noncharacter"),
+        ] {
+            let result = validate_persisted_identifier_bytes(identifier, "row-2", value.as_bytes());
+            assert!(result.is_err(), "{value:?} should be rejected");
+            if let Err(error) = result {
+                assert!(error.to_string().contains(expected), "{error}");
+            }
+        }
+
+        let too_long = "é".repeat(96);
+        let result = validate_persisted_identifier_bytes(identifier, "row-3", too_long.as_bytes());
+        assert!(result.is_err(), "byte length should be bounded");
+        if let Err(error) = result {
+            assert!(error.to_string().contains("192 UTF-8 bytes"), "{error}");
+        }
+
+        let result = validate_persisted_identifier_bytes(identifier, "row-4", &[0xff]);
+        assert!(result.is_err(), "invalid UTF-8 should be rejected");
+        if let Err(error) = result {
+            assert!(error.to_string().contains("invalid UTF-8"), "{error}");
+        }
+    }
 }
 
 #[cfg(all(feature = "postgres", feature = "migrations"))]
@@ -317,6 +534,10 @@ const PG_CLEAN_ARTIFACT: &str =
 #[cfg(all(test, feature = "postgres", feature = "migrations"))]
 const PG_V3_CLEAN_ARTIFACT: &str =
     include_str!("../../migrations/v3/postgres/3000_clean_baseline.sql");
+
+#[cfg(all(test, feature = "postgres", feature = "migrations"))]
+const PG_V4_IDENTIFIER_ARTIFACT: &str =
+    include_str!("../../migrations/v4/postgres/4000_identifier_contract.sql");
 
 #[cfg(all(test, feature = "postgres", feature = "migrations"))]
 const PG_V3_UPGRADE_ACTIVATE_ARTIFACT: &str =
@@ -337,7 +558,7 @@ const PG_UPGRADE_ARTIFACT: &str = concat!(
     include_str!("../../migrations/postgres/0007_dovecote_bridge.sql"),
 );
 
-#[cfg(feature = "mysql")]
+#[cfg(all(feature = "mysql", feature = "migrations"))]
 const MYSQL_CLEAN_ARTIFACT: &str =
     include_str!("../../migrations/v2/mysql/2000_clean_baseline.sql");
 
@@ -346,10 +567,18 @@ const MYSQL_V3_CLEAN_ARTIFACT: &str =
     include_str!("../../migrations/v3/mysql/3000_clean_baseline.sql");
 
 #[cfg(all(test, feature = "mysql"))]
+const MYSQL_V4_IDENTIFIER_ARTIFACT: &str =
+    include_str!("../../migrations/v4/mysql/4000_identifier_contract.sql");
+
+#[cfg(all(test, feature = "sqlite", feature = "migrations"))]
+const SQLITE_V4_IDENTIFIER_ARTIFACT: &str =
+    include_str!("../../migrations/v4/sqlite/4000_identifier_contract.sql");
+
+#[cfg(all(test, feature = "mysql"))]
 const MYSQL_V3_UPGRADE_ACTIVATE_ARTIFACT: &str =
     include_str!("../../migrations/upgrade/v2_to_v3/mysql/activate.sql");
 
-#[cfg(feature = "mysql")]
+#[cfg(all(feature = "mysql", feature = "migrations"))]
 const MYSQL_UPGRADE_ARTIFACT: &str = concat!(
     include_str!("../../migrations/mysql/0001_init.sql"),
     include_str!("../../migrations/mysql/0002_lifecycle_invariants.sql"),
@@ -490,7 +719,7 @@ fn normalize_in_list(expression: &str) -> String {
     normalized
 }
 
-#[cfg(feature = "sqlite")]
+#[cfg(all(feature = "sqlite", feature = "migrations"))]
 fn artifact_object_sql<'a>(artifact: &'a str, kind: &str, name: &str) -> Option<&'a str> {
     let lower = artifact.to_ascii_lowercase();
     let marker = format!("create {kind} {name}");
@@ -506,11 +735,11 @@ fn artifact_object_sql<'a>(artifact: &'a str, kind: &str, name: &str) -> Option<
     Some(&artifact[start..start + end])
 }
 
-#[cfg(feature = "sqlite")]
+#[cfg(all(feature = "sqlite", feature = "migrations"))]
 const SQLITE_CLEAN_ARTIFACT: &str =
     include_str!("../../migrations/v2/sqlite/2000_clean_baseline.sql");
 
-#[cfg(feature = "sqlite")]
+#[cfg(all(feature = "sqlite", feature = "migrations"))]
 const SQLITE_UPGRADE_ARTIFACT: &str = concat!(
     include_str!("../../migrations/sqlite/0001_init.sql"),
     include_str!("../../migrations/sqlite/0002_lifecycle_invariants.sql"),
@@ -520,7 +749,7 @@ const SQLITE_UPGRADE_ARTIFACT: &str = concat!(
     include_str!("../../migrations/sqlite/0006_dovecote_bridge.sql"),
 );
 
-#[cfg(feature = "sqlite")]
+#[cfg(all(feature = "sqlite", feature = "migrations"))]
 const CLEAN_TABLES: &[&str] = &[
     "keepsake_schema_metadata",
     "keepsake_relation_definitions",
@@ -529,7 +758,7 @@ const CLEAN_TABLES: &[&str] = &[
     "keepsake_fulfillment_checklist",
 ];
 
-#[cfg(feature = "sqlite")]
+#[cfg(all(feature = "sqlite", feature = "migrations"))]
 const UPGRADE_TABLES: &[&str] = &[
     "keepsake_schema_metadata",
     "keepsake_relation_definitions",
@@ -541,7 +770,7 @@ const UPGRADE_TABLES: &[&str] = &[
     "keepsake_audit_outbox",
 ];
 
-#[cfg(feature = "sqlite")]
+#[cfg(all(feature = "sqlite", feature = "migrations"))]
 const CLEAN_INDEXES: &[(&str, &str)] = &[
     ("index", "keepsakes_active_subject_lookup"),
     ("index", "keepsakes_active_relation_membership"),
@@ -552,7 +781,7 @@ const CLEAN_INDEXES: &[(&str, &str)] = &[
     ("unique index", "keepsakes_one_active_relation_per_subject"),
 ];
 
-#[cfg(feature = "sqlite")]
+#[cfg(all(feature = "sqlite", feature = "migrations"))]
 const UPGRADE_INDEXES: &[(&str, &str)] = &[
     ("index", "keepsakes_active_subject_lookup"),
     ("index", "keepsakes_active_relation_membership"),
@@ -568,13 +797,13 @@ const UPGRADE_INDEXES: &[(&str, &str)] = &[
     ("index", "keepsake_audit_outbox_claim"),
 ];
 
-#[cfg(feature = "sqlite")]
+#[cfg(all(feature = "sqlite", feature = "migrations"))]
 const CLEAN_TRIGGERS: &[(&str, &str)] = &[
     ("trigger", "keepsakes_clean_invariants_insert"),
     ("trigger", "keepsakes_clean_invariants_update"),
 ];
 
-#[cfg(feature = "sqlite")]
+#[cfg(all(feature = "sqlite", feature = "migrations"))]
 const UPGRADE_TRIGGERS: &[(&str, &str)] = &[
     ("trigger", "keepsakes_expiry_policy_projection_insert"),
     ("trigger", "keepsakes_expiry_policy_projection_update"),

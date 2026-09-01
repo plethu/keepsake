@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{DateTime, Utc};
 use keepsake::{ExpiryCause, ExpiryPolicy, FulfillmentSnapshot};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use super::super::PostgresBackend;
@@ -85,7 +85,7 @@ where
     #[cfg(feature = "fulfillment-counters")]
     pub async fn expire_due_fulfilled(
         &self,
-        now: DateTime<Utc>,
+        now: OffsetDateTime,
         limit: i64,
     ) -> RepositoryResult<u64> {
         let limit = validate_limit(limit)?;
@@ -166,8 +166,9 @@ where
         keepsake_id: Uuid,
         key: &str,
         value: i64,
-        observed_at: DateTime<Utc>,
+        observed_at: OffsetDateTime,
     ) -> RepositoryResult<()> {
+        keepsake::validate_persisted_identifier("fulfillment.key", key)?;
         sqlx::query(
             r"
             insert into keepsake_fulfillment_counters
@@ -199,8 +200,9 @@ where
         keepsake_id: Uuid,
         key: &str,
         delta: i64,
-        observed_at: DateTime<Utc>,
+        observed_at: OffsetDateTime,
     ) -> RepositoryResult<i64> {
+        keepsake::validate_persisted_identifier("fulfillment.key", key)?;
         let (value,) = sqlx::query_as::<_, (i64,)>(
             r"
             insert into keepsake_fulfillment_counters
@@ -229,8 +231,9 @@ where
         keepsake_id: Uuid,
         item: &str,
         complete: bool,
-        observed_at: DateTime<Utc>,
+        observed_at: OffsetDateTime,
     ) -> RepositoryResult<()> {
+        keepsake::validate_persisted_identifier("fulfillment.item", item)?;
         sqlx::query(
             r"
             insert into keepsake_fulfillment_checklist

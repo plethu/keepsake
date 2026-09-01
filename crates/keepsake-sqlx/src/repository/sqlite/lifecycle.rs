@@ -1,14 +1,14 @@
-use chrono::{DateTime, Utc};
 use keepsake::{
     ApplyKeepsake, Keepsake, KeepsakeId, RelationDefinition, RelationId, RevokeBySubject,
     RevokeKeepsake, SubjectRef,
 };
 use sqlx::{Sqlite, Transaction};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::repository::support::{
-    apply_event, canonical_timestamp, dovecote_event, dovecote_tenant_id, expires_at, replay_event,
-    revoke_by_subject_event, revoke_event,
+    apply_event, canonical_timestamp, decode_current_audit_payload_for_tenant, dovecote_event,
+    dovecote_tenant_id, expires_at, replay_event, revoke_by_subject_event, revoke_event,
 };
 use crate::repository::{
     AppliedKeepsake, RelationCache, RepositoryError, RepositoryResult, SqliteBackend,
@@ -192,8 +192,11 @@ async fn existing_audit_event_tx(
     let Some(row) = row else { return Ok(None) };
 
     let data: Option<Vec<u8>> = sqlx::Row::try_get(&row, "data")?;
-    data.map(|data| serde_json::from_slice(&data).map_err(RepositoryError::from))
-        .transpose()
+    data.map(|data| {
+        decode_current_audit_payload_for_tenant(&data, tenant_id)
+            .map_err(RepositoryError::AuditPayload)
+    })
+    .transpose()
 }
 
 impl<C> TenantSqlxKeepsakeRepository<'_, SqliteBackend, C>
@@ -290,7 +293,7 @@ pub(super) async fn revoke_tx(
     tx: &mut Transaction<'_, Sqlite>,
     tenant_id: &keepsake::TenantId,
     keepsake_id: Uuid,
-    at: DateTime<Utc>,
+    at: OffsetDateTime,
 ) -> RepositoryResult<Option<Keepsake>> {
     let row = sqlx::query(
         r"
@@ -314,7 +317,7 @@ pub(super) async fn revoke_by_subject_tx(
     tenant_id: &keepsake::TenantId,
     subject: &SubjectRef,
     relation_id: RelationId,
-    at: DateTime<Utc>,
+    at: OffsetDateTime,
 ) -> RepositoryResult<Option<Keepsake>> {
     let row = sqlx::query(
         r"

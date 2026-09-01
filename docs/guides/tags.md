@@ -22,8 +22,9 @@ Apply the tag through a timestamp-bound repository:
 
 ```rust
 use keepsake::{ActorRef, ApplyKeepsake, CommandContext};
+use time::OffsetDateTime;
 
-let now = chrono::Utc::now();
+let now = OffsetDateTime::now_utc();
 let timed_repo = repo.at(now);
 
 timed_repo.upsert_relation_spec::<TrustedTag>().await?;

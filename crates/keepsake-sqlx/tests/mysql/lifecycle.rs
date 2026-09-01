@@ -1,5 +1,6 @@
 use super::support::*;
 use keepsake::{ActorRef, ApplyKeepsake, CommandContext, ExpiryPolicy, SubjectRef};
+use time::UtcOffset;
 use uuid::Uuid;
 
 #[tokio::test]
@@ -12,6 +13,44 @@ async fn mysql_apply_duplicate_and_active_read() -> TestResult<()> {
 #[ignore = "requires docker mysql; run `mise run test-db`"]
 async fn mysql_nanosecond_timed_policy_round_trips_at_sql_precision() -> TestResult<()> {
     backend_cases::nanosecond_timed_policy_round_trips_at_sql_precision::<MySqlHarness>().await
+}
+
+#[tokio::test]
+#[ignore = "requires docker mysql; run `mise run test-db`"]
+async fn mysql_non_utc_instants_round_trip_as_same_instant() -> TestResult<()> {
+    let (repo, _pool) = MySqlHarness::repo().await?;
+    let applied_at = ts("2026-01-01T06:01:00.123456+05:30")?;
+    let expires_at = ts("2026-02-01T06:01:00.654321+05:30")?;
+    let relation = upsert_relation::<MySqlHarness>(
+        &repo,
+        ExpiryPolicy::At {
+            timestamp: expires_at,
+        },
+    )
+    .await?;
+    let subject = SubjectRef::new("account", "mysql-non-utc-instant")?;
+
+    let applied = repo
+        .apply(&ApplyKeepsake::new(
+            MySqlHarness::tenant(),
+            subject.clone(),
+            relation.id,
+            applied_at,
+            CommandContext::new(ActorRef::new("test", "worker")?),
+        ))
+        .await?;
+    let expected_applied_at = applied_at.to_offset(UtcOffset::UTC);
+    let expected_expires_at = expires_at.to_offset(UtcOffset::UTC);
+
+    assert_eq!(applied.keepsake.applied_at(), expected_applied_at);
+    assert_eq!(applied.keepsake.expires_at(), Some(expected_expires_at));
+
+    let fetched = repo.active_for_subject(&subject).await?;
+    assert_eq!(fetched.len(), 1);
+    let fetched = &fetched[0];
+    assert_eq!(fetched.applied_at(), expected_applied_at);
+    assert_eq!(fetched.expires_at(), Some(expected_expires_at));
+    Ok(())
 }
 
 #[tokio::test]
@@ -113,10 +152,10 @@ async fn mysql_lifecycle_invariants_reject_invalid_rows() -> TestResult<()> {
     .bind(Uuid::now_v7().to_string())
     .bind(relation.id.to_string())
     .bind(serde_json::to_value(&ExpiryPolicy::ManualOnly)?)
-    .bind(ts("2026-01-01T00:00:00Z")?.naive_utc())
-    .bind(ts("2026-01-01T00:00:00Z")?.naive_utc())
-    .bind(ts("2026-01-01T00:00:00Z")?.naive_utc())
-    .bind(ts("2026-01-01T00:00:00Z")?.naive_utc())
+    .bind(naive_utc(ts("2026-01-01T00:00:00Z")?))
+    .bind(naive_utc(ts("2026-01-01T00:00:00Z")?))
+    .bind(naive_utc(ts("2026-01-01T00:00:00Z")?))
+    .bind(naive_utc(ts("2026-01-01T00:00:00Z")?))
     .execute(&pool)
     .await;
 
@@ -139,9 +178,9 @@ async fn mysql_lifecycle_invariants_reject_malformed_policy_rows() -> TestResult
     )
     .bind(Uuid::now_v7().to_string())
     .bind(relation.id.to_string())
-    .bind(ts("2026-01-01T00:00:00Z")?.naive_utc())
-    .bind(ts("2026-01-01T00:00:00Z")?.naive_utc())
-    .bind(ts("2026-01-01T00:00:00Z")?.naive_utc())
+    .bind(naive_utc(ts("2026-01-01T00:00:00Z")?))
+    .bind(naive_utc(ts("2026-01-01T00:00:00Z")?))
+    .bind(naive_utc(ts("2026-01-01T00:00:00Z")?))
     .execute(&pool)
     .await;
 
@@ -169,10 +208,10 @@ async fn mysql_projection_invariant_rejects_fractional_expiry_mismatch() -> Test
     .bind(Uuid::now_v7().to_string())
     .bind(relation.id.to_string())
     .bind(policy)
-    .bind(ts("2026-01-01T00:00:00Z")?.naive_utc())
-    .bind(ts("2026-01-01T00:00:00.654321Z")?.naive_utc())
-    .bind(ts("2026-01-01T00:00:00Z")?.naive_utc())
-    .bind(ts("2026-01-01T00:00:00Z")?.naive_utc())
+    .bind(naive_utc(ts("2026-01-01T00:00:00Z")?))
+    .bind(naive_utc(ts("2026-01-01T00:00:00.654321Z")?))
+    .bind(naive_utc(ts("2026-01-01T00:00:00Z")?))
+    .bind(naive_utc(ts("2026-01-01T00:00:00Z")?))
     .execute(&pool)
     .await;
 

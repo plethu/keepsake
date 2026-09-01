@@ -1,6 +1,6 @@
 [package]
 name = "keepsake-sqlx"
-version = "3.0.1"
+version = "4.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -16,9 +16,9 @@ documentation = "https://docs.rs/keepsake-sqlx"
 [features]
 default = ["postgres", "cache", "fulfillment-counters", "migrations"]
 cache = ["dep:moka"]
-postgres = ["sqlx/postgres", "sqlx/uuid", "sqlx/chrono", "sqlx/json", "dep:dovecote-sqlx-postgres"]
-sqlite = ["sqlx/sqlite", "sqlx/chrono", "sqlx/json", "dep:dovecote-sqlx-sqlite"]
-mysql = ["sqlx/mysql", "sqlx/chrono", "sqlx/json", "dep:dovecote-sqlx-mysql"]
+postgres = ["sqlx/postgres", "sqlx/uuid", "sqlx/time", "sqlx/json", "dep:dovecote-sqlx-postgres"]
+sqlite = ["sqlx/sqlite", "sqlx/time", "sqlx/json", "dep:dovecote-sqlx-sqlite"]
+mysql = ["sqlx/mysql", "sqlx/time", "sqlx/json", "dep:dovecote-sqlx-mysql"]
 dovecote-postgres = ["postgres"]
 dovecote-sqlite = ["sqlite"]
 dovecote-mysql = ["mysql"]
@@ -31,7 +31,6 @@ mysql-tests = ["mysql", "cache", "fulfillment-counters", "migrations"]
 
 [dependencies]
 async-trait.workspace = true
-chrono.workspace = true
 keepsake.workspace = true
 moka = { workspace = true, optional = true }
 serde.workspace = true

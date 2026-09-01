@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::error::Result;
 
-use super::validate_not_empty;
+use super::validate_persisted_identifier;
 
 /// Validated tenant identity owned by Keepsake.
 ///
@@ -16,31 +16,10 @@ use super::validate_not_empty;
 pub struct TenantId(String);
 
 impl TenantId {
-    const MAX_UTF8_BYTES: usize = 255;
-
     /// Builds a tenant identity from an application-owned value.
     pub fn new(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
-        validate_not_empty("tenant_id", &value)?;
-        if value.len() > Self::MAX_UTF8_BYTES {
-            return Err(crate::KeepsakeError::TenantIdTooLong {
-                max: Self::MAX_UTF8_BYTES,
-                actual: value.len(),
-            });
-        }
-
-        for character in value.chars() {
-            if character.is_control() {
-                return Err(crate::KeepsakeError::TenantIdControlCharacter {
-                    code_point: character as u32,
-                });
-            }
-
-            let code_point = character as u32;
-            if (0xFDD0..=0xFDEF).contains(&code_point) || (code_point & 0xFFFF) >= 0xFFFE {
-                return Err(crate::KeepsakeError::TenantIdNoncharacter { code_point });
-            }
-        }
+        validate_persisted_identifier("tenant_id", &value)?;
         Ok(Self(value))
     }
 
@@ -117,8 +96,8 @@ impl SubjectRef {
 
     /// Validates the subject reference.
     pub fn validate(&self) -> Result<()> {
-        validate_not_empty("subject.kind", self.kind())?;
-        validate_not_empty("subject.id", self.id())
+        validate_persisted_identifier("subject.kind", self.kind())?;
+        validate_persisted_identifier("subject.id", self.id())
     }
 
     /// Returns the application-owned subject kind.
@@ -172,8 +151,8 @@ impl ActorRef {
 
     /// Validates the actor reference.
     pub fn validate(&self) -> Result<()> {
-        validate_not_empty("actor.kind", self.kind())?;
-        validate_not_empty("actor.id", self.id())
+        validate_persisted_identifier("actor.kind", self.kind())?;
+        validate_persisted_identifier("actor.id", self.id())
     }
 
     /// Returns the actor kind.

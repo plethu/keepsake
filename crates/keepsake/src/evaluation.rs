@@ -1,7 +1,7 @@
 //! Synchronous deterministic lifecycle evaluation.
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 use crate::model::{
     ActiveRelation, FulfillmentSnapshot, Keepsake, LifecycleState, RelationDefinition,
@@ -31,7 +31,8 @@ pub enum DecisionKind {
         /// Transition reason.
         reason: TransitionReason,
         /// Timestamp to write as the transition time.
-        at: DateTime<Utc>,
+        #[serde(with = "time::serde::rfc3339")]
+        at: OffsetDateTime,
     },
 }
 
@@ -66,7 +67,7 @@ pub enum TransitionReason {
 /// Evaluates a validated active relation lifecycle without side effects.
 #[must_use]
 pub fn evaluate_active(
-    now: DateTime<Utc>,
+    now: OffsetDateTime,
     active: &ActiveRelation,
     fulfillment: Option<&FulfillmentSnapshot>,
 ) -> EvaluationDecision {
@@ -80,7 +81,7 @@ pub fn evaluate_active(
 /// that type validates the relation id and active lifecycle state at its boundary.
 #[must_use]
 pub fn evaluate(
-    now: DateTime<Utc>,
+    now: OffsetDateTime,
     relation: &RelationDefinition,
     keepsake: &Keepsake,
     fulfillment: Option<&FulfillmentSnapshot>,
@@ -122,7 +123,7 @@ const fn noop(reason: NoopReason, resulting_state: LifecycleState) -> Evaluation
 
 const fn transition(
     reason: TransitionReason,
-    at: DateTime<Utc>,
+    at: OffsetDateTime,
     resulting_state: LifecycleState,
 ) -> EvaluationDecision {
     EvaluationDecision {
@@ -135,15 +136,15 @@ const fn transition(
 mod tests {
     use std::collections::BTreeMap;
 
-    use chrono::{DateTime, Utc};
+    use time::OffsetDateTime;
     use uuid::Uuid;
 
     use super::*;
     use crate::model::{ActiveRelation, KeepsakeRecord, RelationKey, SubjectRef};
     use crate::policy::FulfillmentPolicy;
 
-    fn ts(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
-        DateTime::parse_from_rfc3339(value).map(|timestamp| timestamp.with_timezone(&Utc))
+    fn ts(value: &str) -> Result<OffsetDateTime, time::error::Parse> {
+        OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
     }
 
     type TestResult<T> = core::result::Result<T, TestError>;
@@ -151,7 +152,7 @@ mod tests {
     #[derive(Debug, thiserror::Error)]
     enum TestError {
         #[error(transparent)]
-        Chrono(#[from] chrono::ParseError),
+        Time(#[from] time::error::Parse),
 
         #[error(transparent)]
         Keepsake(#[from] crate::KeepsakeError),

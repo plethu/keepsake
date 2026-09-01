@@ -1,5 +1,24 @@
 # Changelog
 
+## 4.0.0 - 2026-09-01
+
+- **Breaking core API:** replaced public and internal `chrono::DateTime<Utc>`
+  with `time::OffsetDateTime`; RFC3339 serde wire timestamps remain stable,
+  while SQLx and Dovecote persistence use canonical UTC microseconds.
+- **Breaking identifier contract:** tenant, relation, subject, actor, and
+  fulfillment identifiers are nonempty, have no leading or trailing Unicode
+  whitespace, and are at most 191 UTF-8 bytes. Values are byte-preserving and
+  case-sensitive; no Unicode normalization is performed. Constructors, Serde,
+  and SQL write boundaries enforce the contract.
+- Added additive v4 SQL migration tracks; historical v3 artifacts remain
+  byte-for-byte unchanged. All backends preflight existing rows with the exact
+  Rust contract and add database-level byte/edge checks; MySQL and MariaDB
+  additionally require explicit binary `utf8mb4_bin` collation.
+- **Breaking durable audit contract:** current Dovecote payloads carry an
+  explicit `schema_version = 4`. v3 or missing-version payloads require an
+  explicit legacy decoder path, unknown versions are rejected, and historical
+  outer IDs remain a typed legacy path.
+
 ## 3.0.1 - 2026-09-01
 
 - Canonicalised lifecycle occurrence timestamps to microseconds before both

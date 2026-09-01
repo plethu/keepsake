@@ -1,6 +1,22 @@
 # Migrations
 
-## Tenant-aware Keepsake 3 migration
+## Keepsake 4.0 migration tracks
+
+Keepsake 4.0 uses the clean tenant-aware v3 baseline followed by an additive
+v4 identifier-contract migration. `repo.migrate()` runs both tracks as one
+validated migration set on a new database or an existing v3 clean database;
+the v3 and v4 SQL artifacts remain separate so published v3 bytes are not
+changed. The final metadata marker is `api_track = 4`.
+
+Current payloads also carry the durable audit discriminator
+`schema_version = 4`. A v3 payload that omits the discriminator, or explicitly
+declares version 3, is not accepted by the current decoder: it returns a typed
+legacy result for an application-owned decoder. Unknown versions are rejected.
+Historical outer ids (`keepsake-outbox-N` and `keepsake-audit-legacy-N`) remain
+an explicit legacy path and retain their typed rejection from the current
+decoder.
+
+## Tenant-aware Keepsake 3 migration (historical prerequisite)
 
 The core tenant contract is a breaking API boundary and is not satisfied by
 adding a `tenant_id` field only in application code. The coordinated Keepsake
@@ -17,7 +33,8 @@ the mapping and reconciliation evidence with the deployment record.
 
 Relation definitions are tenant-owned in the new contract, so their natural
 key uniqueness is scoped by tenant. Clean installs use the backend-specific
-baselines under `migrations/v3/{postgres,mysql,sqlite}/`.
+baselines under `migrations/v3/{postgres,mysql,sqlite}/`, followed by
+`migrations/v4/{postgres,mysql,sqlite}/4000_identifier_contract.sql`.
 
 For an existing Keepsake 2 database on any supported backend, call
 `prepare_tenant_upgrade`, apply an operator-reviewed mapping to every nullable
@@ -31,18 +48,19 @@ operational controls and verified tenant isolation tests.
 
 Do not enable tenant-aware writers until the Keepsake and Dovecote schema
 checks pass, cross-tenant isolation tests pass on the selected backend, and
-rollback/backup procedures have been rehearsed. The current 2.x clean baseline
-and historical upgrade paths below describe the pre-tenant schema and remain
+rollback/backup procedures have been rehearsed. The historical 2.x clean
+baseline and upgrade paths below describe the pre-tenant schema and remain
 valid for existing installations.
 
-Keepsake 2.0 has an explicit clean-install track and an explicit historical
-upgrade track. The tracks share the domain schema but are not interchangeable.
+The historical Keepsake 2.0 release had an explicit clean-install track and an
+explicit historical upgrade track. The tracks share the domain schema but are
+not interchangeable.
 The clean track contains no Keepsake audit or outbox tables: Dovecote owns that
 schema and must be installed separately with the selected SQLx adapter.
 
 ## New installation
 
-1. Install the Keepsake 3.0 clean baseline with `repo.migrate()`.
+1. Install the Keepsake 4.0 clean baseline and v4 contract with `repo.migrate()`.
 2. Install the matching Dovecote schema with its backend adapter.
 3. Construct the repository with an application-owned absolute source URI.
 4. Call `repo.check_schema()` before accepting writes.
@@ -61,13 +79,22 @@ let account = repo.for_tenant(tenant);
 unknown tables, create inert legacy audit tables, or silently guess which
 schema the operator intended.
 
+For an existing v3 clean database, stop 3.x writers and run the same
+`repo.migrate()` call. Its bounded preflight applies the exact Rust identifier
+validator to existing rows before the v4 schema is activated; clean or
+explicitly remap rejected rows before retrying. All backends require existing
+persisted identifiers to satisfy the 191 UTF-8-byte, non-empty, Unicode
+edge-whitespace, control, and noncharacter rules. MySQL and MariaDB must expose
+explicit `utf8mb4_bin` collation on every identifier column or
+`check_schema()` fails.
+
 Dovecote's MySQL/MariaDB schema creates validation triggers. The migration
 account needs trigger DDL authority; with MySQL binary logging enabled, an
 administrator may also need to enable `log_bin_trust_function_creators` for
 schema installation. Ordinary Keepsake operations do not require that server
 setting after the schema is installed.
 
-## Existing 1.x installation
+## Existing 1.x installation (historical 2.0 track)
 
 Use this path only when the database already contains the published Keepsake
 1.x migrations:

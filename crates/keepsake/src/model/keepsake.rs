@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 use crate::error::Result;
 use crate::policy::ExpiryPolicy;
@@ -43,12 +43,14 @@ pub enum KeepsakeLifecycle {
     /// The relation was explicitly revoked.
     Revoked {
         /// Revocation timestamp.
-        revoked_at: DateTime<Utc>,
+        #[serde(with = "time::serde::rfc3339")]
+        revoked_at: OffsetDateTime,
     },
     /// The relation expired by policy.
     Expired {
         /// Expiry timestamp.
-        expired_at: DateTime<Utc>,
+        #[serde(with = "time::serde::rfc3339")]
+        expired_at: OffsetDateTime,
         /// Expiry cause.
         cause: ExpiryCause,
     },
@@ -68,7 +70,7 @@ pub struct Keepsake {
     /// Policy copied at apply time for deterministic replay.
     expiry: ExpiryPolicy,
     /// Timestamp when the keepsake was applied.
-    applied_at: DateTime<Utc>,
+    applied_at: OffsetDateTime,
     /// Lifecycle-specific state.
     lifecycle: KeepsakeLifecycle,
     /// Application metadata kept opaque by Keepsake.
@@ -81,7 +83,7 @@ impl Keepsake {
         id: KeepsakeId,
         subject: SubjectRef,
         relation: &RelationDefinition,
-        applied_at: DateTime<Utc>,
+        applied_at: OffsetDateTime,
         metadata: BTreeMap<String, String>,
     ) -> Result<Self> {
         subject.validate()?;
@@ -130,7 +132,7 @@ impl Keepsake {
 
     /// Returns the application timestamp.
     #[must_use]
-    pub const fn applied_at(&self) -> DateTime<Utc> {
+    pub const fn applied_at(&self) -> OffsetDateTime {
         self.applied_at
     }
 
@@ -176,13 +178,13 @@ impl Keepsake {
 
     /// Returns the scheduled timed expiry timestamp, when applicable.
     #[must_use]
-    pub const fn expires_at(&self) -> Option<DateTime<Utc>> {
+    pub const fn expires_at(&self) -> Option<OffsetDateTime> {
         self.expiry.timed_expiry()
     }
 
     /// Returns the terminal timestamp for revoked or expired keepsakes.
     #[must_use]
-    pub const fn ended_at(&self) -> Option<DateTime<Utc>> {
+    pub const fn ended_at(&self) -> Option<OffsetDateTime> {
         match self.lifecycle {
             KeepsakeLifecycle::Applied => None,
             KeepsakeLifecycle::Revoked { revoked_at } => Some(revoked_at),
@@ -192,7 +194,7 @@ impl Keepsake {
 
     /// Returns the revocation timestamp for revoked keepsakes.
     #[must_use]
-    pub const fn revoked_at(&self) -> Option<DateTime<Utc>> {
+    pub const fn revoked_at(&self) -> Option<OffsetDateTime> {
         match self.lifecycle {
             KeepsakeLifecycle::Revoked { revoked_at } => Some(revoked_at),
             KeepsakeLifecycle::Applied | KeepsakeLifecycle::Expired { .. } => None,
@@ -201,7 +203,7 @@ impl Keepsake {
 
     /// Returns the expiry timestamp for expired keepsakes.
     #[must_use]
-    pub const fn expired_at(&self) -> Option<DateTime<Utc>> {
+    pub const fn expired_at(&self) -> Option<OffsetDateTime> {
         match self.lifecycle {
             KeepsakeLifecycle::Expired { expired_at, .. } => Some(expired_at),
             KeepsakeLifecycle::Applied | KeepsakeLifecycle::Revoked { .. } => None,
@@ -210,7 +212,7 @@ impl Keepsake {
 
     /// Returns the fulfillment timestamp for fulfillment-caused expiry.
     #[must_use]
-    pub const fn fulfilled_at(&self) -> Option<DateTime<Utc>> {
+    pub const fn fulfilled_at(&self) -> Option<OffsetDateTime> {
         match self.lifecycle {
             KeepsakeLifecycle::Expired {
                 expired_at,

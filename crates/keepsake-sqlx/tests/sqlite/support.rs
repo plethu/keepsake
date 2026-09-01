@@ -44,7 +44,7 @@ impl BackendHarness for SqliteHarness {
     async fn upsert_relation(
         repo: &Self::Repo,
         relation: &keepsake::RelationDefinition,
-        at: chrono::DateTime<chrono::Utc>,
+        at: time::OffsetDateTime,
     ) -> Result<keepsake::RelationDefinition, RepositoryError> {
         repo.upsert_relation(relation, at).await
     }
@@ -90,7 +90,7 @@ impl BackendHarness for SqliteHarness {
 
     async fn expire_due_timed(
         repo: &Self::Repo,
-        now: chrono::DateTime<chrono::Utc>,
+        now: time::OffsetDateTime,
         limit: i64,
     ) -> Result<u64, RepositoryError> {
         repo.expire_due_timed(now, limit).await
@@ -101,7 +101,7 @@ impl BackendHarness for SqliteHarness {
         keepsake_id: Uuid,
         key: &str,
         value: i64,
-        observed_at: chrono::DateTime<chrono::Utc>,
+        observed_at: time::OffsetDateTime,
     ) -> Result<(), RepositoryError> {
         repo.upsert_counter_projection(keepsake_id, key, value, observed_at)
             .await
@@ -111,14 +111,14 @@ impl BackendHarness for SqliteHarness {
         repo: &Self::Repo,
         relation_id: Uuid,
         enabled: bool,
-        at: chrono::DateTime<chrono::Utc>,
+        at: time::OffsetDateTime,
     ) -> Result<bool, RepositoryError> {
         repo.set_relation_enabled(relation_id, enabled, at).await
     }
 
     async fn expire_due_fulfilled(
         repo: &Self::Repo,
-        now: chrono::DateTime<chrono::Utc>,
+        now: time::OffsetDateTime,
         limit: i64,
     ) -> Result<u64, RepositoryError> {
         repo.expire_due_fulfilled(now, limit).await

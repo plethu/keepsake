@@ -1,13 +1,16 @@
 //! `SQLite` schema verification.
 
+#[cfg(feature = "migrations")]
 use super::{
-    CLEAN_INDEXES, CLEAN_TABLES, CLEAN_TRIGGERS, RepositoryError, RepositoryResult,
+    CLEAN_INDEXES, CLEAN_TABLES, CLEAN_TRIGGERS, IDENTIFIER_SCAN_BATCH_SIZE, PERSISTED_IDENTIFIERS,
     SQLITE_CLEAN_ARTIFACT, SQLITE_UPGRADE_ARTIFACT, UPGRADE_INDEXES, UPGRADE_TABLES,
-    UPGRADE_TRIGGERS, artifact_object_sql, compact_sql, mismatch, normalize_sql,
+    UPGRADE_TRIGGERS, artifact_object_sql, normalize_sql, persisted_identifier_type_mismatch,
+    validate_persisted_identifier_bytes,
 };
+use super::{RepositoryError, RepositoryResult, compact_sql, mismatch};
 use crate::repository::backend::KeepsakeSqlxBackend;
 
-#[cfg(feature = "sqlite")]
+#[cfg(all(feature = "sqlite", feature = "migrations"))]
 #[allow(clippy::too_many_lines)]
 async fn sqlite_domain_shape_check(
     pool: &sqlx::SqlitePool,
@@ -283,6 +286,119 @@ async fn sqlite_v3_domain_shape_check(pool: &sqlx::SqlitePool) -> RepositoryResu
 }
 
 #[cfg(feature = "sqlite")]
+async fn sqlite_v4_domain_shape_check(pool: &sqlx::SqlitePool) -> RepositoryResult<()> {
+    sqlite_v3_domain_shape_check(pool).await?;
+    for trigger in [
+        "keepsake_relation_definitions_identifier_contract_insert",
+        "keepsake_relation_definitions_identifier_contract_update",
+        "keepsakes_identifier_contract_insert",
+        "keepsakes_identifier_contract_update",
+        "keepsake_fulfillment_counters_identifier_contract_insert",
+        "keepsake_fulfillment_counters_identifier_contract_update",
+        "keepsake_fulfillment_checklist_identifier_contract_insert",
+        "keepsake_fulfillment_checklist_identifier_contract_update",
+    ] {
+        let definition = sqlx::query_scalar::<_, Option<String>>(
+            "select sql from sqlite_master where type = 'trigger' and name = ?",
+        )
+        .bind(trigger)
+        .fetch_optional(pool)
+        .await?
+        .flatten()
+        .ok_or_else(|| mismatch(format!("missing v4 identifier trigger {trigger}")))?;
+        let compact = compact_sql(&definition);
+        if !compact.contains("length(cast(new.")
+            || !compact.contains("asblob))<=191")
+            || !compact.contains("trim(new.")
+            || !compact.contains("raise(abort,'keepsake_identifier_contract')")
+        {
+            return Err(mismatch(format!(
+                "v4 identifier trigger {trigger} definition differs"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(all(feature = "sqlite", feature = "migrations"))]
+async fn sqlite_v4_identifier_preflight(pool: &sqlx::SqlitePool) -> RepositoryResult<()> {
+    // SQLite's declared TEXT affinity does not prevent a legacy row from
+    // carrying a BLOB, integer, real, or NULL. Preserve the raw bytes for
+    // text/BLOB values, reject non-text values explicitly, and then apply the
+    // exact Rust identifier contract (including Unicode edge whitespace,
+    // controls, and noncharacters).
+    for identifier in PERSISTED_IDENTIFIERS {
+        sqlite_scan_identifier(pool, *identifier).await?;
+    }
+    Ok(())
+}
+
+#[cfg(all(feature = "sqlite", feature = "migrations"))]
+async fn sqlite_scan_identifier(
+    pool: &sqlx::SqlitePool,
+    identifier: super::PersistedIdentifier,
+) -> RepositoryResult<()> {
+    let query = format!(
+        "select rowid as __keepsake_row, typeof(\"{}\") as __keepsake_type, case when typeof(\"{}\") in ('text', 'blob') then cast(\"{}\" as blob) end as __keepsake_value from \"{}\" order by rowid limit {IDENTIFIER_SCAN_BATCH_SIZE} offset ?",
+        identifier.column, identifier.column, identifier.column, identifier.table
+    );
+    let mut offset: i64 = 0;
+
+    loop {
+        let rows = sqlx::query(sqlx::AssertSqlSafe(query.clone()))
+            .bind(offset)
+            .fetch_all(pool)
+            .await?;
+        if rows.is_empty() {
+            break;
+        }
+
+        for row in rows {
+            sqlite_validate_identifier_row(identifier, &row)?;
+        }
+        offset = offset
+            .checked_add(IDENTIFIER_SCAN_BATCH_SIZE)
+            .ok_or_else(|| mismatch("identifier preflight row offset overflow"))?;
+    }
+
+    Ok(())
+}
+
+#[cfg(all(feature = "sqlite", feature = "migrations"))]
+fn sqlite_validate_identifier_row(
+    identifier: super::PersistedIdentifier,
+    row: &sqlx::sqlite::SqliteRow,
+) -> RepositoryResult<()> {
+    use sqlx::Row;
+
+    let row_locator: i64 = row.try_get("__keepsake_row")?;
+    let value_type: String = row.try_get("__keepsake_type")?;
+    let value: Option<Vec<u8>> = row.try_get("__keepsake_value")?;
+    let row_label = row_locator.to_string();
+    let Some(value) = value else {
+        return Err(persisted_identifier_type_mismatch(
+            identifier,
+            row_label,
+            &value_type,
+        ));
+    };
+
+    if value_type != "text" {
+        if std::str::from_utf8(&value).is_err() {
+            return validate_persisted_identifier_bytes(identifier, row_label, &value);
+        }
+
+        return Err(persisted_identifier_type_mismatch(
+            identifier,
+            row_label,
+            &value_type,
+        ));
+    }
+
+    validate_persisted_identifier_bytes(identifier, row_label, &value)
+}
+
+#[cfg(feature = "sqlite")]
 pub(in crate::repository) async fn sqlite_runtime_schema_check(
     pool: &sqlx::SqlitePool,
 ) -> RepositoryResult<()> {
@@ -313,25 +429,30 @@ pub(in crate::repository) async fn sqlite_runtime_schema_check(
     .fetch_optional(pool)
     .await?
     .flatten();
-    if track.as_deref() == Some("3") {
-        sqlite_v3_domain_shape_check(pool).await?;
+    if track.as_deref() == Some("4") {
+        sqlite_v4_domain_shape_check(pool).await?;
         return Ok(());
     }
 
-    if track.as_deref() != Some("2") {
+    if track.as_deref() == Some("3") {
         return Err(RepositoryError::BackendMismatch {
-            expected: "2.0 active schema",
-            actual: "schema is not activated for the 2.0 API".to_owned(),
+            expected: "4.0 active schema",
+            actual: "schema is still on the 3.0 API track; run migrate to activate the 4.0 schema"
+                .to_owned(),
         });
     }
 
-    let has_legacy = sqlx::query_scalar::<_, i64>(
-        "select count(*) from sqlite_master where type = 'table' and name = 'keepsake_audit_events'",
-    )
-    .fetch_one(pool)
-    .await?
-        != 0;
-    sqlite_domain_shape_check(pool, has_legacy).await
+    if track.as_deref() == Some("2") {
+        return Err(RepositoryError::BackendMismatch {
+            expected: "4.0 active schema",
+            actual: "schema is still on the 2.0 API track; run the explicit tenant upgrade route"
+                .to_owned(),
+        });
+    }
+    Err(RepositoryError::BackendMismatch {
+        expected: "4.0 active schema",
+        actual: "schema is not activated for the 4.0 API".to_owned(),
+    })
 }
 
 #[cfg(feature = "sqlite")]
@@ -357,7 +478,11 @@ pub(in crate::repository) async fn sqlite_clean_schema_preflight(
     .await?
     .flatten();
     match track.as_deref() {
-        Some("3") => sqlite_v3_domain_shape_check(pool).await,
+        Some("4") => sqlite_v4_domain_shape_check(pool).await,
+        Some("3") => {
+            sqlite_v3_domain_shape_check(pool).await?;
+            sqlite_v4_identifier_preflight(pool).await
+        }
         Some("2") => {
             let has_legacy = sqlx::query_scalar::<_, i64>(
                 "select count(*) from sqlite_master where type = 'table' and name = 'keepsake_audit_events'",

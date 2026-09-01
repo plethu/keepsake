@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, SecondsFormat, Utc};
 use keepsake::{
     ExpiryPolicy, Keepsake, KeepsakeRecord, RelationDefinition, RelationKey, SubjectRef, TenantId,
 };
 use sqlx::Row;
+use time::{OffsetDateTime, UtcOffset};
 
 #[cfg(feature = "fulfillment-counters")]
 use crate::repository::FulfilledExpiryCandidate;
@@ -97,17 +97,27 @@ pub(super) fn fulfilled_expiry_candidate_from_row(
     })
 }
 
-pub(super) fn parse_timestamp(value: &str) -> RepositoryResult<DateTime<Utc>> {
-    Ok(DateTime::parse_from_rfc3339(value)
-        .map_err(|error| sqlx::Error::Decode(Box::new(error)))?
-        .with_timezone(&Utc))
+pub(super) fn parse_timestamp(value: &str) -> RepositoryResult<OffsetDateTime> {
+    Ok(
+        OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+            .map_err(|error| sqlx::Error::Decode(Box::new(error)))?
+            .to_offset(UtcOffset::UTC),
+    )
 }
 
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn optional_timestamp(value: Option<String>) -> RepositoryResult<Option<DateTime<Utc>>> {
+pub(super) fn optional_timestamp(
+    value: Option<String>,
+) -> RepositoryResult<Option<OffsetDateTime>> {
     value.as_deref().map(parse_timestamp).transpose()
 }
 
-pub(super) fn format_timestamp(value: DateTime<Utc>) -> String {
-    value.to_rfc3339_opts(SecondsFormat::Micros, true)
+pub(super) fn format_timestamp(value: OffsetDateTime) -> String {
+    let format = time::macros::format_description!(
+        "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:6]Z"
+    );
+    value
+        .to_offset(UtcOffset::UTC)
+        .format(&format)
+        .unwrap_or_default()
 }

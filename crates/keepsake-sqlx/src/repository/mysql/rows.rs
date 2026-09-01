@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, NaiveDateTime, Utc};
 use keepsake::{
     ExpiryPolicy, Keepsake, KeepsakeRecord, RelationDefinition, RelationKey, SubjectRef, TenantId,
 };
 use sqlx::Row;
+use time::{OffsetDateTime, PrimitiveDateTime, UtcOffset};
 
 #[cfg(feature = "fulfillment-counters")]
 use crate::repository::FulfilledExpiryCandidate;
@@ -104,14 +104,15 @@ pub(super) fn fulfilled_expiry_candidate_from_row(
     })
 }
 
-pub(super) const fn naive_timestamp(value: DateTime<Utc>) -> NaiveDateTime {
-    value.naive_utc()
+pub(super) const fn naive_timestamp(value: OffsetDateTime) -> PrimitiveDateTime {
+    let value = value.to_offset(UtcOffset::UTC);
+    PrimitiveDateTime::new(value.date(), value.time())
 }
 
-pub(super) const fn utc_timestamp(value: NaiveDateTime) -> DateTime<Utc> {
-    DateTime::from_naive_utc_and_offset(value, Utc)
+pub(super) const fn utc_timestamp(value: PrimitiveDateTime) -> OffsetDateTime {
+    value.assume_offset(UtcOffset::UTC)
 }
 
-pub(super) fn optional_utc_timestamp(value: Option<NaiveDateTime>) -> Option<DateTime<Utc>> {
+pub(super) fn optional_utc_timestamp(value: Option<PrimitiveDateTime>) -> Option<OffsetDateTime> {
     value.map(utc_timestamp)
 }

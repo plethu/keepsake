@@ -1,12 +1,12 @@
 use std::fmt;
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
+use time::OffsetDateTime;
 
 use crate::error::{KeepsakeError, Result};
 use crate::policy::ExpiryPolicy;
 
-use super::{Keepsake, RelationId, TenantId, validate_not_empty};
+use super::{Keepsake, RelationId, TenantId, validate_persisted_identifier};
 
 /// Human-meaningful relation identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -55,13 +55,13 @@ impl RelationKind {
     /// Builds a validated relation kind.
     pub fn new(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
-        validate_not_empty("relation.kind", &value)?;
+        validate_persisted_identifier("relation.kind", &value)?;
         Ok(Self(value))
     }
 
     /// Validates the relation kind.
     pub fn validate(&self) -> Result<()> {
-        validate_not_empty("relation.kind", &self.0)
+        validate_persisted_identifier("relation.kind", &self.0)
     }
 
     /// Returns the relation kind as a string slice.
@@ -101,13 +101,13 @@ impl RelationName {
     /// Builds a validated relation name.
     pub fn new(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
-        validate_not_empty("relation.name", &value)?;
+        validate_persisted_identifier("relation.name", &value)?;
         Ok(Self(value))
     }
 
     /// Validates the relation name.
     pub fn validate(&self) -> Result<()> {
-        validate_not_empty("relation.name", &self.0)
+        validate_persisted_identifier("relation.name", &self.0)
     }
 
     /// Returns the relation name as a string slice.
@@ -181,6 +181,15 @@ const fn assert_valid_static_relation_component(value: &str) {
         has_non_whitespace,
         "static relation component must not be whitespace"
     );
+    assert!(
+        bytes.len() <= super::MAX_PERSISTED_IDENTIFIER_BYTES,
+        "static relation component exceeds 191 UTF-8 bytes"
+    );
+    assert!(
+        !matches!(bytes.first(), Some(b' ' | b'\n' | b'\r' | b'\t'))
+            && !matches!(bytes.last(), Some(b' ' | b'\n' | b'\r' | b'\t')),
+        "static relation component must not have leading or trailing whitespace"
+    );
 }
 
 /// Configured relation definition.
@@ -245,7 +254,7 @@ impl RelationDefinition {
     }
 
     /// Builds a relation definition from a typed relation spec.
-    pub fn from_spec<Spec>(tenant_id: TenantId, at: DateTime<Utc>) -> Result<Self>
+    pub fn from_spec<Spec>(tenant_id: TenantId, at: OffsetDateTime) -> Result<Self>
     where
         Spec: RelationSpec,
     {
@@ -361,7 +370,7 @@ pub trait RelationSpec {
     const ENABLED: bool = true;
 
     /// Expiry policy for this relation at materialization time.
-    fn expiry(at: DateTime<Utc>) -> ExpiryPolicy;
+    fn expiry(at: OffsetDateTime) -> ExpiryPolicy;
 }
 
 #[cfg(test)]

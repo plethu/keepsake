@@ -73,7 +73,7 @@ async fn lifecycle_events_are_typed_dovecote_rows() -> TestResult<()> {
         "keepsake.audit_event_recorded"
     );
     assert_eq!(
-        rows[0].try_get::<DateTime<Utc>, _>("occurred_at")?,
+        rows[0].try_get::<OffsetDateTime, _>("occurred_at")?,
         apply_at
     );
     assert_eq!(
@@ -141,5 +141,59 @@ async fn exact_replay_is_idempotent_and_changed_content_conflicts() -> TestResul
             .await?,
         1
     );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
+async fn exact_replay_rejects_payload_tenant_mismatch() -> TestResult<()> {
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
+    let database_url = std::env::var("DATABASE_URL")?;
+    let pool = PgPool::connect(&database_url).await?;
+    let relation =
+        timed_relation(&repo, "dovecote-tenant-mismatch", "2026-01-02T00:00:00Z").await?;
+    let id = AuditEventId::deterministic(b"postgres-tenant-mismatch");
+    let command = ApplyKeepsake::new(
+        test_tenant(),
+        SubjectRef::new("user", "postgres_tenant_mismatch")?,
+        relation.id,
+        ts("2026-01-01T00:01:00Z")?,
+        CommandContext::new(ActorRef::new("test", "worker")?),
+    )
+    .with_audit_id(id);
+    repo.apply(&command).await?;
+
+    let event_id = format!("keepsake-audit-{}", id.as_uuid());
+    let payload = sqlx::query_scalar::<_, Vec<u8>>(
+        "select data from dovecote_events where tenant_id = $1 and source = $2 and event_id = $3",
+    )
+    .bind(test_tenant().as_str())
+    .bind("https://tests.invalid/keepsake/postgres")
+    .bind(&event_id)
+    .fetch_one(&pool)
+    .await?;
+    let mut payload: serde_json::Value = serde_json::from_slice(&payload)?;
+    payload["tenant_id"] = serde_json::Value::String("tenant-other".to_owned());
+    sqlx::query(
+        "update dovecote_events set data = $1 where tenant_id = $2 and source = $3 and event_id = $4",
+    )
+    .bind(serde_json::to_vec(&payload)?)
+    .bind(test_tenant().as_str())
+    .bind("https://tests.invalid/keepsake/postgres")
+    .bind(event_id)
+    .execute(&pool)
+    .await?;
+
+    let result = repo.apply(&command).await;
+    assert!(matches!(
+        result,
+        Err(keepsake_sqlx::RepositoryError::AuditPayload(
+            keepsake_sqlx::AuditEventDecodeError::TenantMismatch {
+                storage_tenant,
+                payload_tenant,
+            }
+        )) if storage_tenant == "tenant-test" && payload_tenant == "tenant-other"
+    ));
     Ok(())
 }

@@ -1,9 +1,9 @@
 //! Minimal tag assignment example.
 
-use chrono::Utc;
 use keepsake::{ActorRef, ApplyKeepsake, CommandContext, ExpiryPolicy, SubjectRef, TenantId};
 use keepsake_sqlx::{KeepsakeRepository, RepositoryError};
 use sqlx::{PgPool, raw_sql};
+use time::OffsetDateTime;
 
 #[derive(Debug, thiserror::Error)]
 enum ExampleError {
@@ -53,7 +53,7 @@ async fn main() -> Result<(), ExampleError> {
     repo.check_schema().await?;
     let tenant_id = TenantId::new("example-tenant")?;
     let scoped_repo = repo.for_tenant(tenant_id.clone());
-    let now = Utc::now();
+    let now = OffsetDateTime::now_utc();
     let timed_repo = scoped_repo.at(now);
 
     timed_repo.upsert_relation_spec::<TrustedTag>().await?;

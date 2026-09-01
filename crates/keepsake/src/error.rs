@@ -14,25 +14,38 @@ pub enum KeepsakeError {
         field: &'static str,
     },
 
-    /// A tenant identifier exceeded the storage contract's byte limit.
-    #[error("tenant_id is {actual} UTF-8 bytes; maximum is {max}")]
-    TenantIdTooLong {
+    /// A persisted textual identifier exceeded the storage contract's byte limit.
+    #[error("{field} is {actual} UTF-8 bytes; maximum is {max}")]
+    IdentifierTooLong {
+        /// Identifier field.
+        field: &'static str,
         /// Maximum permitted UTF-8 byte length.
         max: usize,
         /// Supplied UTF-8 byte length.
         actual: usize,
     },
 
-    /// A tenant identifier contained a Unicode control character.
-    #[error("tenant_id contains forbidden control character U+{code_point:04X}")]
-    TenantIdControlCharacter {
+    /// A persisted textual identifier has leading or trailing whitespace.
+    #[error("{field} must not have leading or trailing whitespace")]
+    IdentifierWhitespace {
+        /// Identifier field.
+        field: &'static str,
+    },
+
+    /// A persisted textual identifier contained a Unicode control character.
+    #[error("{field} contains forbidden control character U+{code_point:04X}")]
+    IdentifierControlCharacter {
+        /// Identifier field.
+        field: &'static str,
         /// Unicode scalar value of the rejected character.
         code_point: u32,
     },
 
-    /// A tenant identifier contained a Unicode noncharacter.
-    #[error("tenant_id contains forbidden noncharacter U+{code_point:04X}")]
-    TenantIdNoncharacter {
+    /// A persisted textual identifier contained a Unicode noncharacter.
+    #[error("{field} contains forbidden noncharacter U+{code_point:04X}")]
+    IdentifierNoncharacter {
+        /// Identifier field.
+        field: &'static str,
         /// Unicode scalar value of the rejected character.
         code_point: u32,
     },

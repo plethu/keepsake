@@ -1,5 +1,5 @@
-use chrono::{DateTime, Utc};
 use keepsake::{RelationDefinition, RelationId, RelationKey, RelationSpec};
+use time::OffsetDateTime;
 
 use crate::repository::support::{canonical_relation, canonical_timestamp};
 use crate::repository::{
@@ -16,7 +16,7 @@ where
     pub async fn upsert_relation(
         &self,
         relation: &RelationDefinition,
-        at: DateTime<Utc>,
+        at: OffsetDateTime,
     ) -> RepositoryResult<RelationDefinition> {
         if relation.tenant_id != self.tenant_id {
             return Err(RepositoryError::TenantScopeMismatch);
@@ -117,7 +117,7 @@ where
     /// Inserts or updates a typed relation spec by its natural relation key.
     pub async fn upsert_relation_spec<Spec>(
         &self,
-        at: DateTime<Utc>,
+        at: OffsetDateTime,
     ) -> RepositoryResult<RelationDefinition>
     where
         Spec: RelationSpec,
@@ -270,7 +270,7 @@ where
         &self,
         relation_id: RelationId,
         enabled: bool,
-        at: DateTime<Utc>,
+        at: OffsetDateTime,
     ) -> RepositoryResult<bool> {
         let result = sqlx::query(
             r"

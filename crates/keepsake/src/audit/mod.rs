@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::error::Error;
 
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::evaluation::DecisionKind;
@@ -17,9 +17,33 @@ mod memory;
 #[cfg(any(test, feature = "test"))]
 pub use memory::{InMemoryAuditError, InMemoryAuditSink};
 
+/// Current durable JSON payload schema version.
+pub const AUDIT_PAYLOAD_SCHEMA_VERSION: u16 = 4;
+
+fn deserialize_current_schema_version<'de, D>(deserializer: D) -> Result<u16, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let schema_version = u16::deserialize(deserializer)?;
+    if schema_version == AUDIT_PAYLOAD_SCHEMA_VERSION {
+        return Ok(schema_version);
+    }
+
+    Err(D::Error::custom(format_args!(
+        "expected current Keepsake audit payload schema version {AUDIT_PAYLOAD_SCHEMA_VERSION}, found {schema_version}"
+    )))
+}
+
 /// Durable audit event.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditEvent {
+    /// Durable JSON payload schema version.
+    ///
+    /// Direct serde decoding accepts only the current discriminator. Durable
+    /// storage consumers must inspect the discriminator before decoding this
+    /// current-only type so legacy and future payloads can be routed explicitly.
+    #[serde(deserialize_with = "deserialize_current_schema_version")]
+    pub schema_version: u16,
     /// Tenant that owns the audited keepsake.
     pub tenant_id: TenantId,
     /// Stable identity of this audit occurrence.
@@ -31,7 +55,8 @@ pub struct AuditEvent {
     /// Event category written to append-only audit storage.
     pub event_type: AuditEventType,
     /// Timestamp when the audited change occurred.
-    pub at: DateTime<Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
     /// Actor responsible for the change.
     pub actor: ActorRef,
     /// Keepsake id.
@@ -192,7 +217,7 @@ impl AuditSink for NoopAuditSink {
 
 #[cfg(test)]
 mod tests {
-    use super::AuditEventType;
+    use super::{AuditEvent, AuditEventType};
 
     #[test]
     fn event_type_storage_label_round_trips() {
@@ -209,5 +234,26 @@ mod tests {
             );
         }
         assert_eq!(AuditEventType::from_storage_label("unknown"), None);
+    }
+
+    #[test]
+    fn direct_serde_rejects_legacy_and_unknown_payload_versions() {
+        let missing = serde_json::from_value::<AuditEvent>(serde_json::json!({}));
+        assert!(
+            missing
+                .as_ref()
+                .is_err_and(|error| error.to_string().contains("schema_version"))
+        );
+
+        for schema_version in [3, 99] {
+            let result = serde_json::from_value::<AuditEvent>(serde_json::json!({
+                "schema_version": schema_version
+            }));
+            assert!(result.as_ref().is_err_and(|error| {
+                error
+                    .to_string()
+                    .contains("expected current Keepsake audit payload")
+            }));
+        }
     }
 }

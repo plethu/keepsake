@@ -1,9 +1,9 @@
-use chrono::{DateTime, Utc};
 use keepsake::ExpiryCause;
 #[cfg(feature = "fulfillment-counters")]
 use keepsake::{ExpiryPolicy, FulfillmentSnapshot};
 #[cfg(feature = "fulfillment-counters")]
 use sqlx::{MySql, Transaction};
+use time::OffsetDateTime;
 #[cfg(feature = "fulfillment-counters")]
 use uuid::Uuid;
 
@@ -28,7 +28,7 @@ where
     /// Lists due timed expiry candidates in stable batch order.
     pub async fn due_timed_expiry(
         &self,
-        now: DateTime<Utc>,
+        now: OffsetDateTime,
         limit: i64,
     ) -> RepositoryResult<Vec<TimedExpiryCandidate>> {
         let limit = validate_limit(limit)?;
@@ -99,7 +99,7 @@ where
     #[cfg(feature = "fulfillment-counters")]
     pub async fn expire_due_fulfilled(
         &self,
-        now: DateTime<Utc>,
+        now: OffsetDateTime,
         limit: i64,
     ) -> RepositoryResult<u64> {
         let limit = validate_limit(limit)?;
@@ -126,7 +126,7 @@ where
     }
 
     /// Expires a stable batch of due timed keepsakes.
-    pub async fn expire_due_timed(&self, now: DateTime<Utc>, limit: i64) -> RepositoryResult<u64> {
+    pub async fn expire_due_timed(&self, now: OffsetDateTime, limit: i64) -> RepositoryResult<u64> {
         let candidates = self.due_timed_expiry(now, limit).await?;
         let mut expired = 0;
         let mut tx = self.pool.begin().await?;
@@ -179,7 +179,7 @@ where
 async fn expire_fulfilled_candidate_tx<C>(
     repository: &TenantSqlxKeepsakeRepository<'_, MySqlBackend, C>,
     tx: &mut Transaction<'_, MySql>,
-    now: DateTime<Utc>,
+    now: OffsetDateTime,
     candidate: FulfilledExpiryCandidate,
 ) -> RepositoryResult<u64>
 where

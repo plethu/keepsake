@@ -1,11 +1,11 @@
 #![allow(missing_docs, clippy::missing_panics_doc)]
 
-use chrono::{DateTime, Utc};
 use keepsake::{
     ActorRef, ApplyKeepsake, CommandContext, ExpiryPolicy, FulfillmentPolicy, RelationDefinition,
     RelationKey, SubjectRef, TenantId,
 };
 use keepsake_sqlx::RepositoryError;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 pub type TestResult<T> = Result<T, TestError>;
@@ -13,7 +13,7 @@ pub type TestResult<T> = Result<T, TestError>;
 #[derive(Debug, thiserror::Error)]
 pub enum TestError {
     #[error(transparent)]
-    Chrono(#[from] chrono::ParseError),
+    Time(#[from] time::error::Parse),
     #[error(transparent)]
     Keepsake(#[from] keepsake::KeepsakeError),
     #[error(transparent)]
@@ -45,7 +45,7 @@ pub trait BackendHarness {
     async fn upsert_relation(
         repo: &Self::Repo,
         relation: &RelationDefinition,
-        at: DateTime<Utc>,
+        at: OffsetDateTime,
     ) -> Result<RelationDefinition, RepositoryError>;
     async fn apply(
         repo: &Self::Repo,
@@ -71,7 +71,7 @@ pub trait BackendHarness {
     ) -> Result<Vec<keepsake::Keepsake>, RepositoryError>;
     async fn expire_due_timed(
         repo: &Self::Repo,
-        now: DateTime<Utc>,
+        now: OffsetDateTime,
         limit: i64,
     ) -> Result<u64, RepositoryError>;
     async fn upsert_counter_projection(
@@ -79,23 +79,23 @@ pub trait BackendHarness {
         keepsake_id: Uuid,
         key: &str,
         value: i64,
-        observed_at: DateTime<Utc>,
+        observed_at: OffsetDateTime,
     ) -> Result<(), RepositoryError>;
     async fn set_relation_enabled(
         repo: &Self::Repo,
         relation_id: Uuid,
         enabled: bool,
-        at: DateTime<Utc>,
+        at: OffsetDateTime,
     ) -> Result<bool, RepositoryError>;
     async fn expire_due_fulfilled(
         repo: &Self::Repo,
-        now: DateTime<Utc>,
+        now: OffsetDateTime,
         limit: i64,
     ) -> Result<u64, RepositoryError>;
 }
 
-pub fn ts(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
-    DateTime::parse_from_rfc3339(value).map(|timestamp| timestamp.with_timezone(&Utc))
+pub fn ts(value: &str) -> Result<OffsetDateTime, time::error::Parse> {
+    OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
 }
 
 fn context() -> TestResult<CommandContext> {
@@ -241,6 +241,84 @@ where
     .await?;
     assert_eq!(by_keys.len(), 1);
     assert_eq!(by_keys[0].relation().id, relation_b.id);
+    Ok(())
+}
+
+pub async fn identifier_contract_round_trips_case_and_unicode<H>() -> TestResult<()>
+where
+    H: BackendHarness,
+{
+    let (repo, _pool) = H::repo().await?;
+    let at = ts("2026-01-01T00:00:00Z")?;
+    let boundary = format!("{}a", "é".repeat(95));
+    assert_eq!(boundary.len(), keepsake::MAX_PERSISTED_IDENTIFIER_BYTES);
+    let keys = [
+        RelationKey::new("Tag", "Case")?,
+        RelationKey::new("Tag", "case")?,
+        RelationKey::new("Tag", "é")?,
+        RelationKey::new("Tag", "e\u{301}")?,
+        RelationKey::new("Tag", boundary.clone())?,
+    ];
+    let relations = keys
+        .iter()
+        .enumerate()
+        .map(|(index, key)| {
+            RelationDefinition::enabled(
+                H::tenant(),
+                Uuid::from_u128((index + 1) as u128),
+                key.clone(),
+                ExpiryPolicy::ManualOnly,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for relation in &relations {
+        let stored = H::upsert_relation(&repo, relation, at).await?;
+        assert_eq!(stored.id, relation.id);
+        assert_eq!(stored.key, relation.key);
+    }
+
+    let subject = SubjectRef::new("User", boundary.clone())?;
+    let mut keepsake_ids = Vec::with_capacity(relations.len());
+    for (index, relation) in relations.iter().enumerate() {
+        let applied = H::apply(
+            &repo,
+            &ApplyKeepsake::new(
+                H::tenant(),
+                subject.clone(),
+                relation.id,
+                at + time::Duration::seconds(i64::try_from(index).unwrap_or(0)),
+                context()?,
+            ),
+        )
+        .await?;
+        keepsake_ids.push(applied.keepsake.id());
+    }
+
+    let found = H::active_relations_for_subject_by_keys(&repo, &subject, &keys).await?;
+    let found_keys = found
+        .iter()
+        .map(|relation| {
+            (
+                relation.relation().key.kind().to_owned(),
+                relation.relation().key.name().to_owned(),
+            )
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let expected_keys = keys
+        .iter()
+        .map(|key| (key.kind().to_owned(), key.name().to_owned()))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(found_keys, expected_keys);
+
+    let projected = H::upsert_counter_projection(&repo, keepsake_ids[0], &boundary, 1, at).await;
+    assert!(projected.is_ok());
+    assert!(
+        H::upsert_counter_projection(&repo, keepsake_ids[0], &"é".repeat(96), 1, at,)
+            .await
+            .is_err()
+    );
+    assert!(SubjectRef::new("User", "é".repeat(96)).is_err());
+    assert!(RelationKey::new("Tag", "é".repeat(96)).is_err());
     Ok(())
 }
 

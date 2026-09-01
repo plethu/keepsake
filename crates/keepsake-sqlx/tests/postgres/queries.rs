@@ -1,6 +1,87 @@
 use super::support::*;
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
+
+#[tokio::test]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
+async fn postgres_identifier_contract_round_trips_case_and_unicode() -> TestResult<()> {
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant());
+    let at = ts("2026-01-01T00:00:00Z")?;
+    let boundary = format!("{}a", "é".repeat(95));
+    assert_eq!(boundary.len(), keepsake::MAX_PERSISTED_IDENTIFIER_BYTES);
+    let keys = [
+        RelationKey::new("Tag", "Case")?,
+        RelationKey::new("Tag", "case")?,
+        RelationKey::new("Tag", "é")?,
+        RelationKey::new("Tag", "e\u{301}")?,
+        RelationKey::new("Tag", boundary.clone())?,
+    ];
+    let relations = keys
+        .iter()
+        .enumerate()
+        .map(|(index, key)| {
+            RelationDefinition::enabled(
+                test_tenant(),
+                Uuid::from_u128((index + 1) as u128),
+                key.clone(),
+                ExpiryPolicy::ManualOnly,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for relation in &relations {
+        let stored = repo.upsert_relation(relation, at).await?;
+        assert_eq!(stored.id, relation.id);
+        assert_eq!(stored.key, relation.key);
+    }
+
+    let subject = SubjectRef::new("User", boundary.clone())?;
+    let mut keepsake_ids = Vec::with_capacity(relations.len());
+    for (index, relation) in relations.iter().enumerate() {
+        let command = ApplyKeepsake::new(
+            test_tenant(),
+            subject.clone(),
+            relation.id,
+            at + time::Duration::seconds(i64::try_from(index).unwrap_or(0)),
+            test_context("worker")?,
+        );
+        let applied = repo.apply(&command).await?;
+        keepsake_ids.push(applied.keepsake.id());
+    }
+
+    let found = repo
+        .active_relations_for_subject_by_keys(&subject, &keys)
+        .await?;
+    let found_keys = found
+        .iter()
+        .map(|relation| {
+            (
+                relation.relation().key.kind().to_owned(),
+                relation.relation().key.name().to_owned(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    let expected_keys = keys
+        .iter()
+        .map(|key| (key.kind().to_owned(), key.name().to_owned()))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(found_keys, expected_keys);
+
+    assert!(
+        repo.upsert_counter_projection(keepsake_ids[0], &boundary, 1, at)
+            .await
+            .is_ok()
+    );
+    assert!(
+        repo.upsert_counter_projection(keepsake_ids[0], &"é".repeat(96), 1, at)
+            .await
+            .is_err()
+    );
+    assert!(SubjectRef::new("User", "é".repeat(96)).is_err());
+    assert!(RelationKey::new("Tag", "é".repeat(96)).is_err());
+    Ok(())
+}
 
 #[tokio::test]
 async fn active_relation_source_accepts_generic_and_erased_sqlx_repository() -> TestResult<()> {

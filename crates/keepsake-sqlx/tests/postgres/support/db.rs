@@ -74,9 +74,9 @@ pub async fn insert_raw_keepsake(
     relation_id: Uuid,
     expiry: &ExpiryPolicy,
     state: &str,
-    expires_at: Option<DateTime<Utc>>,
-    fulfilled_at: Option<DateTime<Utc>>,
-    revoked_at: Option<DateTime<Utc>>,
+    expires_at: Option<OffsetDateTime>,
+    fulfilled_at: Option<OffsetDateTime>,
+    revoked_at: Option<OffsetDateTime>,
 ) -> TestResult<()> {
     insert_raw_keepsake_value(
         pool,
@@ -95,9 +95,9 @@ pub async fn insert_raw_keepsake_value(
     relation_id: Uuid,
     expiry_policy: serde_json::Value,
     state: &str,
-    expires_at: Option<DateTime<Utc>>,
-    fulfilled_at: Option<DateTime<Utc>>,
-    revoked_at: Option<DateTime<Utc>>,
+    expires_at: Option<OffsetDateTime>,
+    fulfilled_at: Option<OffsetDateTime>,
+    revoked_at: Option<OffsetDateTime>,
 ) -> TestResult<()> {
     sqlx::query(
         r"

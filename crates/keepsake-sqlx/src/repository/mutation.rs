@@ -7,8 +7,8 @@ use uuid::Uuid;
 
 use super::PostgresBackend;
 use super::support::{
-    apply_event, canonical_timestamp, dovecote_event, dovecote_tenant_id, expires_at, replay_event,
-    revoke_by_subject_event, revoke_event,
+    apply_event, canonical_timestamp, decode_current_audit_payload_for_tenant, dovecote_event,
+    dovecote_tenant_id, expires_at, replay_event, revoke_by_subject_event, revoke_event,
 };
 use super::{
     AppliedKeepsake, AppliedKeepsakeRow, AppliedKeepsakeWriteRow, RelationCache, RelationRow,
@@ -169,7 +169,10 @@ async fn existing_audit_event_tx(
     .await?;
     bytes
         .flatten()
-        .map(|data| serde_json::from_slice(&data).map_err(RepositoryError::from))
+        .map(|data| {
+            decode_current_audit_payload_for_tenant(&data, tenant_id)
+                .map_err(RepositoryError::AuditPayload)
+        })
         .transpose()
 }
 
@@ -199,7 +202,7 @@ async fn revoke_by_subject_tx(
     tenant_id: &keepsake::TenantId,
     subject: &SubjectRef,
     relation_id: RelationId,
-    at: chrono::DateTime<chrono::Utc>,
+    at: time::OffsetDateTime,
 ) -> RepositoryResult<Option<Keepsake>> {
     let row = sqlx::query_as::<_, AppliedKeepsakeRow>(
         r"
@@ -225,7 +228,7 @@ async fn revoke_tx(
     tx: &mut Transaction<'_, Postgres>,
     tenant_id: &keepsake::TenantId,
     keepsake_id: Uuid,
-    at: chrono::DateTime<chrono::Utc>,
+    at: time::OffsetDateTime,
 ) -> RepositoryResult<Option<Keepsake>> {
     let row = sqlx::query_as::<_, AppliedKeepsakeRow>(
         r"

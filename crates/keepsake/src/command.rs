@@ -2,8 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::audit::AuditEventId;
@@ -64,7 +64,8 @@ pub struct ApplyKeepsake {
     /// Relation definition id.
     pub relation_id: RelationId,
     /// Command timestamp.
-    pub at: DateTime<Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
     /// Opaque application metadata.
     pub metadata: BTreeMap<String, String>,
     /// Audit context.
@@ -80,7 +81,7 @@ impl ApplyKeepsake {
         tenant_id: TenantId,
         subject: SubjectRef,
         relation_id: RelationId,
-        at: DateTime<Utc>,
+        at: OffsetDateTime,
         context: CommandContext,
     ) -> Self {
         Self {
@@ -100,7 +101,7 @@ impl ApplyKeepsake {
     pub fn for_spec<Spec>(
         tenant_id: TenantId,
         subject: SubjectRef,
-        at: DateTime<Utc>,
+        at: OffsetDateTime,
         context: CommandContext,
     ) -> Self
     where
@@ -132,7 +133,8 @@ pub struct RevokeKeepsake {
     /// Keepsake id.
     pub keepsake_id: KeepsakeId,
     /// Command timestamp.
-    pub at: DateTime<Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
     /// Audit context.
     pub context: CommandContext,
     /// Stable audit occurrence identity retained across retries.
@@ -145,7 +147,7 @@ impl RevokeKeepsake {
     pub fn new(
         tenant_id: TenantId,
         keepsake_id: KeepsakeId,
-        at: DateTime<Utc>,
+        at: OffsetDateTime,
         context: CommandContext,
     ) -> Self {
         Self {
@@ -179,7 +181,8 @@ pub struct RevokeBySubject {
     /// Relation definition id.
     pub relation_id: RelationId,
     /// Command timestamp.
-    pub at: DateTime<Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
     /// Audit context.
     pub context: CommandContext,
     /// Stable audit occurrence identity retained across retries.
@@ -193,7 +196,7 @@ impl RevokeBySubject {
         tenant_id: TenantId,
         subject: SubjectRef,
         relation_id: RelationId,
-        at: DateTime<Utc>,
+        at: OffsetDateTime,
         context: CommandContext,
     ) -> Self {
         Self {
@@ -218,7 +221,7 @@ impl RevokeBySubject {
     pub fn for_spec<Spec>(
         tenant_id: TenantId,
         subject: SubjectRef,
-        at: DateTime<Utc>,
+        at: OffsetDateTime,
         context: CommandContext,
     ) -> Self
     where
@@ -230,7 +233,6 @@ impl RevokeBySubject {
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
     use uuid::Uuid;
 
     use super::*;
@@ -243,7 +245,7 @@ mod tests {
         const ID: Uuid = Uuid::from_u128(1);
         const KEY: StaticRelationKey = StaticRelationKey::new("tag", "trusted");
 
-        fn expiry(_at: chrono::DateTime<chrono::Utc>) -> ExpiryPolicy {
+        fn expiry(_at: time::OffsetDateTime) -> ExpiryPolicy {
             ExpiryPolicy::ManualOnly
         }
     }
@@ -269,7 +271,7 @@ mod tests {
             crate::TenantId::new("tenant-a")?,
             SubjectRef::new("account", "acct_123")?,
             Uuid::nil(),
-            Utc::now(),
+            OffsetDateTime::now_utc(),
             CommandContext::new(ActorRef::new("system", "worker")?),
         )
         .with_metadata("source", "support");
@@ -283,7 +285,7 @@ mod tests {
 
     #[test]
     fn typed_apply_and_revoke_constructors_set_command_fields() -> crate::Result<()> {
-        let at = Utc::now();
+        let at = OffsetDateTime::now_utc();
         let context = CommandContext::new(ActorRef::new("system", "worker")?);
         let apply = ApplyKeepsake::for_spec::<TrustedTag>(
             crate::TenantId::new("tenant-a")?,
@@ -306,7 +308,7 @@ mod tests {
 
     #[test]
     fn revoke_by_subject_constructors_set_command_fields() -> crate::Result<()> {
-        let at = Utc::now();
+        let at = OffsetDateTime::now_utc();
         let subject = SubjectRef::new("account", "acct_123")?;
         let context = CommandContext::new(ActorRef::new("user", "moderator")?);
 

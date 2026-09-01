@@ -24,6 +24,15 @@ Dovecote `(tenant_id, source, event_id)` boundary because delivery remains at
 least once. A transport projection must preserve tenant routing alongside the
 CloudEvents `(source, id)` pair.
 
+Current Keepsake 4.0 payloads include the explicit
+`schema_version: keepsake::AUDIT_PAYLOAD_SCHEMA_VERSION` discriminator (4).
+The ordinary decoder accepts only that version. A payload that omits the field
+or declares version 3 is returned as `AuditEventDecodeError::LegacyPayload` and
+must go through an application-owned legacy decoder; an unknown version is
+returned as `UnknownPayloadVersion`. The decoder also preserves the historical
+outer-id rejection for `keepsake-outbox-N` and `keepsake-audit-legacy-N`, so a
+changed timestamp or field shape cannot silently reinterpret legacy data.
+
 ## Reading history and publishing
 
 Keepsake leaves SQL history, delivery state, and claim operations to Dovecote.

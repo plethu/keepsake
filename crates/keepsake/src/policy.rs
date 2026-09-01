@@ -1,10 +1,10 @@
 //! Expiry and fulfillment policy types.
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
+use time::OffsetDateTime;
 
 use crate::error::{KeepsakeError, Result};
-use crate::model::FulfillmentSnapshot;
+use crate::model::{FulfillmentSnapshot, validate_persisted_identifier};
 
 /// Expiry policy for a keepsake.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -15,7 +15,8 @@ pub enum ExpiryPolicy {
     /// Expires at a fixed timestamp.
     At {
         /// Due timestamp.
-        timestamp: DateTime<Utc>,
+        #[serde(with = "time::serde::rfc3339")]
+        timestamp: OffsetDateTime,
     },
     /// Expires when the referenced fulfillment policy becomes true.
     WhenFulfilled {
@@ -33,8 +34,13 @@ impl<'de> Deserialize<'de> for ExpiryPolicy {
         #[serde(tag = "type", rename_all = "snake_case")]
         enum WireExpiryPolicy {
             ManualOnly,
-            At { timestamp: DateTime<Utc> },
-            WhenFulfilled { policy: FulfillmentPolicy },
+            At {
+                #[serde(with = "time::serde::rfc3339")]
+                timestamp: OffsetDateTime,
+            },
+            WhenFulfilled {
+                policy: FulfillmentPolicy,
+            },
         }
 
         let policy = match WireExpiryPolicy::deserialize(deserializer)? {
@@ -50,7 +56,7 @@ impl<'de> Deserialize<'de> for ExpiryPolicy {
 impl ExpiryPolicy {
     /// Returns the timed expiry instant, when this policy is time-based.
     #[must_use]
-    pub const fn timed_expiry(&self) -> Option<DateTime<Utc>> {
+    pub const fn timed_expiry(&self) -> Option<OffsetDateTime> {
         match self {
             Self::ManualOnly | Self::WhenFulfilled { .. } => None,
             Self::At { timestamp } => Some(*timestamp),
@@ -58,7 +64,7 @@ impl ExpiryPolicy {
     }
 
     /// Validates the policy.
-    pub const fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         match self {
             Self::ManualOnly | Self::At { .. } => Ok(()),
             Self::WhenFulfilled { policy } => policy.validate(),
@@ -111,12 +117,17 @@ impl<'de> Deserialize<'de> for FulfillmentPolicy {
 
 impl FulfillmentPolicy {
     /// Validates the policy.
-    pub const fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         match self {
             Self::CounterAtLeast { threshold, .. } if *threshold <= 0 => {
                 Err(KeepsakeError::InvalidFulfillmentThreshold)
             }
-            Self::CounterAtLeast { .. } | Self::ChecklistComplete { .. } => Ok(()),
+            Self::CounterAtLeast { key, .. } => {
+                validate_persisted_identifier("fulfillment.key", key)
+            }
+            Self::ChecklistComplete { list_key } => {
+                validate_persisted_identifier("fulfillment.list_key", list_key)
+            }
         }
     }
 

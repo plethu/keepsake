@@ -1,6 +1,6 @@
-use chrono::{DateTime, Utc};
 #[cfg(any(feature = "postgres", feature = "sqlite", feature = "mysql"))]
 use keepsake::{RelationDefinition, RelationId, RelationSpec};
+use time::OffsetDateTime;
 #[cfg(all(
     any(feature = "postgres", feature = "sqlite", feature = "mysql"),
     feature = "fulfillment-counters"
@@ -27,7 +27,7 @@ where
     B: KeepsakeSqlxBackend,
 {
     pub(super) repository: &'tenant TenantSqlxKeepsakeRepository<'root, B, C>,
-    pub(super) at: DateTime<Utc>,
+    pub(super) at: OffsetDateTime,
 }
 
 /// Default Postgres timestamp-scoped view over one tenant.
@@ -57,7 +57,7 @@ where
 
     /// Returns the timestamp applied by forwarding methods.
     #[must_use]
-    pub const fn timestamp(&self) -> DateTime<Utc> {
+    pub const fn timestamp(&self) -> OffsetDateTime {
         self.at
     }
 }

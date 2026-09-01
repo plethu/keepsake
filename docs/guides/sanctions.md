@@ -8,8 +8,8 @@ Timed sanctions should derive their expiry from the operation timestamp passed
 into Keepsake. Do not read the clock inside the policy definition.
 
 ```rust
-use chrono::Duration;
 use keepsake::ExpiryPolicy;
+use time::{Duration, OffsetDateTime};
 
 keepsake::relation_spec! {
     struct Mute24hSanction {
@@ -28,7 +28,7 @@ apply:
 ```rust
 use keepsake::{ActorRef, ApplyKeepsake, CommandContext};
 
-let now = chrono::Utc::now();
+let now = OffsetDateTime::now_utc();
 let timed_repo = repo.at(now);
 
 timed_repo.upsert_relation_spec::<Mute24hSanction>().await?;

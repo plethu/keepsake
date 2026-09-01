@@ -131,3 +131,52 @@ async fn sqlite_exact_replay_is_idempotent_and_changed_content_conflicts() -> Te
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn sqlite_replay_rejects_payload_tenant_mismatch() -> TestResult<()> {
+    let (repo, pool) = SqliteHarness::repo().await?;
+    let relation = upsert_relation::<SqliteHarness>(&repo, ExpiryPolicy::ManualOnly).await?;
+    let id = AuditEventId::deterministic(b"sqlite-tenant-mismatch");
+    let command = ApplyKeepsake::new(
+        SqliteHarness::tenant(),
+        SubjectRef::new("account", "sqlite_tenant_mismatch")?,
+        relation.id,
+        ts("2026-01-01T00:01:00Z")?,
+        CommandContext::new(ActorRef::new("test", "worker")?),
+    )
+    .with_audit_id(id);
+    repo.apply(&command).await?;
+
+    let event_id = format!("keepsake-audit-{}", id.as_uuid());
+    let payload = sqlx::query_scalar::<_, Vec<u8>>(
+        "select data from dovecote_events where tenant_id = ? and source = ? and event_id = ?",
+    )
+    .bind(SqliteHarness::tenant().as_str())
+    .bind("https://tests.invalid/keepsake/sqlite")
+    .bind(&event_id)
+    .fetch_one(&pool)
+    .await?;
+    let mut payload: serde_json::Value = serde_json::from_slice(&payload)?;
+    payload["tenant_id"] = serde_json::Value::String("tenant-other".to_owned());
+    sqlx::query(
+        "update dovecote_events set data = ? where tenant_id = ? and source = ? and event_id = ?",
+    )
+    .bind(serde_json::to_vec(&payload)?)
+    .bind(SqliteHarness::tenant().as_str())
+    .bind("https://tests.invalid/keepsake/sqlite")
+    .bind(event_id)
+    .execute(&pool)
+    .await?;
+
+    let result = repo.apply(&command).await;
+    assert!(matches!(
+        result,
+        Err(keepsake_sqlx::RepositoryError::AuditPayload(
+            keepsake_sqlx::AuditEventDecodeError::TenantMismatch {
+                storage_tenant,
+                payload_tenant,
+            }
+        )) if storage_tenant == "sqlite-test-tenant" && payload_tenant == "tenant-other"
+    ));
+    Ok(())
+}

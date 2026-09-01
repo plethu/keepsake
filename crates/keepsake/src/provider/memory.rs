@@ -3,7 +3,7 @@ use std::future::{Future, ready};
 use std::marker::PhantomData;
 use std::sync::{Arc, RwLock};
 
-use chrono::{DateTime, Utc};
+use time::OffsetDateTime;
 
 use crate::command::{ApplyKeepsake, RevokeKeepsake};
 use crate::error::KeepsakeError;
@@ -104,7 +104,7 @@ pub struct ActiveRelationSeed<Spec> {
     tenant_id: TenantId,
     keepsake_id: KeepsakeId,
     subject: SubjectRef,
-    active_at: DateTime<Utc>,
+    active_at: OffsetDateTime,
     metadata: BTreeMap<String, String>,
     _spec: PhantomData<fn() -> Spec>,
 }
@@ -119,7 +119,7 @@ where
         tenant_id: TenantId,
         keepsake_id: KeepsakeId,
         subject: SubjectRef,
-        active_at: DateTime<Utc>,
+        active_at: OffsetDateTime,
     ) -> Self {
         Self {
             tenant_id,
@@ -137,7 +137,7 @@ where
         tenant_id: TenantId,
         instance_id: u128,
         subject: SubjectRef,
-        active_at: DateTime<Utc>,
+        active_at: OffsetDateTime,
     ) -> Self {
         Self::new(
             tenant_id,
@@ -215,7 +215,7 @@ impl InMemoryActiveRelations {
         tenant_id: TenantId,
         instance_id: u128,
         subject: SubjectRef,
-        active_at: DateTime<Utc>,
+        active_at: OffsetDateTime,
     ) -> ProviderResult<(), InMemoryActiveRelationsError>
     where
         Spec: RelationSpec,
@@ -245,7 +245,7 @@ impl InMemoryActiveRelations {
         tenant_id: TenantId,
         keepsake_id: KeepsakeId,
         subject: SubjectRef,
-        applied_at: DateTime<Utc>,
+        applied_at: OffsetDateTime,
         metadata: BTreeMap<String, String>,
     ) -> ProviderResult<(), InMemoryActiveRelationsError>
     where
@@ -584,7 +584,7 @@ mod tests {
     #[derive(Debug, thiserror::Error)]
     enum TestError {
         #[error(transparent)]
-        Chrono(#[from] chrono::ParseError),
+        Time(#[from] time::error::Parse),
 
         #[error(transparent)]
         InMemory(#[from] InMemoryActiveRelationsError),
@@ -605,7 +605,7 @@ mod tests {
         const ID: RelationId = Uuid::from_u128(1);
         const KEY: StaticRelationKey = StaticRelationKey::new("tag", "trusted");
 
-        fn expiry(_at: DateTime<Utc>) -> ExpiryPolicy {
+        fn expiry(_at: OffsetDateTime) -> ExpiryPolicy {
             ExpiryPolicy::ManualOnly
         }
     }
@@ -616,13 +616,13 @@ mod tests {
         const ID: RelationId = Uuid::from_u128(2);
         const KEY: StaticRelationKey = StaticRelationKey::new("tag", "admin");
 
-        fn expiry(_at: DateTime<Utc>) -> ExpiryPolicy {
+        fn expiry(_at: OffsetDateTime) -> ExpiryPolicy {
             ExpiryPolicy::ManualOnly
         }
     }
 
-    fn ts(value: &str) -> core::result::Result<DateTime<Utc>, chrono::ParseError> {
-        DateTime::parse_from_rfc3339(value).map(|timestamp| timestamp.with_timezone(&Utc))
+    fn ts(value: &str) -> core::result::Result<OffsetDateTime, time::error::Parse> {
+        OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
     }
 
     fn context() -> crate::Result<crate::CommandContext> {
@@ -639,7 +639,7 @@ mod tests {
         id: KeepsakeId,
         subject: SubjectRef,
         relation_id: RelationId,
-        at: DateTime<Utc>,
+        at: OffsetDateTime,
     ) -> crate::Result<ApplyKeepsake> {
         let mut command = ApplyKeepsake::new(tenant()?, subject, relation_id, at, context()?);
         command.id = id;

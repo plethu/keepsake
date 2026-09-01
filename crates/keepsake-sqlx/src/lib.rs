@@ -6,7 +6,7 @@
 //! This crate provides Postgres, `SQLite`, and `MySQL` repositories for durable
 //! keepsake lifecycle state, relation reads, and expiry workers.
 //!
-//! Keepsake 3.0 stores each lifecycle audit occurrence as one validated
+//! Keepsake 4.0 stores each lifecycle audit occurrence as one validated
 //! Dovecote event in the same caller transaction as the domain mutation. The
 //! repository owns relation state; Dovecote owns the immutable event and
 //! delivery records. Publication workers and transport clients stay outside
@@ -24,7 +24,7 @@
 //! explicit [`SqlxKeepsakeRepository::upgrade_migrate`] path is only for
 //! installations carrying the historical 1.x audit tables. Call
 //! `activate_upgrade` only after complete-history reconciliation; until then
-//! the 3.0 schema check remains blocked. Legacy tables stay inert for rollback.
+//! the 4.0 schema check remains blocked. Legacy tables stay inert for rollback.
 
 mod repository;
 

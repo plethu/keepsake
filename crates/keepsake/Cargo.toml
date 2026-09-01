@@ -1,6 +1,6 @@
 [package]
 name = "keepsake"
-version = "3.0.1"
+version = "4.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -18,7 +18,7 @@ default = []
 test = []
 
 [dependencies]
-chrono.workspace = true
+time.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 uuid.workspace = true

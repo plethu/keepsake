@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Utc};
 use keepsake::{
     ActiveRelation, ExpiryPolicy, Keepsake, KeepsakeRecord, RelationDefinition, RelationKey,
     SubjectRef, TenantId,
 };
 use sqlx::FromRow;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use super::RepositoryResult;
@@ -45,10 +45,10 @@ pub(super) struct AppliedKeepsakeRow {
     relation_id: Uuid,
     state: String,
     expiry_policy: serde_json::Value,
-    applied_at: DateTime<Utc>,
-    expires_at: Option<DateTime<Utc>>,
-    fulfilled_at: Option<DateTime<Utc>>,
-    revoked_at: Option<DateTime<Utc>>,
+    applied_at: OffsetDateTime,
+    expires_at: Option<OffsetDateTime>,
+    fulfilled_at: Option<OffsetDateTime>,
+    revoked_at: Option<OffsetDateTime>,
     metadata: serde_json::Value,
 }
 
@@ -80,10 +80,10 @@ pub(super) struct AppliedKeepsakeWriteRow {
     relation_id: Uuid,
     state: String,
     expiry_policy: serde_json::Value,
-    applied_at: DateTime<Utc>,
-    expires_at: Option<DateTime<Utc>>,
-    fulfilled_at: Option<DateTime<Utc>>,
-    revoked_at: Option<DateTime<Utc>>,
+    applied_at: OffsetDateTime,
+    expires_at: Option<OffsetDateTime>,
+    fulfilled_at: Option<OffsetDateTime>,
+    revoked_at: Option<OffsetDateTime>,
     metadata: serde_json::Value,
     pub(super) duplicate_prevented: bool,
 }
@@ -118,10 +118,10 @@ pub(super) struct ActiveRelationRow {
     relation_id: Uuid,
     state: String,
     expiry_policy: serde_json::Value,
-    applied_at: DateTime<Utc>,
-    expires_at: Option<DateTime<Utc>>,
-    fulfilled_at: Option<DateTime<Utc>>,
-    revoked_at: Option<DateTime<Utc>>,
+    applied_at: OffsetDateTime,
+    expires_at: Option<OffsetDateTime>,
+    fulfilled_at: Option<OffsetDateTime>,
+    revoked_at: Option<OffsetDateTime>,
     metadata: serde_json::Value,
     relation_definition_id: Uuid,
     relation_kind: String,
@@ -168,10 +168,10 @@ struct KeepsakeRow {
     relation_id: Uuid,
     state: String,
     expiry_policy: serde_json::Value,
-    applied_at: DateTime<Utc>,
-    expires_at: Option<DateTime<Utc>>,
-    fulfilled_at: Option<DateTime<Utc>>,
-    revoked_at: Option<DateTime<Utc>>,
+    applied_at: OffsetDateTime,
+    expires_at: Option<OffsetDateTime>,
+    fulfilled_at: Option<OffsetDateTime>,
+    revoked_at: Option<OffsetDateTime>,
     metadata: serde_json::Value,
 }
 

@@ -1,6 +1,5 @@
 #![allow(missing_docs)]
 
-use chrono::{DateTime, Utc};
 use keepsake::{
     ActorRef, ApplyKeepsake, AuditEventId, CommandContext, ExpiryPolicy, RelationDefinition,
     RelationKey, SubjectRef, TenantId,
@@ -8,6 +7,7 @@ use keepsake::{
 use keepsake_sqlx::{DovecoteAuditConfig, SqliteKeepsakeRepository};
 use sqlx::Row;
 use sqlx::sqlite::SqlitePoolOptions;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 async fn repository()
@@ -32,8 +32,8 @@ async fn pool() -> Result<sqlx::SqlitePool, sqlx::Error> {
         .await
 }
 
-fn timestamp(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
-    DateTime::parse_from_rfc3339(value).map(|value| value.with_timezone(&Utc))
+fn timestamp(value: &str) -> Result<OffsetDateTime, time::error::Parse> {
+    OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
 }
 
 fn tenant() -> TenantId {
@@ -257,7 +257,7 @@ async fn upgrade_track_activates_clean_schema_marker() -> Result<(), Box<dyn std
     assert!(repository.activate_upgrade().await.is_err());
     seed_importer_evidence(&pool, 0, 0).await?;
     repository.activate_upgrade().await?;
-    repository.check_schema().await?;
+    assert!(repository.check_schema().await.is_err());
     let track = sqlx::query_scalar::<_, String>(
         "select value from keepsake_schema_metadata where key = 'api_track'",
     )
@@ -360,7 +360,7 @@ async fn tenant_upgrade_requires_mapping_and_activates_v3_schema()
     sqlx::raw_sql(dovecote_sqlx_sqlite::MIGRATIONS[0].sql())
         .execute(&pool)
         .await?;
-    repository.check_schema().await?;
+    assert!(repository.check_schema().await.is_err());
     assert_eq!(
         sqlx::query_scalar::<_, String>(
             "select value from keepsake_schema_metadata where key = 'api_track'",
@@ -470,7 +470,7 @@ async fn tenant_upgrade_activation_rolls_back_populated_v2_on_validation_failure
     sqlx::raw_sql(dovecote_sqlx_sqlite::MIGRATIONS[0].sql())
         .execute(&pool)
         .await?;
-    repository.check_schema().await?;
+    assert!(repository.check_schema().await.is_err());
     Ok(())
 }
 

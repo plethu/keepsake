@@ -51,8 +51,18 @@ also enforced by the SQL schema:
 policy timestamp as the expiry timestamp. Fulfillment expiry uses `fulfilled_at`
 as the expiry timestamp.
 
+## Time representation
+
+Keepsake 4.0 uses `time::OffsetDateTime` in its public API and serde wire
+records. Wire timestamps use RFC3339. SQLx persistence canonicalizes every
+timestamp to UTC microsecond precision before writing, and Dovecote audit event
+times use the same canonical instant. This makes retries and cross-backend
+comparisons deterministic without changing the human-readable wire format.
+
 ## Subject Validation
 
 `SubjectRef`, `ActorRef`, relation kinds, and relation names reject empty or
 whitespace-only identifiers. Repository apply paths validate the subject before
-starting lifecycle writes. Invalid subjects fail without a persisted row.
+starting lifecycle writes. Invalid subjects fail without a persisted row. See
+the [portable identifier contract](core-concepts.md#persisted-textual-identifiers)
+for the byte limit, edge-whitespace rule, and case/Unicode semantics.

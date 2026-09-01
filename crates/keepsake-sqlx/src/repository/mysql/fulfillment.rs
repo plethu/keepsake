@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Utc};
 use keepsake::FulfillmentSnapshot;
 use sqlx::{MySql, Row, Transaction};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::repository::{
@@ -21,8 +21,9 @@ where
         keepsake_id: Uuid,
         key: &str,
         value: i64,
-        observed_at: DateTime<Utc>,
+        observed_at: OffsetDateTime,
     ) -> RepositoryResult<()> {
+        keepsake::validate_persisted_identifier("fulfillment.key", key)?;
         sqlx::query(
             r"
             insert into keepsake_fulfillment_counters
@@ -49,8 +50,9 @@ where
         keepsake_id: Uuid,
         key: &str,
         delta: i64,
-        observed_at: DateTime<Utc>,
+        observed_at: OffsetDateTime,
     ) -> RepositoryResult<i64> {
+        keepsake::validate_persisted_identifier("fulfillment.key", key)?;
         let mut tx = self.pool.begin().await?;
         sqlx::query(
             r"
@@ -92,8 +94,9 @@ where
         keepsake_id: Uuid,
         item: &str,
         complete: bool,
-        observed_at: DateTime<Utc>,
+        observed_at: OffsetDateTime,
     ) -> RepositoryResult<()> {
+        keepsake::validate_persisted_identifier("fulfillment.item", item)?;
         sqlx::query(
             r"
             insert into keepsake_fulfillment_checklist

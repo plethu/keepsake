@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use time::OffsetDateTime;
 
 use crate::error::{KeepsakeError, Result};
 use crate::policy::ExpiryPolicy;
@@ -27,13 +27,17 @@ pub struct KeepsakeRecord {
     /// Policy copied at apply time for deterministic replay.
     pub expiry: ExpiryPolicy,
     /// Timestamp when the keepsake was applied.
-    pub applied_at: DateTime<Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub applied_at: OffsetDateTime,
     /// Denormalized timed expiry instant for efficient scans.
-    pub expires_at: Option<DateTime<Utc>>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub expires_at: Option<OffsetDateTime>,
     /// Timestamp when a fulfillment condition was observed as satisfied.
-    pub fulfilled_at: Option<DateTime<Utc>>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub fulfilled_at: Option<OffsetDateTime>,
     /// Timestamp when the keepsake was revoked.
-    pub revoked_at: Option<DateTime<Utc>>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub revoked_at: Option<OffsetDateTime>,
     /// Application metadata kept opaque by Keepsake.
     pub metadata: BTreeMap<String, String>,
 }

@@ -12,8 +12,9 @@ Runs Keepsake's canonical local project gates:
   3. cargo clippy --workspace --all-targets --all-features -- -D warnings
   4. keepsake-sqlx feature-matrix clippy checks
   5. cargo test -p keepsake-sqlx --no-default-features --offline
-  6. cargo deny advisory, ban, license, and source checks
-  7. cargo test --workspace --all-features
+  6. cargo test -p keepsake-sqlx --features sqlite-tests --test sqlite
+  7. cargo deny advisory, ban, license, and source checks
+  8. cargo test --workspace --all-features
 EOF
 }
 
@@ -92,6 +93,13 @@ echo "== keepsake-sqlx no-feature test build =="
 (
   cd "$repo_root"
   cargo test -p keepsake-sqlx --no-default-features --offline
+)
+
+echo
+echo "== keepsake-sqlx SQLite integration contract tests =="
+(
+  cd "$repo_root"
+  cargo test -p keepsake-sqlx --features sqlite-tests --test sqlite
 )
 
 echo

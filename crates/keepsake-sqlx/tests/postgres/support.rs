@@ -2,7 +2,6 @@ pub use std::collections::BTreeMap;
 #[cfg(feature = "cache")]
 pub use std::time::Duration;
 
-pub use chrono::{DateTime, Utc};
 pub use keepsake::{
     ActiveRelationSource, ActorRef, ApplyKeepsake, CommandContext, DynActiveRelationSource,
     ExpiryPolicy, FulfillmentPolicy, FulfillmentSnapshot, LifecycleState, RelationDefinition,
@@ -15,6 +14,7 @@ pub use keepsake_sqlx::{
     KeepsakeRepository, MembershipCursor, RelationCache, RepositoryError, TenantKeepsakeRepository,
 };
 pub use sqlx::{PgPool, Postgres, Transaction, postgres::PgPoolOptions};
+pub use time::OffsetDateTime;
 pub use uuid::Uuid;
 
 #[path = "support/db.rs"]
@@ -28,7 +28,7 @@ impl RelationSpec for TrustedAccountTag {
     const ID: RelationId = Uuid::from_u128(0x018f_0000_0000_7000_8000_0000_0000_0101);
     const KEY: StaticRelationKey = StaticRelationKey::new("tag", "trusted_account");
 
-    fn expiry(_at: DateTime<Utc>) -> ExpiryPolicy {
+    fn expiry(_at: OffsetDateTime) -> ExpiryPolicy {
         ExpiryPolicy::ManualOnly
     }
 }
@@ -39,13 +39,13 @@ impl RelationSpec for ConflictingTrustedAccountTag {
     const ID: RelationId = Uuid::from_u128(0x018f_0000_0000_7000_8000_0000_0000_0102);
     const KEY: StaticRelationKey = StaticRelationKey::new("tag", "trusted_account");
 
-    fn expiry(_at: DateTime<Utc>) -> ExpiryPolicy {
+    fn expiry(_at: OffsetDateTime) -> ExpiryPolicy {
         ExpiryPolicy::ManualOnly
     }
 }
 
-pub fn ts(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
-    DateTime::parse_from_rfc3339(value).map(|timestamp| timestamp.with_timezone(&Utc))
+pub fn ts(value: &str) -> Result<OffsetDateTime, time::error::Parse> {
+    OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
 }
 
 pub type TestResult<T> = core::result::Result<T, TestError>;
@@ -53,7 +53,7 @@ pub type TestResult<T> = core::result::Result<T, TestError>;
 #[derive(Debug, thiserror::Error)]
 pub enum TestError {
     #[error(transparent)]
-    Chrono(#[from] chrono::ParseError),
+    Time(#[from] time::error::Parse),
 
     #[error(transparent)]
     Env(#[from] std::env::VarError),
@@ -184,7 +184,7 @@ pub fn spawn_apply(
     tenant_id: TenantId,
     subject: SubjectRef,
     relation_id: Uuid,
-    applied_at: DateTime<Utc>,
+    applied_at: OffsetDateTime,
 ) -> tokio::task::JoinHandle<Result<keepsake_sqlx::AppliedKeepsake, keepsake_sqlx::RepositoryError>>
 {
     tokio::spawn(async move {
@@ -202,7 +202,7 @@ pub fn spawn_apply(
 pub fn spawn_expire_due(
     repo: KeepsakeRepository,
     tenant_id: TenantId,
-    due_at: DateTime<Utc>,
+    due_at: OffsetDateTime,
 ) -> tokio::task::JoinHandle<Result<u64, keepsake_sqlx::RepositoryError>> {
     tokio::spawn(async move { repo.for_tenant(tenant_id).expire_due_timed(due_at, 2).await })
 }

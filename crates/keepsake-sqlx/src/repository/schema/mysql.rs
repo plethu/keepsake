@@ -1,9 +1,14 @@
 //! `MySQL` and `MariaDB` schema verification.
 
+#[cfg(feature = "migrations")]
 use super::{
-    MYSQL_CLEAN_ARTIFACT, MYSQL_UPGRADE_ARTIFACT, MYSQL_V3_CLEAN_ARTIFACT, RepositoryError,
-    RepositoryResult, artifact_check_expression, compact_sql, default_sql, mismatch,
-    mysql_catalog_check_matches, normalize_check_expression, normalize_mysql_generated_expression,
+    IDENTIFIER_SCAN_BATCH_SIZE, MYSQL_CLEAN_ARTIFACT, MYSQL_UPGRADE_ARTIFACT,
+    PERSISTED_IDENTIFIERS, validate_persisted_identifier_bytes,
+};
+use super::{
+    MYSQL_V3_CLEAN_ARTIFACT, RepositoryError, RepositoryResult, artifact_check_expression,
+    compact_sql, default_sql, mismatch, mysql_catalog_check_matches, normalize_check_expression,
+    normalize_mysql_generated_expression,
 };
 use crate::repository::backend::KeepsakeSqlxBackend;
 
@@ -354,6 +359,46 @@ const MYSQL_V3_TENANT_COLUMNS: &[MySqlColumn<'_>] = &[
 ];
 
 #[cfg(feature = "mysql")]
+const MYSQL_V4_TENANT_COLUMNS: &[MySqlColumn<'_>] = &[
+    MySqlColumn {
+        table: "keepsake_relation_definitions",
+        name: "tenant_id",
+        column_type: "varchar(191)",
+        nullable: false,
+        default: None,
+        auto_increment: false,
+        generated: None,
+    },
+    MySqlColumn {
+        table: "keepsakes",
+        name: "tenant_id",
+        column_type: "varchar(191)",
+        nullable: false,
+        default: None,
+        auto_increment: false,
+        generated: None,
+    },
+    MySqlColumn {
+        table: "keepsake_fulfillment_counters",
+        name: "tenant_id",
+        column_type: "varchar(191)",
+        nullable: false,
+        default: None,
+        auto_increment: false,
+        generated: None,
+    },
+    MySqlColumn {
+        table: "keepsake_fulfillment_checklist",
+        name: "tenant_id",
+        column_type: "varchar(191)",
+        nullable: false,
+        default: None,
+        auto_increment: false,
+        generated: None,
+    },
+];
+
+#[cfg(feature = "mysql")]
 fn mysql_v3_clean_columns() -> Vec<MySqlColumn<'static>> {
     // MariaDB does not permit a conditional generated expression to read a
     // CHAR column. The v3 baseline therefore uses VARCHAR for UUID text
@@ -371,7 +416,7 @@ fn mysql_v3_clean_columns() -> Vec<MySqlColumn<'static>> {
         .collect()
 }
 
-#[cfg(feature = "mysql")]
+#[cfg(all(feature = "mysql", feature = "migrations"))]
 const MYSQL_LEGACY_COLUMNS: &[MySqlColumn<'_>] = &[
     MySqlColumn {
         table: "keepsake_audit_events",
@@ -618,7 +663,7 @@ fn mysql_catalog_type_matches(actual: &str, expected: &str) -> bool {
     actual == expected
 }
 
-#[cfg(feature = "mysql")]
+#[cfg(all(feature = "mysql", feature = "migrations"))]
 fn mysql_expected_check_expression(activated_upgrade: bool, name: &str) -> Option<String> {
     let artifact = if activated_upgrade {
         MYSQL_UPGRADE_ARTIFACT
@@ -727,7 +772,7 @@ async fn mysql_columns_check<'a>(
     Ok(json_longtext_columns)
 }
 
-#[cfg(feature = "mysql")]
+#[cfg(all(feature = "mysql", feature = "migrations"))]
 #[allow(clippy::too_many_lines)]
 async fn mysql_catalog_shape_check(
     pool: &sqlx::MySqlPool,
@@ -801,7 +846,7 @@ async fn mysql_catalog_shape_check(
     Ok(())
 }
 
-#[cfg(feature = "mysql")]
+#[cfg(all(feature = "mysql", feature = "migrations"))]
 #[allow(clippy::too_many_lines)]
 async fn mysql_constraints_check(
     pool: &sqlx::MySqlPool,
@@ -1149,7 +1194,7 @@ async fn mysql_constraints_check(
     Ok(())
 }
 
-#[cfg(feature = "mysql")]
+#[cfg(all(feature = "mysql", feature = "migrations"))]
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::excessive_nesting)]
 async fn mysql_indexes_check(
@@ -1336,7 +1381,10 @@ pub(in crate::repository) async fn mysql_upgrade_schema_check(
 
 #[cfg(feature = "mysql")]
 #[allow(clippy::too_many_lines)]
-async fn mysql_v3_domain_shape_check(pool: &sqlx::MySqlPool) -> RepositoryResult<()> {
+async fn mysql_v3_domain_shape_check(
+    pool: &sqlx::MySqlPool,
+    identifier_contract: bool,
+) -> RepositoryResult<()> {
     let expected_tables = [
         "keepsake_schema_metadata",
         "keepsake_relation_definitions",
@@ -1345,9 +1393,14 @@ async fn mysql_v3_domain_shape_check(pool: &sqlx::MySqlPool) -> RepositoryResult
         "keepsake_fulfillment_checklist",
     ];
     let v3_clean_columns = mysql_v3_clean_columns();
+    let tenant_columns = if identifier_contract {
+        MYSQL_V4_TENANT_COLUMNS
+    } else {
+        MYSQL_V3_TENANT_COLUMNS
+    };
     let expected: Vec<MySqlColumn<'_>> = v3_clean_columns
         .iter()
-        .chain(MYSQL_V3_TENANT_COLUMNS.iter())
+        .chain(tenant_columns.iter())
         .copied()
         .collect();
     let json_longtext_columns = mysql_columns_check(pool, &expected).await?;
@@ -1377,8 +1430,13 @@ async fn mysql_v3_domain_shape_check(pool: &sqlx::MySqlPool) -> RepositoryResult
         pool,
         &json_longtext_columns,
         server_version.to_ascii_lowercase().contains("mariadb"),
+        identifier_contract,
     )
     .await?;
+
+    if identifier_contract {
+        mysql_v4_identifier_collation_check(pool).await?;
+    }
 
     let tenant_columns = sqlx::query_scalar::<_, i64>(
         "select count(*) from information_schema.columns where table_schema = database() and column_name = 'tenant_id' and is_nullable = 'NO' and table_name in (?,?,?,?)",
@@ -1413,6 +1471,125 @@ async fn mysql_v3_domain_shape_check(pool: &sqlx::MySqlPool) -> RepositoryResult
     }
 
     Ok(())
+}
+
+#[cfg(feature = "mysql")]
+async fn mysql_v4_identifier_collation_check(pool: &sqlx::MySqlPool) -> RepositoryResult<()> {
+    let expected = [
+        ("keepsake_relation_definitions", "kind"),
+        ("keepsake_relation_definitions", "key"),
+        ("keepsake_relation_definitions", "tenant_id"),
+        ("keepsakes", "tenant_id"),
+        ("keepsakes", "subject_kind"),
+        ("keepsakes", "subject_id"),
+        ("keepsake_fulfillment_counters", "tenant_id"),
+        ("keepsake_fulfillment_counters", "key"),
+        ("keepsake_fulfillment_checklist", "tenant_id"),
+        ("keepsake_fulfillment_checklist", "item"),
+    ];
+    for (table, column) in expected {
+        let (character_set, collation) = sqlx::query_as::<_, (Option<String>, Option<String>)>(
+            "select character_set_name, collation_name from information_schema.columns where table_schema = database() and table_name = ? and column_name = ?",
+        )
+        .bind(table)
+        .bind(column)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| mismatch(format!("missing column {table}.{column}")))?;
+        if character_set.as_deref() != Some("utf8mb4")
+            || collation.as_deref() != Some("utf8mb4_bin")
+        {
+            return Err(mismatch(format!(
+                "column {table}.{column} lacks explicit utf8mb4_bin collation"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(all(feature = "mysql", feature = "migrations"))]
+async fn mysql_v4_identifier_preflight(pool: &sqlx::MySqlPool) -> RepositoryResult<()> {
+    // The v4 ALTER changes the v3 tenant VARBINARY(255) columns to textual
+    // utf8mb4 columns and adds <=191-byte checks. Read the original bytes
+    // before that conversion and apply the exact Rust contract, including
+    // invalid UTF-8 and Unicode edge cases that SQL TRIM cannot express.
+    for identifier in PERSISTED_IDENTIFIERS {
+        mysql_scan_identifier(pool, *identifier).await?;
+    }
+    Ok(())
+}
+
+#[cfg(all(feature = "mysql", feature = "migrations"))]
+async fn mysql_scan_identifier(
+    pool: &sqlx::MySqlPool,
+    identifier: super::PersistedIdentifier,
+) -> RepositoryResult<()> {
+    use sqlx::Row;
+
+    let character_set = sqlx::query_scalar::<_, Option<String>>(
+        "select character_set_name from information_schema.columns where table_schema = database() and table_name = ? and column_name = ?",
+    )
+    .bind(identifier.table)
+    .bind(identifier.column)
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+    // v3 tenant_id is VARBINARY and therefore carries the original UTF-8
+    // bytes directly. The other identifier columns are VARCHAR; convert
+    // them using their declared source charset before validating UTF-8 so
+    // a latin1 v3 database is migrated according to MySQL's own ALTER
+    // conversion rather than being mistaken for corrupt UTF-8.
+    let value_expression = match character_set.as_deref() {
+        None | Some("binary") => format!("cast(`{}` as binary)", identifier.column),
+        Some(_) => format!(
+            "cast(convert(`{}` using utf8mb4) as binary)",
+            identifier.column
+        ),
+    };
+
+    let query = format!(
+        "select {value_expression} as __keepsake_value from `{}` order by {} limit {IDENTIFIER_SCAN_BATCH_SIZE} offset ?",
+        identifier.table,
+        mysql_identifier_order(identifier.table),
+    );
+    let mut offset: i64 = 0;
+
+    loop {
+        let rows = sqlx::query(sqlx::AssertSqlSafe(query.clone()))
+            .bind(offset)
+            .fetch_all(pool)
+            .await?;
+        if rows.is_empty() {
+            break;
+        }
+
+        for (row_number, row) in rows.into_iter().enumerate() {
+            let row_label = offset + i64::try_from(row_number).unwrap_or(i64::MAX) + 1;
+            let value: Option<Vec<u8>> = row.try_get("__keepsake_value")?;
+            let Some(value) = value else {
+                return Err(super::persisted_identifier_type_mismatch(
+                    identifier, row_label, "NULL",
+                ));
+            };
+
+            validate_persisted_identifier_bytes(identifier, row_label, &value)?;
+        }
+        offset = offset
+            .checked_add(IDENTIFIER_SCAN_BATCH_SIZE)
+            .ok_or_else(|| mismatch("identifier preflight row offset overflow"))?;
+    }
+
+    Ok(())
+}
+
+#[cfg(all(feature = "mysql", feature = "migrations"))]
+fn mysql_identifier_order(table: &str) -> &'static str {
+    match table {
+        "keepsake_relation_definitions" | "keepsakes" => "`tenant_id`, `id`",
+        "keepsake_fulfillment_counters" => "`tenant_id`, `keepsake_id`, `key`",
+        "keepsake_fulfillment_checklist" => "`tenant_id`, `keepsake_id`, `item`",
+        _ => unreachable!("identifier tables are static"),
+    }
 }
 
 #[cfg(feature = "mysql")]
@@ -1706,6 +1883,7 @@ async fn mysql_v3_constraints_check(
     pool: &sqlx::MySqlPool,
     json_longtext_columns: &[(&str, &str)],
     maria_db: bool,
+    identifier_contract: bool,
 ) -> RepositoryResult<()> {
     use sqlx::Row;
 
@@ -1773,8 +1951,15 @@ async fn mysql_v3_constraints_check(
             "octet_length(tenant_id)>0",
         ),
     ];
+    let identifier_checks = [
+        "keepsake_relation_definitions_identifier_contract",
+        "keepsakes_identifier_contract",
+        "keepsake_fulfillment_counter_identifier_contract",
+        "keepsake_fulfillment_checklist_identifier_contract",
+    ];
     let mut found_checks = std::collections::BTreeSet::new();
     let mut found_tenant_checks = std::collections::BTreeSet::new();
+    let mut found_identifier_checks = std::collections::BTreeSet::new();
     let mut found_json_checks = std::collections::BTreeSet::new();
     for row in checks {
         let table: String = row.try_get("table_name")?;
@@ -1815,6 +2000,23 @@ async fn mysql_v3_constraints_check(
             continue;
         }
 
+        if identifier_checks.contains(&name.as_str()) {
+            let normalized = normalize_check_expression(&clause);
+            let has_length = normalized.contains("octet_length") || normalized.contains("length");
+            if !identifier_contract
+                || !has_length
+                || !normalized.contains("<=191")
+                || !normalized.contains("trim")
+                || !normalized.contains("tenant_id")
+            {
+                return Err(mismatch(format!(
+                    "identifier CHECK constraint {table}.{name} definition differs"
+                )));
+            }
+            found_identifier_checks.insert(name.clone());
+            continue;
+        }
+
         let json_check = json_longtext_columns.iter().find(|(json_table, column)| {
             *json_table == table
                 && compact_sql(&clause) == format!("json_valid({})", column.to_ascii_lowercase())
@@ -1831,6 +2033,12 @@ async fn mysql_v3_constraints_check(
 
     if found_checks.len() != expected_checks.len()
         || found_tenant_checks.len() != tenant_checks.len()
+        || found_identifier_checks.len()
+            != if identifier_contract {
+                identifier_checks.len()
+            } else {
+                0
+            }
         || json_longtext_columns
             .iter()
             .any(|(table, column)| !found_json_checks.contains(&format!("{table}.{column}")))
@@ -1871,20 +2079,30 @@ pub(in crate::repository) async fn mysql_runtime_schema_check(
     .fetch_optional(pool)
     .await?
     .flatten();
-    if track.as_deref() == Some("3") {
-        mysql_v3_domain_shape_check(pool).await?;
+    if track.as_deref() == Some("4") {
+        mysql_v3_domain_shape_check(pool, true).await?;
         return Ok(());
     }
 
-    if track.as_deref() != Some("2") {
+    if track.as_deref() == Some("3") {
         return Err(RepositoryError::BackendMismatch {
-            expected: "2.0 active schema",
-            actual: "schema is not activated for the 2.0 API".to_owned(),
+            expected: "4.0 active schema",
+            actual: "schema is still on the 3.0 API track; run migrate to activate the 4.0 schema"
+                .to_owned(),
         });
     }
 
-    let has_legacy = sqlx::query_scalar::<_, i64>("select count(*) from information_schema.tables where table_schema = database() and table_name = 'keepsake_audit_events'").fetch_one(pool).await? != 0;
-    mysql_catalog_shape_check(pool, has_legacy).await
+    if track.as_deref() == Some("2") {
+        return Err(RepositoryError::BackendMismatch {
+            expected: "4.0 active schema",
+            actual: "schema is still on the 2.0 API track; run the explicit tenant upgrade route"
+                .to_owned(),
+        });
+    }
+    Err(RepositoryError::BackendMismatch {
+        expected: "4.0 active schema",
+        actual: "schema is not activated for the 4.0 API".to_owned(),
+    })
 }
 
 #[cfg(feature = "mysql")]
@@ -1904,7 +2122,11 @@ pub(in crate::repository) async fn mysql_clean_schema_preflight(
     .await?
     .flatten();
     match track.as_deref() {
-        Some("3") => mysql_v3_domain_shape_check(pool).await,
+        Some("4") => mysql_v3_domain_shape_check(pool, true).await,
+        Some("3") => {
+            mysql_v3_domain_shape_check(pool, false).await?;
+            mysql_v4_identifier_preflight(pool).await
+        }
         Some("2") => {
             let legacy = sqlx::query_scalar::<_, i64>("select count(*) from information_schema.tables where table_schema = database() and table_name = 'keepsake_audit_events'").fetch_one(pool).await? != 0;
             if legacy {

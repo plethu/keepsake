@@ -74,8 +74,9 @@ without repeating the timestamp argument:
 
 ```rust
 use keepsake::{ActorRef, ApplyKeepsake, CommandContext};
+use time::OffsetDateTime;
 
-let now = chrono::Utc::now();
+let now = OffsetDateTime::now_utc();
 let timed_repo = repo.at(now);
 
 timed_repo.upsert_relation_spec::<TrustedTag>().await?;
@@ -92,7 +93,7 @@ timed_repo.expire_due_timed(500).await?;
 
 ## Audit history and delivery
 
-Keepsake 3.0 does not expose `append_audit_event`, Keepsake audit repositories,
+Keepsake 4.0 does not expose `append_audit_event`, Keepsake audit repositories,
 outbox cursors, or claim/ack/release methods. Those APIs belonged to 1.x.
 
 For typed history, page Dovecote's live or snapshot stream with the selected
@@ -105,7 +106,12 @@ occurrence time before returning `keepsake::AuditEvent`.
 Migrated v1 identities (`keepsake-outbox-N` and `keepsake-audit-legacy-N`) are
 reported as a typed legacy error because their payloads may not contain the
 current event identity; handle those rows with application-specific legacy
-decoding.
+decoding. Current JSON payloads carry
+`schema_version: keepsake::AUDIT_PAYLOAD_SCHEMA_VERSION` (4). Payloads that
+omit the discriminator, or explicitly carry version 3, return
+`AuditEventDecodeError::LegacyPayload`; unknown versions return
+`UnknownPayloadVersion`. Do not route those payloads through the current
+decoder by relying on timestamp or field-shape changes.
 The Dovecote delivery snapshot is the only durable delivery state. Publication
 workers and transport clients remain application concerns; Dovecote provides
 the lease and token-fenced lifecycle operations. Consumers deduplicate

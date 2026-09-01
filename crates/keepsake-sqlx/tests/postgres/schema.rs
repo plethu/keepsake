@@ -38,7 +38,9 @@ async fn catalog_check_rejects_changed_column_index_and_constraint() -> TestResu
     .execute(&pool)
     .await?;
     assert!(repo.check_schema().await.is_err());
-    sqlx::query("alter table keepsakes alter column subject_id type text using subject_id::text")
+    sqlx::query(
+        "alter table keepsakes alter column subject_id type text collate \"C\" using subject_id::text",
+    )
         .execute(&pool)
         .await?;
     repo.check_schema().await?;
@@ -109,6 +111,67 @@ async fn upgrade_track_activates_after_importer_evidence() -> TestResult<()> {
     seed_importer_evidence(&pool, "https://tests.invalid/keepsake/postgres-upgrade").await?;
     repo.activate_upgrade().await?;
     assert!(repo.check_schema().await.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated PostgreSQL URL; run explicitly with --ignored --test-threads=1"]
+async fn postgres_v3_preflight_rejects_unicode_edge_whitespace() -> TestResult<()> {
+    let database_url = std::env::var("DATABASE_URL")?;
+    let pool = PgPool::connect(&database_url).await?;
+    reset_schema(&pool).await?;
+    sqlx::raw_sql(include_str!(
+        "../../migrations/v3/postgres/3000_clean_baseline.sql"
+    ))
+    .execute(&pool)
+    .await?;
+    let at = ts("2026-01-01T00:00:00Z")?;
+    sqlx::query(
+        "insert into keepsake_relation_definitions (tenant_id, id, kind, key, enabled, expiry_policy, created_at, updated_at) values ($1, $2, $3, $4, true, $5, $6, $6)",
+    )
+    .bind("tenant-a")
+    .bind(Uuid::from_u128(1))
+    .bind("\u{2003}tag")
+    .bind("migration-test")
+    .bind(serde_json::json!({"type": "manual_only"}))
+    .bind(at)
+    .execute(&pool)
+    .await?;
+
+    let repo = KeepsakeRepository::new(pool, "https://tests.invalid/keepsake/postgres-v4")?;
+    let result = repo.migrate().await;
+    assert!(result.is_err(), "invalid v3 row must block v4");
+    let Some(error) = result.err() else {
+        return Ok(());
+    };
+    assert!(
+        matches!(error, RepositoryError::BackendMismatch { ref actual, .. } if actual.contains("relation.kind") && actual.contains("leading or trailing whitespace")),
+        "{error}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated PostgreSQL URL; run explicitly with --ignored --test-threads=1"]
+async fn postgres_runtime_check_rejects_v3_track() -> TestResult<()> {
+    let database_url = std::env::var("DATABASE_URL")?;
+    let pool = PgPool::connect(&database_url).await?;
+    reset_schema(&pool).await?;
+    sqlx::raw_sql(include_str!(
+        "../../migrations/v3/postgres/3000_clean_baseline.sql"
+    ))
+    .execute(&pool)
+    .await?;
+    let repo = KeepsakeRepository::new(pool, "https://tests.invalid/keepsake/postgres-v4")?;
+
+    let result = repo.check_schema().await;
+    assert!(matches!(
+        result,
+        Err(RepositoryError::BackendMismatch {
+            expected: "4.0 active schema",
+            actual
+        }) if actual.contains("3.0 API track")
+    ));
     Ok(())
 }
 
@@ -207,7 +270,7 @@ async fn tenant_upgrade_activates_v3_schema_with_explicit_backfill() -> TestResu
     sqlx::raw_sql(dovecote_sqlx_postgres::MIGRATIONS[0].sql())
         .execute(&pool)
         .await?;
-    repo.check_schema().await?;
+    assert!(repo.check_schema().await.is_err());
 
     let scoped = repo.for_tenant(tenant.clone());
     assert_eq!(

@@ -1,5 +1,5 @@
-use chrono::{DateTime, Utc};
 use keepsake::{RelationDefinition, RelationId, RelationKey, RelationSpec};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use super::PostgresBackend;
@@ -19,11 +19,12 @@ where
     pub async fn upsert_relation(
         &self,
         relation: &RelationDefinition,
-        at: DateTime<Utc>,
+        at: OffsetDateTime,
     ) -> RepositoryResult<RelationDefinition> {
         if relation.tenant_id != self.tenant_id {
             return Err(RepositoryError::TenantScopeMismatch);
         }
+
         relation.validate()?;
         let relation = canonical_relation(relation);
         let at = canonical_timestamp(at);
@@ -53,6 +54,7 @@ where
                 });
             }
         }
+
         let row = sqlx::query_as::<_, RelationRow>(
             r"
             insert into keepsake_relation_definitions
@@ -85,7 +87,7 @@ where
     /// Inserts or updates a typed relation spec by its natural relation key.
     pub async fn upsert_relation_spec<Spec>(
         &self,
-        at: DateTime<Utc>,
+        at: OffsetDateTime,
     ) -> RepositoryResult<RelationDefinition>
     where
         Spec: RelationSpec,
@@ -191,7 +193,7 @@ where
         &self,
         relation_id: RelationId,
         enabled: bool,
-        at: DateTime<Utc>,
+        at: OffsetDateTime,
     ) -> RepositoryResult<bool> {
         let result = sqlx::query(
             r"

@@ -1,5 +1,5 @@
-use chrono::{DateTime, Utc};
 use keepsake::ExpiryCause;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 #[cfg(feature = "fulfillment-counters")]
@@ -18,7 +18,7 @@ where
     /// Lists due timed expiry candidates in stable batch order.
     pub async fn due_timed_expiry(
         &self,
-        now: DateTime<Utc>,
+        now: OffsetDateTime,
         limit: i64,
     ) -> RepositoryResult<Vec<TimedExpiryCandidate>> {
         let limit = validate_limit(limit)?;
@@ -44,7 +44,7 @@ where
         Ok(rows)
     }
     /// Expires a stable batch of due timed keepsakes.
-    pub async fn expire_due_timed(&self, now: DateTime<Utc>, limit: i64) -> RepositoryResult<u64> {
+    pub async fn expire_due_timed(&self, now: OffsetDateTime, limit: i64) -> RepositoryResult<u64> {
         let limit = validate_limit(limit)?;
         let mut tx = self.pool.begin().await?;
         let candidates = due_timed_expiry_tx(&mut tx, &self.tenant_id, now, limit).await?;
@@ -99,7 +99,7 @@ where
 async fn due_timed_expiry_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     tenant_id: &keepsake::TenantId,
-    now: DateTime<Utc>,
+    now: OffsetDateTime,
     limit: i64,
 ) -> RepositoryResult<Vec<TimedExpiryCandidate>> {
     let rows = sqlx::query_as::<_, TimedExpiryCandidate>(

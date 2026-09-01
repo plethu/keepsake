@@ -38,7 +38,7 @@ pub mod provider;
 
 #[doc(hidden)]
 pub mod __private {
-    pub use chrono::{DateTime, Utc};
+    pub use time::OffsetDateTime;
     pub use uuid::Uuid;
 }
 
@@ -68,7 +68,7 @@ macro_rules! relation_spec {
             const ENABLED: bool = $crate::relation_spec!(@enabled $($enabled)?);
 
             fn expiry(
-                $at: $crate::__private::DateTime<$crate::__private::Utc>,
+                $at: $crate::__private::OffsetDateTime,
             ) -> $crate::ExpiryPolicy {
                 $expiry
             }
@@ -83,7 +83,8 @@ macro_rules! relation_spec {
 }
 
 pub use audit::{
-    AuditContext, AuditDecision, AuditEvent, AuditEventId, AuditEventType, AuditSink, NoopAuditSink,
+    AUDIT_PAYLOAD_SCHEMA_VERSION, AuditContext, AuditDecision, AuditEvent, AuditEventId,
+    AuditEventType, AuditSink, NoopAuditSink,
 };
 #[cfg(any(test, feature = "test"))]
 pub use audit::{InMemoryAuditError, InMemoryAuditSink};
@@ -94,8 +95,9 @@ pub use evaluation::{
 };
 pub use model::{
     ActiveRelation, ActorRef, ExpiryCause, FulfillmentSnapshot, Keepsake, KeepsakeId,
-    KeepsakeLifecycle, KeepsakeRecord, LifecycleState, RelationDefinition, RelationId, RelationKey,
-    RelationKind, RelationName, RelationSpec, StaticRelationKey, SubjectRef, TenantId,
+    KeepsakeLifecycle, KeepsakeRecord, LifecycleState, MAX_PERSISTED_IDENTIFIER_BYTES,
+    RelationDefinition, RelationId, RelationKey, RelationKind, RelationName, RelationSpec,
+    StaticRelationKey, SubjectRef, TenantId, validate_persisted_identifier,
 };
 pub use observe::{
     MetricsRecorder, NoopMetricsRecorder, NoopTransitionObserver, TransitionObserver,

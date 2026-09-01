@@ -2,21 +2,25 @@
 
 use std::error::Error;
 
-use chrono::{DateTime, Utc};
 use keepsake::{
-    ActorRef, AuditContext, AuditDecision, AuditEvent, AuditEventId, AuditEventType, KeepsakeId,
-    RelationId, SubjectRef, TenantId,
+    AUDIT_PAYLOAD_SCHEMA_VERSION, ActorRef, AuditContext, AuditDecision, AuditEvent, AuditEventId,
+    AuditEventType, KeepsakeId, RelationId, SubjectRef, TenantId,
 };
 use keepsake_sqlx::{AuditEventDecodeError, DovecoteAuditConfig, decode_audit_event};
+use time::OffsetDateTime;
 
 type TestResult<T> = Result<T, Box<dyn Error>>;
 
 fn audit_event() -> TestResult<AuditEvent> {
     Ok(AuditEvent {
+        schema_version: AUDIT_PAYLOAD_SCHEMA_VERSION,
         tenant_id: TenantId::new("tenant-test")?,
         id: AuditEventId::from_uuid(uuid::Uuid::nil()),
         event_type: AuditEventType::Apply,
-        at: DateTime::parse_from_rfc3339("2023-11-14T22:13:20.123456Z")?.with_timezone(&Utc),
+        at: OffsetDateTime::parse(
+            "2023-11-14T22:13:20.123456Z",
+            &time::format_description::well_known::Rfc3339,
+        )?,
         actor: ActorRef::new("system", "test")?,
         keepsake_id: KeepsakeId::nil(),
         subject: SubjectRef::new("account", "acct-1")?,
@@ -29,8 +33,8 @@ fn audit_event() -> TestResult<AuditEvent> {
 }
 
 fn event_time(event: &AuditEvent) -> Result<time::OffsetDateTime, time::error::ComponentRange> {
-    time::OffsetDateTime::from_unix_timestamp(event.at.timestamp())?
-        .replace_nanosecond(event.at.timestamp_subsec_nanos())
+    time::OffsetDateTime::from_unix_timestamp(event.at.unix_timestamp())?
+        .replace_nanosecond(event.at.nanosecond())
 }
 
 fn stored_event(
@@ -95,6 +99,105 @@ fn decoder_projects_a_current_event() -> TestResult<()> {
     let paged = valid_paged(&config, &event)?;
 
     assert_eq!(decode_audit_event(&config, &paged)?, event);
+    Ok(())
+}
+
+#[test]
+fn decoder_requires_an_explicit_supported_payload_schema() -> TestResult<()> {
+    let config = DovecoteAuditConfig::new("https://tests.invalid/keepsake")?;
+    let event = audit_event()?;
+    let current = serde_json::to_value(&event)?;
+    assert_eq!(
+        current
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64),
+        Some(u64::from(AUDIT_PAYLOAD_SCHEMA_VERSION))
+    );
+
+    let current_page = valid_paged(&config, &event)?;
+    assert_eq!(decode_audit_event(&config, &current_page)?, event);
+
+    let mut explicit_v3 = current.clone();
+    explicit_v3["schema_version"] = serde_json::json!(3);
+    let stored = stored_event(
+        &format!("keepsake-audit-{}", event.id.as_uuid()),
+        config.source(),
+        config.stream(),
+        config.event_type(),
+        event_time(&event)?,
+        serde_json::to_vec(&explicit_v3)?,
+    )?;
+    let paged = paged_event(
+        dovecote::TenantId::new("tenant-test")?,
+        stored,
+        event_time(&event)?,
+    )?;
+    assert!(matches!(
+        decode_audit_event(&config, &paged),
+        Err(AuditEventDecodeError::LegacyPayload { schema_version: 3 })
+    ));
+
+    let mut omitted_v3 = current.clone();
+    omitted_v3
+        .as_object_mut()
+        .ok_or_else(|| std::io::Error::other("audit event did not serialize as an object"))?
+        .remove("schema_version");
+    let stored = stored_event(
+        &format!("keepsake-audit-{}", event.id.as_uuid()),
+        config.source(),
+        config.stream(),
+        config.event_type(),
+        event_time(&event)?,
+        serde_json::to_vec(&omitted_v3)?,
+    )?;
+    let paged = paged_event(
+        dovecote::TenantId::new("tenant-test")?,
+        stored,
+        event_time(&event)?,
+    )?;
+    assert!(matches!(
+        decode_audit_event(&config, &paged),
+        Err(AuditEventDecodeError::LegacyPayload { schema_version: 3 })
+    ));
+
+    let mut unknown = current;
+    unknown["schema_version"] = serde_json::json!(99);
+    let stored = stored_event(
+        &format!("keepsake-audit-{}", event.id.as_uuid()),
+        config.source(),
+        config.stream(),
+        config.event_type(),
+        event_time(&event)?,
+        serde_json::to_vec(&unknown)?,
+    )?;
+    let paged = paged_event(
+        dovecote::TenantId::new("tenant-test")?,
+        stored,
+        event_time(&event)?,
+    )?;
+    assert!(matches!(
+        decode_audit_event(&config, &paged),
+        Err(AuditEventDecodeError::UnknownPayloadVersion { schema_version: 99 })
+    ));
+
+    let future_shape = serde_json::json!({"schema_version": 99});
+    let stored = stored_event(
+        &format!("keepsake-audit-{}", event.id.as_uuid()),
+        config.source(),
+        config.stream(),
+        config.event_type(),
+        event_time(&event)?,
+        serde_json::to_vec(&future_shape)?,
+    )?;
+    let paged = paged_event(
+        dovecote::TenantId::new("tenant-test")?,
+        stored,
+        event_time(&event)?,
+    )?;
+    assert!(matches!(
+        decode_audit_event(&config, &paged),
+        Err(AuditEventDecodeError::UnknownPayloadVersion { schema_version: 99 })
+    ));
     Ok(())
 }
 

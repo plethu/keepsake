@@ -1,6 +1,6 @@
-use chrono::{DateTime, Utc};
 use keepsake::{ExpiryPolicy, Keepsake};
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 #[cfg(feature = "postgres")]
@@ -51,7 +51,8 @@ pub struct TimedExpiryCandidate {
     /// Subject id.
     pub subject_id: String,
     /// Due timestamp.
-    pub due_at: DateTime<Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub due_at: OffsetDateTime,
 }
 
 /// Due fulfillment expiry candidate.

@@ -1,18 +1,18 @@
-use chrono::DateTime;
 use keepsake::{SubjectRef, TenantId};
 use sqlx::postgres::PgPoolOptions;
+use time::OffsetDateTime;
 
 use super::support::parse_state;
 use super::*;
 
-fn ts(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
-    DateTime::parse_from_rfc3339(value).map(|timestamp| timestamp.with_timezone(&Utc))
+fn ts(value: &str) -> Result<OffsetDateTime, time::error::Parse> {
+    OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
 }
 
 #[derive(Debug, thiserror::Error)]
 enum TestError {
     #[error(transparent)]
-    Chrono(#[from] chrono::ParseError),
+    Time(#[from] time::error::Parse),
 
     #[error(transparent)]
     Keepsake(#[from] keepsake::KeepsakeError),

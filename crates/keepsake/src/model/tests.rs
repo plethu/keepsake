@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Utc};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::ExpiryPolicy;
@@ -8,12 +8,12 @@ use crate::ExpiryPolicy;
 use super::*;
 
 type TestResult<T> = core::result::Result<T, TestError>;
-type TimestampResult<T> = core::result::Result<T, chrono::ParseError>;
+type TimestampResult<T> = core::result::Result<T, time::error::Parse>;
 
 #[derive(Debug, thiserror::Error)]
 enum TestError {
     #[error(transparent)]
-    Chrono(#[from] chrono::ParseError),
+    Time(#[from] time::error::Parse),
 
     #[error(transparent)]
     Keepsake(#[from] KeepsakeError),
@@ -22,8 +22,8 @@ enum TestError {
     SerdeJson(#[from] serde_json::Error),
 }
 
-fn ts(value: &str) -> TimestampResult<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(value).map(|timestamp| timestamp.with_timezone(&Utc))
+fn ts(value: &str) -> TimestampResult<OffsetDateTime> {
+    OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
 }
 
 fn record(expiry: ExpiryPolicy, state: LifecycleState) -> TestResult<KeepsakeRecord> {
@@ -64,11 +64,11 @@ fn relation_definition_enabled_and_disabled_helpers_set_state() -> TestResult<()
 fn relation_key_components_validate_independently() {
     assert_eq!(
         RelationKind::new(" ").map_err(|error| error.to_string()),
-        Err("relation.kind must not be empty".to_owned())
+        Err("relation.kind must not have leading or trailing whitespace".to_owned())
     );
     assert_eq!(
         RelationName::new(" ").map_err(|error| error.to_string()),
-        Err("relation.name must not be empty".to_owned())
+        Err("relation.name must not have leading or trailing whitespace".to_owned())
     );
 }
 
@@ -80,20 +80,61 @@ fn tenant_id_is_validated_and_round_trips() -> TestResult<()> {
     assert!(TenantId::new(" ").is_err());
     assert!(matches!(
         TenantId::new("x".repeat(256)),
-        Err(KeepsakeError::TenantIdTooLong { .. })
+        Err(KeepsakeError::IdentifierTooLong { .. })
     ));
     assert!(matches!(
         TenantId::new("tenant\u{7f}"),
-        Err(KeepsakeError::TenantIdControlCharacter { .. })
+        Err(KeepsakeError::IdentifierControlCharacter { .. })
     ));
     assert!(matches!(
         TenantId::new("tenant\u{fdd0}"),
-        Err(KeepsakeError::TenantIdNoncharacter { .. })
+        Err(KeepsakeError::IdentifierNoncharacter { .. })
     ));
 
     let encoded = serde_json::to_string(&tenant)?;
     assert_eq!(serde_json::from_str::<TenantId>(&encoded)?, tenant);
     assert!(serde_json::from_str::<TenantId>(r#""""#).is_err());
+    Ok(())
+}
+
+#[test]
+fn persisted_identifier_contract_is_byte_bounded_and_byte_preserving() -> TestResult<()> {
+    let ascii_191 = "a".repeat(MAX_PERSISTED_IDENTIFIER_BYTES);
+    assert_eq!(TenantId::new(ascii_191.clone())?.as_str(), ascii_191);
+    assert!(matches!(
+        TenantId::new("a".repeat(MAX_PERSISTED_IDENTIFIER_BYTES + 1)),
+        Err(KeepsakeError::IdentifierTooLong { actual, .. })
+            if actual == MAX_PERSISTED_IDENTIFIER_BYTES + 1
+    ));
+
+    let unicode_191 = format!("{}a", "é".repeat(95));
+    assert_eq!(unicode_191.len(), MAX_PERSISTED_IDENTIFIER_BYTES);
+    assert_eq!(
+        SubjectRef::new("User", unicode_191.clone())?.id(),
+        unicode_191
+    );
+    assert!(matches!(
+        SubjectRef::new("User", "é".repeat(96)),
+        Err(KeepsakeError::IdentifierTooLong { actual: 192, .. })
+    ));
+
+    let composed = "Café";
+    let decomposed = "Cafe\u{301}";
+    let key = RelationKey::new("Tag", decomposed)?;
+    assert_eq!(key.kind(), "Tag");
+    assert_eq!(key.name(), decomposed);
+    assert_ne!(key.name(), composed);
+    assert!(RelationKey::new(" tag", "name").is_err());
+    assert!(RelationKey::new("tag", "name ").is_err());
+    assert!(ActorRef::new("system", " actor").is_err());
+    assert!(
+        serde_json::from_str::<SubjectRef>(&format!(
+            r#"{{"kind":"User","id":"{}"}}"#,
+            "a".repeat(192)
+        ))
+        .is_err()
+    );
+    assert!(serde_json::from_str::<RelationKey>(r#"{"kind":"Tag","name":" tag"}"#).is_err());
     Ok(())
 }
 
@@ -130,8 +171,10 @@ crate::relation_spec! {
 fn relation_definition_can_be_built_from_spec() -> TestResult<()> {
     let definition = RelationDefinition::from_spec::<TrustedTag>(
         TenantId::new("tenant-a")?,
-        DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
-            .map(|timestamp| timestamp.with_timezone(&Utc))?,
+        OffsetDateTime::parse(
+            "2026-01-01T00:00:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )?,
     )?;
 
     assert_eq!(definition.id, Uuid::nil());
@@ -144,8 +187,10 @@ fn relation_definition_can_be_built_from_spec() -> TestResult<()> {
 
 #[test]
 fn relation_spec_macro_supports_disabled_timed_specs() -> TestResult<()> {
-    let at = DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
-        .map(|timestamp| timestamp.with_timezone(&Utc))?;
+    let at = OffsetDateTime::parse(
+        "2026-01-01T00:00:00Z",
+        &time::format_description::well_known::Rfc3339,
+    )?;
     let definition =
         RelationDefinition::from_spec::<DisabledTimedSanction>(TenantId::new("tenant-a")?, at)?;
 

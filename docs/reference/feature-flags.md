@@ -32,8 +32,9 @@ relation_spec! {
 
 let source = InMemoryActiveRelations::empty();
 let subject = SubjectRef::new("account", "acct_123")?;
-let at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")?
-    .with_timezone(&chrono::Utc);
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+
+let at = OffsetDateTime::parse("2026-01-01T00:00:00Z", &Rfc3339)?;
 
 source.insert_active_for_spec::<TrustedTag>(
     0xaaaa_aaaa_aaaa_aaaa_aaaa_aaaa_aaaa_aaaa,
@@ -78,16 +79,18 @@ or MySQL, disable default features so Postgres is not enabled implicitly:
 
 ```toml
 [dependencies]
-keepsake-sqlx = { version = "3", default-features = false, features = ["sqlite", "migrations"] }
+keepsake-sqlx = { version = "4", default-features = false, features = ["sqlite", "migrations"] }
 dovecote-sqlx-sqlite = "0.2"
 ```
 
 Dovecote 0.2 is published on crates.io; use the matching adapter for the
 selected backend.
 
-The 3.0 tenant-scoped SQLx contract is available for PostgreSQL, SQLite, and
-MySQL. Each backend has a clean v3 baseline and an explicit v2-to-v3
-prepare/backfill/activate route. For regulated workloads, prefer MySQL
+The 4.0 tenant-scoped SQLx contract is available for PostgreSQL, SQLite, and
+MySQL. Each backend has a v4 clean track. Existing v3 databases must apply the
+forward v4 identifier-contract migration; the historical v3 artifacts remain
+immutable. The older v2-to-v3 prepare/backfill/activate route remains an
+explicit operator path. For regulated workloads, prefer MySQL
 separate-database or SQLite file-per-tenant deployment boundaries when they fit
 the product's operational model.
 

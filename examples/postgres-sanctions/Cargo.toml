@@ -7,13 +7,13 @@ license.workspace = true
 publish = false
 
 [dependencies]
-chrono.workspace = true
 dovecote-sqlx-postgres.workspace = true
 keepsake.workspace = true
 keepsake-sqlx.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+time.workspace = true
 uuid.workspace = true
 
 [lints]
