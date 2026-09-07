@@ -80,7 +80,7 @@ or `MySQL`, disable default features so Postgres is not enabled implicitly:
 
 ```toml
 [dependencies]
-keepsake-sqlx = { version = "4", default-features = false, features = ["sqlite", "migrations"] }
+keepsake-sqlx = { version = "5", default-features = false, features = ["sqlite", "migrations"] }
 dovecote-sqlx-sqlite = "0.2"
 ```
 

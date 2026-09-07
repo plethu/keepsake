@@ -21,14 +21,10 @@ audit events and their delivery state.
 
 ## Install
 
-The repository is preparing 5.0.0. The commands below install the published
-4.x series; see the [5.0 upgrade notes](docs/operations/versioning.md) when
-building from this checkout.
-
 For Postgres:
 
 ```sh
-cargo add keepsake@4 keepsake-sqlx@4
+cargo add keepsake@5 keepsake-sqlx@5
 cargo add dovecote-sqlx-postgres@0.2
 cargo add sqlx --features postgres,runtime-tokio,tls-rustls
 cargo add time@0.3
@@ -38,11 +34,15 @@ SQLite and MySQL use the matching `keepsake-sqlx` feature and Dovecote adapter.
 The [installation guide](docs/installation.md) covers all three backends and
 schema setup.
 
-Keepsake 4.0 uses `time::OffsetDateTime` throughout its public API and persists
+Keepsake uses `time::OffsetDateTime` throughout its public API and persists
 timestamps at canonical microsecond precision. Persisted textual identifiers
 are byte-preserving and case-sensitive: they must be non-empty, have no
 leading or trailing Unicode whitespace, and fit within 191 UTF-8 bytes. Existing 3.x
-databases require the v4 migration track before accepting 4.0 writes.
+databases require the v4 migration track before accepting current writes.
+
+Keepsake 5.0 changes the Rust audit discriminator type while retaining the v4
+database and JSON contracts. See the [upgrade notes](docs/operations/versioning.md)
+when moving from 4.x.
 
 Start with the [quickstart](docs/quickstart.md), browse the
 [guides and reference](docs/README.md), or read the API docs for

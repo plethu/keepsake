@@ -1,6 +1,6 @@
 # Changelog
 
-## 5.0.0 - Unreleased
+## 5.0.0 - 2026-09-07
 
 - **Breaking Rust API:** `AuditEvent.schema_version` now uses the opaque
   `AuditPayloadSchemaVersion` type. Use `AuditPayloadSchemaVersion::CURRENT`

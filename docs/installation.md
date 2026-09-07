@@ -1,16 +1,20 @@
 # Installation
 
-Keepsake 4.0 has two persistence boundaries. Keepsake owns relation and
+Keepsake has two persistence boundaries. Keepsake owns relation and
 entitlement state. [Dovecote](https://github.com/plethu/dovecote) owns
 immutable audit events and their at-least-once deliveries. Dovecote is published
 on crates.io; install both schemas before serving requests.
+
+Keepsake 5.0 retains the v4 database and JSON contracts. Existing v4 databases
+need no new migration; the [versioning guide](operations/versioning.md) covers
+the Rust API change.
 
 For Postgres:
 
 ```toml
 [dependencies]
-keepsake = "4"
-keepsake-sqlx = "4"
+keepsake = "5"
+keepsake-sqlx = "5"
 dovecote-sqlx-postgres = "0.2"
 sqlx = { version = "0.9", features = ["postgres", "runtime-tokio", "tls-rustls"] }
 time = "0.3"
@@ -44,8 +48,8 @@ Select SQLite explicitly and use the `dovecote-sqlx-sqlite` adapter:
 
 ```toml
 [dependencies]
-keepsake = "4"
-keepsake-sqlx = { version = "4", default-features = false, features = ["sqlite", "migrations"] }
+keepsake = "5"
+keepsake-sqlx = { version = "5", default-features = false, features = ["sqlite", "migrations"] }
 dovecote-sqlx-sqlite = "0.2"
 sqlx = { version = "0.9", default-features = false, features = ["sqlite", "runtime-tokio", "tls-rustls"] }
 time = "0.3"
@@ -63,8 +67,8 @@ For MySQL, select the matching backend and use the Dovecote adapter:
 
 ```toml
 [dependencies]
-keepsake = "4"
-keepsake-sqlx = { version = "4", default-features = false, features = ["mysql", "migrations"] }
+keepsake = "5"
+keepsake-sqlx = { version = "5", default-features = false, features = ["mysql", "migrations"] }
 dovecote-sqlx-mysql = "0.2"
 sqlx = { version = "0.9", default-features = false, features = ["mysql", "runtime-tokio", "tls-rustls"] }
 time = "0.3"
@@ -74,7 +78,7 @@ Construct `MySqlKeepsakeRepository` with a `sqlx::MySqlPool` and an absolute
 source. MySQL lifecycle commands use InnoDB row locks; configure lock-wait
 timeouts and retries for the service's expected contention.
 
-## Keepsake 4.0 contracts
+## Persistence contracts (v4)
 
 The public API uses `time::OffsetDateTime`; `chrono::DateTime<Utc>` is no
 longer accepted. Serde wire timestamps remain RFC3339, while SQLx writes
