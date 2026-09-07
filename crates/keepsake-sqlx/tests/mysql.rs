@@ -1,4 +1,5 @@
-#![allow(missing_docs)]
+//! mysql persistence contract tests.
+
 #![cfg(feature = "mysql-tests")]
 
 mod mysql {
@@ -11,4 +12,5 @@ mod mysql {
     mod schema;
     mod support;
     mod tenancy;
+    mod transactions;
 }

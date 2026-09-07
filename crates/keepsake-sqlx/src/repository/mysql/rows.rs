@@ -1,3 +1,4 @@
+use sqlx::mysql::MySqlRow;
 use std::collections::BTreeMap;
 
 use keepsake::{
@@ -11,15 +12,13 @@ use crate::repository::FulfilledExpiryCandidate;
 use crate::repository::support::{canonical_expiry_policy, parse_state, parse_uuid};
 use crate::repository::{RepositoryResult, TimedExpiryCandidate};
 
-fn tenant_from_row(row: &sqlx::mysql::MySqlRow) -> RepositoryResult<TenantId> {
+fn tenant_from_row(row: &MySqlRow) -> RepositoryResult<TenantId> {
     let bytes: Vec<u8> = row.try_get("tenant_id")?;
     let value = String::from_utf8(bytes).map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
     Ok(TenantId::new(value)?)
 }
 
-pub(super) fn relation_from_row(
-    row: &sqlx::mysql::MySqlRow,
-) -> RepositoryResult<RelationDefinition> {
+pub(super) fn relation_from_row(row: &MySqlRow) -> RepositoryResult<RelationDefinition> {
     let expiry = canonical_expiry_policy(serde_json::from_value::<ExpiryPolicy>(
         row.try_get("expiry_policy")?,
     )?);
@@ -35,7 +34,7 @@ pub(super) fn relation_from_row(
     )?)
 }
 
-pub(super) fn keepsake_from_row(row: &sqlx::mysql::MySqlRow) -> RepositoryResult<Keepsake> {
+pub(super) fn keepsake_from_row(row: &MySqlRow) -> RepositoryResult<Keepsake> {
     let metadata = serde_json::from_value::<BTreeMap<String, String>>(row.try_get("metadata")?)?;
     let expiry = canonical_expiry_policy(serde_json::from_value::<ExpiryPolicy>(
         row.try_get("expiry_policy")?,
@@ -60,7 +59,7 @@ pub(super) fn keepsake_from_row(row: &sqlx::mysql::MySqlRow) -> RepositoryResult
 }
 
 pub(super) fn relation_definition_from_active_row(
-    row: &sqlx::mysql::MySqlRow,
+    row: &MySqlRow,
 ) -> RepositoryResult<RelationDefinition> {
     let expiry = canonical_expiry_policy(serde_json::from_value::<ExpiryPolicy>(
         row.try_get("relation_expiry_policy")?,
@@ -78,7 +77,7 @@ pub(super) fn relation_definition_from_active_row(
 }
 
 pub(super) fn timed_expiry_candidate_from_row(
-    row: &sqlx::mysql::MySqlRow,
+    row: &MySqlRow,
 ) -> RepositoryResult<TimedExpiryCandidate> {
     Ok(TimedExpiryCandidate {
         keepsake_id: parse_uuid(row.try_get("keepsake_id")?)?,
@@ -91,7 +90,7 @@ pub(super) fn timed_expiry_candidate_from_row(
 
 #[cfg(feature = "fulfillment-counters")]
 pub(super) fn fulfilled_expiry_candidate_from_row(
-    row: &sqlx::mysql::MySqlRow,
+    row: &MySqlRow,
 ) -> RepositoryResult<FulfilledExpiryCandidate> {
     Ok(FulfilledExpiryCandidate {
         keepsake_id: parse_uuid(row.try_get("keepsake_id")?)?,

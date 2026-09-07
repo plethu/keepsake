@@ -1,3 +1,4 @@
+use sqlx::mysql::MySqlRow;
 use std::collections::BTreeMap;
 
 use keepsake::FulfillmentSnapshot;
@@ -16,6 +17,10 @@ where
     C: RelationCache,
 {
     /// Upserts a simple fulfillment counter projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-key or database errors, including an assignment outside this tenant.
     pub async fn upsert_counter_projection(
         &self,
         keepsake_id: Uuid,
@@ -45,6 +50,11 @@ where
     }
 
     /// Atomically adds `delta` to a fulfillment counter and returns the new value.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-key or database errors, including an assignment outside this tenant
+    /// and a counter value outside the backend integer range.
     pub async fn increment_counter_projection(
         &self,
         keepsake_id: Uuid,
@@ -89,6 +99,10 @@ where
     }
 
     /// Upserts a checklist item completion projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-key or database errors, including an assignment outside this tenant.
     pub async fn upsert_checklist_projection(
         &self,
         keepsake_id: Uuid,
@@ -128,6 +142,7 @@ pub(super) async fn fulfillment_snapshot_tx(
         select `key`, value
         from keepsake_fulfillment_counters
         where tenant_id = ? and keepsake_id = ?
+        for update
         ",
     )
     .bind(tenant_id.as_str().as_bytes())
@@ -139,6 +154,7 @@ pub(super) async fn fulfillment_snapshot_tx(
         select item, complete
         from keepsake_fulfillment_checklist
         where tenant_id = ? and keepsake_id = ?
+        for update
         ",
     )
     .bind(tenant_id.as_str().as_bytes())
@@ -149,8 +165,8 @@ pub(super) async fn fulfillment_snapshot_tx(
 }
 
 fn snapshot_from_rows(
-    counter_rows: &[sqlx::mysql::MySqlRow],
-    checklist_rows: &[sqlx::mysql::MySqlRow],
+    counter_rows: &[MySqlRow],
+    checklist_rows: &[MySqlRow],
 ) -> RepositoryResult<FulfillmentSnapshot> {
     let mut counters = BTreeMap::new();
     for row in counter_rows {

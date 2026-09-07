@@ -1,10 +1,53 @@
 use super::support::*;
-use keepsake::ExpiryPolicy;
+use keepsake::{
+    ActorRef, ApplyKeepsake, CommandContext, ExpiryPolicy, FulfillmentPolicy, SubjectRef,
+};
 
 #[tokio::test]
 #[ignore = "requires docker mysql; run `mise run test-db`"]
 async fn mysql_fulfilled_expiry_uses_counter_snapshot() -> TestResult<()> {
-    backend_cases::fulfilled_expiry_uses_counter_snapshot::<MySqlHarness>().await
+    let (repo, _pool) = MySqlHarness::repo().await?;
+    let relation = upsert_relation::<MySqlHarness>(
+        &repo,
+        ExpiryPolicy::WhenFulfilled {
+            policy: FulfillmentPolicy::CounterAtLeast {
+                key: "steps".to_owned(),
+                threshold: 3,
+            },
+        },
+    )
+    .await?;
+    let subject = SubjectRef::new("account", format!("{}_acct_steps", MySqlHarness::BACKEND))?;
+    let applied = MySqlHarness::apply(
+        &repo,
+        &ApplyKeepsake::new(
+            MySqlHarness::tenant()?,
+            subject,
+            relation.id,
+            ts("2026-01-01T00:01:00Z")?,
+            CommandContext::new(ActorRef::new("test", "worker")?),
+        ),
+    )
+    .await?;
+
+    assert_eq!(
+        MySqlHarness::expire_due_fulfilled(&repo, ts("2026-01-01T00:02:00Z")?, 10).await?,
+        0
+    );
+    MySqlHarness::upsert_counter_projection(
+        &repo,
+        applied.keepsake.id(),
+        "steps",
+        3,
+        ts("2026-01-01T00:03:00Z")?,
+    )
+    .await?;
+
+    assert_eq!(
+        MySqlHarness::expire_due_fulfilled(&repo, ts("2026-01-01T00:04:00Z")?, 10).await?,
+        1
+    );
+    Ok(())
 }
 
 #[tokio::test]
@@ -28,7 +71,7 @@ async fn mysql_increment_counter_projection_is_atomic_and_returns_value() -> Tes
     let subject = SubjectRef::new("account", "mysql_acct_increment")?;
     let applied = repo
         .apply(&ApplyKeepsake::new(
-            MySqlHarness::tenant(),
+            MySqlHarness::tenant()?,
             subject,
             relation.id,
             ts("2026-01-01T00:01:00Z")?,
@@ -76,7 +119,7 @@ async fn mysql_checklist_fulfillment_persists_and_expires() -> TestResult<()> {
     let subject = SubjectRef::new("account", "mysql_acct_checklist")?;
     let applied = repo
         .apply(&ApplyKeepsake::new(
-            MySqlHarness::tenant(),
+            MySqlHarness::tenant()?,
             subject,
             relation.id,
             ts("2026-01-01T00:01:00Z")?,

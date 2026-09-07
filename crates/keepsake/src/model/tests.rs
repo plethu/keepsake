@@ -1,4 +1,8 @@
+use crate::policy::FulfillmentPolicy;
+use core::result;
 use std::collections::BTreeMap;
+use time::error::Parse;
+use time::format_description::well_known::Rfc3339;
 
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -7,13 +11,13 @@ use crate::ExpiryPolicy;
 
 use super::*;
 
-type TestResult<T> = core::result::Result<T, TestError>;
-type TimestampResult<T> = core::result::Result<T, time::error::Parse>;
+type TestResult<T> = result::Result<T, TestError>;
+type TimestampResult<T> = result::Result<T, Parse>;
 
 #[derive(Debug, thiserror::Error)]
 enum TestError {
     #[error(transparent)]
-    Time(#[from] time::error::Parse),
+    Time(#[from] Parse),
 
     #[error(transparent)]
     Keepsake(#[from] KeepsakeError),
@@ -23,7 +27,7 @@ enum TestError {
 }
 
 fn ts(value: &str) -> TimestampResult<OffsetDateTime> {
-    OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+    OffsetDateTime::parse(value, &Rfc3339)
 }
 
 fn record(expiry: ExpiryPolicy, state: LifecycleState) -> TestResult<KeepsakeRecord> {
@@ -171,10 +175,7 @@ crate::relation_spec! {
 fn relation_definition_can_be_built_from_spec() -> TestResult<()> {
     let definition = RelationDefinition::from_spec::<TrustedTag>(
         TenantId::new("tenant-a")?,
-        OffsetDateTime::parse(
-            "2026-01-01T00:00:00Z",
-            &time::format_description::well_known::Rfc3339,
-        )?,
+        OffsetDateTime::parse("2026-01-01T00:00:00Z", &Rfc3339)?,
     )?;
 
     assert_eq!(definition.id, Uuid::nil());
@@ -187,10 +188,7 @@ fn relation_definition_can_be_built_from_spec() -> TestResult<()> {
 
 #[test]
 fn relation_spec_macro_supports_disabled_timed_specs() -> TestResult<()> {
-    let at = OffsetDateTime::parse(
-        "2026-01-01T00:00:00Z",
-        &time::format_description::well_known::Rfc3339,
-    )?;
+    let at = OffsetDateTime::parse("2026-01-01T00:00:00Z", &Rfc3339)?;
     let definition =
         RelationDefinition::from_spec::<DisabledTimedSanction>(TenantId::new("tenant-a")?, at)?;
 
@@ -333,7 +331,7 @@ fn valid_flat_records_convert_to_typed_lifecycles() -> TestResult<()> {
 
     let mut fulfilled = record(
         ExpiryPolicy::WhenFulfilled {
-            policy: crate::policy::FulfillmentPolicy::CounterAtLeast {
+            policy: FulfillmentPolicy::CounterAtLeast {
                 key: "messages_sent".to_owned(),
                 threshold: 3,
             },
@@ -363,7 +361,7 @@ fn invalid_flat_records_are_rejected() -> TestResult<()> {
 
     let mut fulfilled_with_expires = record(
         ExpiryPolicy::WhenFulfilled {
-            policy: crate::policy::FulfillmentPolicy::CounterAtLeast {
+            policy: FulfillmentPolicy::CounterAtLeast {
                 key: "messages_sent".to_owned(),
                 threshold: 3,
             },

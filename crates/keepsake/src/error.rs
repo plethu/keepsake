@@ -1,7 +1,8 @@
 //! Error types for core validation contracts.
 
+use core::result;
 /// Result alias for Keepsake operations.
-pub type Result<T> = core::result::Result<T, KeepsakeError>;
+pub type Result<T> = result::Result<T, KeepsakeError>;
 
 /// Errors returned by the core model contracts.
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]

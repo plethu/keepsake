@@ -14,9 +14,14 @@ async fn mysql_tenants_isolate_same_ids_and_reject_wrong_scope() -> TestResult<(
     let root =
         MySqlKeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/mysql-tenancy")?;
     root.migrate().await?;
-    sqlx::raw_sql(dovecote_sqlx_mysql::MIGRATIONS[0].sql())
-        .execute(&pool)
-        .await?;
+    sqlx::raw_sql(
+        dovecote_sqlx_mysql::MIGRATIONS
+            .first()
+            .ok_or(sqlx::Error::RowNotFound)?
+            .sql(),
+    )
+    .execute(&pool)
+    .await?;
 
     let tenant_a = TenantId::new("mysql-tenant-a")?;
     let tenant_b = TenantId::new("mysql-tenant-b")?;

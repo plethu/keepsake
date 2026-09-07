@@ -1,5 +1,6 @@
 //! Durable audit event contracts.
 
+use core::result;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::error::Error;
@@ -10,6 +11,8 @@ use uuid::Uuid;
 
 use crate::evaluation::DecisionKind;
 use crate::model::{ActorRef, ExpiryCause, KeepsakeId, RelationId, SubjectRef, TenantId};
+
+mod validation;
 
 #[cfg(any(test, feature = "test"))]
 mod memory;
@@ -98,6 +101,22 @@ pub struct AuditEvent {
     pub decision: AuditDecision,
     /// Application audit context carried alongside the durable event.
     pub context: AuditContext,
+    /// Complete command occurrence for strict retry conflict detection.
+    /// Legacy events and worker transitions have no command receipt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<LifecycleCommand>,
+}
+
+/// Complete caller command retained in an immutable audit occurrence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "operation", content = "command", rename_all = "snake_case")]
+pub enum LifecycleCommand {
+    /// Relation application.
+    Apply(crate::ApplyKeepsake),
+    /// Revocation by assignment identity.
+    Revoke(crate::RevokeKeepsake),
+    /// Revocation by scoped subject.
+    RevokeBySubject(crate::RevokeBySubject),
 }
 
 /// Stable, project-owned identity for one audit occurrence.
@@ -221,7 +240,7 @@ pub struct AuditContext {
 }
 
 /// Result alias for audit sink operations.
-pub type AuditResult<T, E> = core::result::Result<T, E>;
+pub type AuditResult<T, E> = result::Result<T, E>;
 
 /// Append-only audit sink.
 pub trait AuditSink: Send + Sync {
@@ -229,6 +248,11 @@ pub trait AuditSink: Send + Sync {
     type Error: Error + Send + Sync + 'static;
 
     /// Records an audit event after a transition is committed.
+    ///
+    /// # Errors
+    ///
+    /// Returns the sink error if the event cannot be recorded. Callers must not report a
+    /// successful operation when this audit is mandatory.
     fn record(&self, event: AuditEvent) -> AuditResult<(), Self::Error>;
 }
 
@@ -251,10 +275,12 @@ mod tests {
         AuditEventType, AuditPayloadSchemaVersion,
     };
     use crate::{ActorRef, SubjectRef, TenantId};
+    use core::result;
+    use std::error;
     use time::OffsetDateTime;
     use uuid::Uuid;
 
-    fn current_event() -> core::result::Result<AuditEvent, Box<dyn std::error::Error>> {
+    fn current_event() -> result::Result<AuditEvent, Box<dyn error::Error>> {
         Ok(AuditEvent {
             schema_version: AuditPayloadSchemaVersion::CURRENT,
             tenant_id: TenantId::new("tenant-test")?,
@@ -269,7 +295,51 @@ mod tests {
                 duplicate_prevented: false,
             },
             context: AuditContext::default(),
+            command: None,
         })
+    }
+
+    #[test]
+    fn command_occurrence_rejects_envelope_substitution()
+    -> result::Result<(), Box<dyn error::Error>> {
+        let mut event = current_event()?;
+        let mut command = crate::ApplyKeepsake::new(
+            event.tenant_id.clone(),
+            event.subject.clone(),
+            event.relation_id,
+            event.at,
+            crate::CommandContext::new(event.actor.clone()),
+        );
+        command.id = event.keepsake_id;
+        command.audit_id = event.id;
+        event.command = Some(super::LifecycleCommand::Apply(command));
+        event.validate_command()?;
+        let mut changed = event.clone();
+        changed.tenant_id = TenantId::new("another")?;
+        assert!(changed.validate_command().is_err());
+        changed = event.clone();
+        changed.keepsake_id = Uuid::from_u128(1);
+        assert!(changed.validate_command().is_err());
+        changed = event.clone();
+        changed.subject = SubjectRef::new("account", "other")?;
+        assert!(changed.validate_command().is_err());
+        changed = event.clone();
+        changed.relation_id = Uuid::from_u128(1);
+        assert!(changed.validate_command().is_err());
+        changed = event.clone();
+        changed.at += time::Duration::seconds(1);
+        assert!(changed.validate_command().is_err());
+        changed = event.clone();
+        changed
+            .context
+            .attributes
+            .insert("private".into(), "secret".into());
+        let error = changed.validate_command().err().ok_or("missing mismatch")?;
+        assert!(!error.to_string().contains("secret"));
+        changed = event;
+        changed.command = None;
+        changed.validate_command()?;
+        Ok(())
     }
 
     #[test]
@@ -323,8 +393,8 @@ mod tests {
     }
 
     #[test]
-    fn audit_event_current_schema_version_round_trips()
-    -> core::result::Result<(), Box<dyn std::error::Error>> {
+    fn audit_event_current_schema_version_round_trips() -> result::Result<(), Box<dyn error::Error>>
+    {
         let event = current_event()?;
         let encoded = serde_json::to_string(&event)?;
         assert!(encoded.contains("\"schema_version\":4"));

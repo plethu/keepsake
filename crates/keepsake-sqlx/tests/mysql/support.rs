@@ -1,5 +1,6 @@
+use std::env;
 #[path = "../support/backend_cases.rs"]
-pub mod backend_cases;
+pub(super) mod backend_cases;
 
 use keepsake_sqlx::{
     MySqlBackend, MySqlKeepsakeRepository, RepositoryError, TenantSqlxKeepsakeRepository,
@@ -8,15 +9,15 @@ use sqlx::{Executor, MySqlPool, mysql::MySqlPoolOptions};
 use time::{OffsetDateTime, PrimitiveDateTime};
 use uuid::Uuid;
 
-pub use backend_cases::{BackendHarness, TestResult, ts, upsert_relation};
+pub(super) use backend_cases::{BackendHarness, TestResult, ts, upsert_relation};
 
-pub const fn naive_utc(value: OffsetDateTime) -> PrimitiveDateTime {
+pub(super) const fn naive_utc(value: OffsetDateTime) -> PrimitiveDateTime {
     PrimitiveDateTime::new(value.date(), value.time())
 }
 
 const DEFAULT_MYSQL_DATABASE_URL: &str = "mysql://keepsake:keepsake@localhost:53306/keepsake";
 
-pub struct MySqlHarness;
+pub(super) struct MySqlHarness;
 
 #[async_trait::async_trait]
 impl BackendHarness for MySqlHarness {
@@ -34,10 +35,15 @@ impl BackendHarness for MySqlHarness {
             "https://tests.invalid/keepsake/mysql",
         )?));
         root.migrate().await?;
-        sqlx::raw_sql(dovecote_sqlx_mysql::MIGRATIONS[0].sql())
-            .execute(&pool)
-            .await?;
-        Ok((root.for_tenant(Self::tenant()), pool))
+        sqlx::raw_sql(
+            dovecote_sqlx_mysql::MIGRATIONS
+                .first()
+                .ok_or(sqlx::Error::RowNotFound)?
+                .sql(),
+        )
+        .execute(&pool)
+        .await?;
+        Ok((root.for_tenant(Self::tenant()?), pool))
     }
 
     async fn backend_marker(pool: &Self::Pool) -> Result<String, sqlx::Error> {
@@ -130,16 +136,16 @@ impl BackendHarness for MySqlHarness {
     }
 }
 
-pub async fn mysql_pool() -> TestResult<MySqlPool> {
-    let database_url = std::env::var("MYSQL_DATABASE_URL")
-        .unwrap_or_else(|_| DEFAULT_MYSQL_DATABASE_URL.to_owned());
+pub(super) async fn mysql_pool() -> TestResult<MySqlPool> {
+    let database_url =
+        env::var("MYSQL_DATABASE_URL").unwrap_or_else(|_| DEFAULT_MYSQL_DATABASE_URL.to_owned());
     Ok(MySqlPoolOptions::new()
         .max_connections(5)
         .connect(&database_url)
         .await?)
 }
 
-pub async fn reset_schema(pool: &MySqlPool) -> Result<(), sqlx::Error> {
+pub(super) async fn reset_schema(pool: &MySqlPool) -> Result<(), sqlx::Error> {
     pool.execute("set foreign_key_checks = 0").await?;
     for query in [
         "drop table if exists dovecote_deliveries",

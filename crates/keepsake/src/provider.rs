@@ -1,5 +1,6 @@
 //! Provider traits for persistence and fulfillment snapshots.
 
+use core::result;
 use std::error::Error;
 use std::future::Future;
 use std::pin::Pin;
@@ -21,7 +22,7 @@ pub use memory::{
 };
 
 /// Result alias for provider operations.
-pub type ProviderResult<T, E> = core::result::Result<T, E>;
+pub type ProviderResult<T, E> = result::Result<T, E>;
 
 /// Application-owned fulfillment snapshot provider.
 pub trait FulfillmentProvider: Send + Sync {
@@ -29,6 +30,11 @@ pub trait FulfillmentProvider: Send + Sync {
     type Error: Error + Send + Sync + 'static;
 
     /// Returns the current fulfillment snapshot for a keepsake.
+    ///
+    /// # Errors
+    ///
+    /// Returns the provider error when scoped storage cannot be read or the requested
+    /// operation cannot be completed. Implementations retain their own error categories.
     fn snapshot(
         &self,
         keepsake: &Keepsake,
@@ -41,12 +47,27 @@ pub trait KeepsakeStore: Send + Sync {
     type Error: Error + Send + Sync + 'static;
 
     /// Applies a keepsake.
+    ///
+    /// # Errors
+    ///
+    /// Returns the provider error when scoped storage cannot be read or the requested
+    /// operation cannot be completed. Implementations retain their own error categories.
     fn apply(&self, command: &ApplyKeepsake) -> ProviderResult<Keepsake, Self::Error>;
 
     /// Revokes a keepsake.
+    ///
+    /// # Errors
+    ///
+    /// Returns the provider error when scoped storage cannot be read or the requested
+    /// operation cannot be completed. Implementations retain their own error categories.
     fn revoke(&self, command: &RevokeKeepsake) -> ProviderResult<Keepsake, Self::Error>;
 
     /// Finds active keepsakes for a subject.
+    ///
+    /// # Errors
+    ///
+    /// Returns the provider error when scoped storage cannot be read or the requested
+    /// operation cannot be completed. Implementations retain their own error categories.
     fn active_for_subject(
         &self,
         tenant_id: &TenantId,
@@ -54,6 +75,11 @@ pub trait KeepsakeStore: Send + Sync {
     ) -> ProviderResult<Vec<Keepsake>, Self::Error>;
 
     /// Finds a keepsake by id.
+    ///
+    /// # Errors
+    ///
+    /// Returns the provider error when scoped storage cannot be read or the requested
+    /// operation cannot be completed. Implementations retain their own error categories.
     fn get(
         &self,
         tenant_id: &TenantId,

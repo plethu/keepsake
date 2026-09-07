@@ -7,6 +7,7 @@ test_db_up := env_var_or_default("TEST_DB_UP", "1")
 
 fmt:
     cargo fmt --all
+    taplo fmt
 
 clippy:
     cargo clippy --workspace --all-targets --all-features -- -D warnings

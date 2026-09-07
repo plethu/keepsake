@@ -1,4 +1,6 @@
 use keepsake::{RelationDefinition, RelationId, RelationKey, TenantId};
+#[cfg(feature = "cache")]
+use moka::sync::Cache;
 
 use std::fmt::Debug;
 #[cfg(feature = "cache")]
@@ -76,8 +78,8 @@ impl LocalRelationCacheConfig {
 #[cfg(feature = "cache")]
 #[derive(Debug, Clone)]
 pub struct LocalRelationCache {
-    by_id: moka::sync::Cache<(TenantId, RelationId), RelationDefinition>,
-    by_key: moka::sync::Cache<(TenantId, RelationKey), RelationDefinition>,
+    by_id: Cache<(TenantId, RelationId), RelationDefinition>,
+    by_key: Cache<(TenantId, RelationKey), RelationDefinition>,
 }
 
 #[cfg(feature = "cache")]
@@ -86,12 +88,8 @@ impl LocalRelationCache {
     #[must_use]
     pub fn new(config: LocalRelationCacheConfig) -> Self {
         Self {
-            by_id: moka::sync::Cache::builder()
-                .time_to_live(config.ttl)
-                .build(),
-            by_key: moka::sync::Cache::builder()
-                .time_to_live(config.ttl)
-                .build(),
+            by_id: Cache::builder().time_to_live(config.ttl).build(),
+            by_key: Cache::builder().time_to_live(config.ttl).build(),
         }
     }
 }

@@ -1,10 +1,12 @@
 use super::support::*;
+use std::env;
+use std::sync;
 
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn relation_upsert_rejects_a_relation_owned_by_another_tenant() -> TestResult<()> {
     let root = repo().await?;
-    let repo = root.for_tenant(test_tenant());
+    let repo = root.for_tenant(test_tenant()?);
     let relation = RelationDefinition::new(
         TenantId::new("different-tenant")?,
         Uuid::now_v7(),
@@ -26,17 +28,17 @@ async fn relation_upsert_rejects_a_relation_owned_by_another_tenant() -> TestRes
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn relation_upsert_is_idempotent_by_natural_key() -> TestResult<()> {
     let root = repo().await?;
-    let repo = root.for_tenant(test_tenant());
+    let repo = root.for_tenant(test_tenant()?);
     let key = RelationKey::new("tag", unique_key("idempotent"))?;
     let first = RelationDefinition::new(
-        test_tenant(),
+        test_tenant()?,
         Uuid::now_v7(),
         key.clone(),
         true,
         ExpiryPolicy::ManualOnly,
     )?;
     let second = RelationDefinition::new(
-        test_tenant(),
+        test_tenant()?,
         Uuid::now_v7(),
         key,
         false,
@@ -58,16 +60,16 @@ async fn relation_upsert_is_idempotent_by_natural_key() -> TestResult<()> {
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn relation_upsert_rejects_same_id_with_a_different_key_without_mutation() -> TestResult<()> {
     let root = repo().await?;
-    let repo = root.for_tenant(test_tenant());
+    let repo = root.for_tenant(test_tenant()?);
     let first = RelationDefinition::enabled(
-        test_tenant(),
+        test_tenant()?,
         Uuid::now_v7(),
         RelationKey::new("tag", unique_key("original"))?,
         ExpiryPolicy::ManualOnly,
     )?;
     let stored = upsert_relation(&repo, &first).await?;
     let incoming = RelationDefinition::enabled(
-        test_tenant(),
+        test_tenant()?,
         stored.id,
         RelationKey::new("tag", unique_key("different"))?,
         ExpiryPolicy::ManualOnly,
@@ -91,10 +93,10 @@ async fn relation_upsert_rejects_same_id_with_a_different_key_without_mutation()
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn relation_reads_return_stored_relation_definition() -> TestResult<()> {
     let root = repo().await?;
-    let repo = root.for_tenant(test_tenant());
+    let repo = root.for_tenant(test_tenant()?);
     let key = RelationKey::new("tag", unique_key("lookup"))?;
     let relation = RelationDefinition::new(
-        test_tenant(),
+        test_tenant()?,
         Uuid::now_v7(),
         key.clone(),
         true,
@@ -119,13 +121,13 @@ async fn relation_reads_return_stored_relation_definition() -> TestResult<()> {
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn typed_relation_specs_upsert_and_apply_by_marker_type() -> TestResult<()> {
     let root = repo().await?;
-    let repo = root.for_tenant(test_tenant());
+    let repo = root.for_tenant(test_tenant()?);
     let now = ts("2026-01-01T00:00:00Z")?;
     let relation = repo.upsert_relation_spec::<TrustedAccountTag>(now).await?;
     let subject = SubjectRef::new("account", format!("typed_{}", Uuid::now_v7()))?;
 
     let command = ApplyKeepsake::for_spec::<TrustedAccountTag>(
-        test_tenant(),
+        test_tenant()?,
         subject.clone(),
         now,
         test_context("worker")?,
@@ -144,10 +146,10 @@ async fn typed_relation_specs_upsert_and_apply_by_marker_type() -> TestResult<()
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn typed_relation_specs_reject_existing_key_with_different_id() -> TestResult<()> {
     let root = repo().await?;
-    let repo = root.for_tenant(test_tenant());
+    let repo = root.for_tenant(test_tenant()?);
     let now = ts("2026-01-01T00:00:00Z")?;
     let existing = RelationDefinition::enabled(
-        test_tenant(),
+        test_tenant()?,
         Uuid::now_v7(),
         ConflictingTrustedAccountTag::KEY.to_relation_key()?,
         ExpiryPolicy::At {
@@ -177,18 +179,18 @@ async fn typed_relation_specs_reject_existing_key_with_different_id() -> TestRes
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn relation_cache_serves_reads_and_invalidates_local_writes() -> TestResult<()> {
-    let database_url = std::env::var("DATABASE_URL")?;
+    let database_url = env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
     reset_schema(&pool).await?;
     let root = KeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/postgres")?
         .with_local_relation_cache(LocalRelationCacheConfig::new(Duration::from_mins(1)));
     root.migrate().await?;
     reset_database(&pool).await?;
-    let repo = root.for_tenant(test_tenant());
+    let repo = root.for_tenant(test_tenant()?);
 
     let key = RelationKey::new("tag", unique_key("cached"))?;
     let relation = RelationDefinition::new(
-        test_tenant(),
+        test_tenant()?,
         Uuid::now_v7(),
         key.clone(),
         true,
@@ -205,7 +207,7 @@ async fn relation_cache_serves_reads_and_invalidates_local_writes() -> TestResul
         where tenant_id = $1 and id = $2
         ",
     )
-    .bind(test_tenant().as_str())
+    .bind(test_tenant()?.as_str())
     .bind(stored.id)
     .execute(&pool)
     .await?;
@@ -221,7 +223,7 @@ async fn relation_cache_serves_reads_and_invalidates_local_writes() -> TestResul
 
 #[derive(Debug, Clone, Default)]
 struct SpyRelationCache {
-    state: std::sync::Arc<std::sync::Mutex<SpyRelationCacheState>>,
+    state: sync::Arc<sync::Mutex<SpyRelationCacheState>>,
 }
 
 #[derive(Debug, Default)]
@@ -235,7 +237,7 @@ struct SpyRelationCacheState {
 }
 
 impl SpyRelationCache {
-    fn lock_state(&self) -> std::sync::MutexGuard<'_, SpyRelationCacheState> {
+    fn lock_state(&self) -> sync::MutexGuard<'_, SpyRelationCacheState> {
         match self.state.lock() {
             Ok(state) => state,
             Err(error) => error.into_inner(),
@@ -261,7 +263,7 @@ impl RelationCache for SpyRelationCache {
         relation_id: RelationId,
     ) -> Option<RelationDefinition> {
         let mut state = self.lock_state();
-        state.get_by_id_calls += 1;
+        state.get_by_id_calls = state.get_by_id_calls.saturating_add(1);
         state.by_id.get(&(tenant_id.clone(), relation_id)).cloned()
     }
 
@@ -271,13 +273,13 @@ impl RelationCache for SpyRelationCache {
         key: &RelationKey,
     ) -> Option<RelationDefinition> {
         let mut state = self.lock_state();
-        state.get_by_key_calls += 1;
+        state.get_by_key_calls = state.get_by_key_calls.saturating_add(1);
         state.by_key.get(&(tenant_id.clone(), key.clone())).cloned()
     }
 
     async fn store(&self, tenant_id: &TenantId, relation: &RelationDefinition) {
         let mut state = self.lock_state();
-        state.store_calls += 1;
+        state.store_calls = state.store_calls.saturating_add(1);
         state
             .by_id
             .insert((tenant_id.clone(), relation.id), relation.clone());
@@ -288,7 +290,7 @@ impl RelationCache for SpyRelationCache {
 
     async fn remove_by_id(&self, tenant_id: &TenantId, relation_id: RelationId) {
         let mut state = self.lock_state();
-        state.remove_by_id_calls += 1;
+        state.remove_by_id_calls = state.remove_by_id_calls.saturating_add(1);
         if let Some(relation) = state.by_id.remove(&(tenant_id.clone(), relation_id)) {
             state.by_key.remove(&(tenant_id.clone(), relation.key));
         }
@@ -298,7 +300,7 @@ impl RelationCache for SpyRelationCache {
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn relation_lookup_hits_cache_after_first_database_read() -> TestResult<()> {
-    let database_url = std::env::var("DATABASE_URL")?;
+    let database_url = env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
     reset_schema(&pool).await?;
     let cache = SpyRelationCache::default();
@@ -306,11 +308,11 @@ async fn relation_lookup_hits_cache_after_first_database_read() -> TestResult<()
         .with_relation_cache(cache.clone());
     root.migrate().await?;
     reset_database(&pool).await?;
-    let repo = root.for_tenant(test_tenant());
+    let repo = root.for_tenant(test_tenant()?);
 
     let key = RelationKey::new("tag", unique_key("spy-cached"))?;
     let relation = RelationDefinition::new(
-        test_tenant(),
+        test_tenant()?,
         Uuid::now_v7(),
         key.clone(),
         true,

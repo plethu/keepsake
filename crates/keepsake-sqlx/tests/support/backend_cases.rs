@@ -1,4 +1,9 @@
-#![allow(missing_docs, clippy::missing_panics_doc)]
+use std::collections::BTreeSet;
+use std::env;
+use std::num::TryFromIntError;
+use time::error::Parse;
+use time::format_description::well_known::Rfc3339;
+use tokio::task::JoinError;
 
 use keepsake::{
     ActorRef, ApplyKeepsake, CommandContext, ExpiryPolicy, FulfillmentPolicy, RelationDefinition,
@@ -8,12 +13,16 @@ use keepsake_sqlx::RepositoryError;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-pub type TestResult<T> = Result<T, TestError>;
+pub(in super::super) type TestResult<T> = Result<T, TestError>;
 
 #[derive(Debug, thiserror::Error)]
-pub enum TestError {
+pub(in super::super) enum TestError {
+    #[error("test timestamp exceeds the supported range")]
+    TimestampRange,
     #[error(transparent)]
-    Time(#[from] time::error::Parse),
+    Integer(#[from] TryFromIntError),
+    #[error(transparent)]
+    Time(#[from] Parse),
     #[error(transparent)]
     Keepsake(#[from] keepsake::KeepsakeError),
     #[error(transparent)]
@@ -23,21 +32,21 @@ pub enum TestError {
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
     #[error(transparent)]
-    Env(#[from] std::env::VarError),
+    Env(#[from] env::VarError),
     #[error(transparent)]
-    Join(#[from] tokio::task::JoinError),
+    Join(#[from] JoinError),
 }
 
 #[async_trait::async_trait]
-pub trait BackendHarness {
+pub(in super::super) trait BackendHarness {
     const BACKEND: &'static str;
     const TENANT: &'static str;
 
     type Pool: Send + Sync;
     type Repo: Send + Sync;
 
-    fn tenant() -> TenantId {
-        TenantId::new(Self::TENANT).unwrap_or_else(|_| unreachable!("test tenant is valid"))
+    fn tenant() -> keepsake::Result<TenantId> {
+        TenantId::new(Self::TENANT)
     }
 
     async fn repo() -> TestResult<(Self::Repo, Self::Pool)>;
@@ -94,15 +103,15 @@ pub trait BackendHarness {
     ) -> Result<u64, RepositoryError>;
 }
 
-pub fn ts(value: &str) -> Result<OffsetDateTime, time::error::Parse> {
-    OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+pub(in super::super) fn ts(value: &str) -> Result<OffsetDateTime, Parse> {
+    OffsetDateTime::parse(value, &Rfc3339)
 }
 
 fn context() -> TestResult<CommandContext> {
     Ok(CommandContext::new(ActorRef::new("test", "worker")?))
 }
 
-pub async fn upsert_relation<H>(
+pub(in super::super) async fn upsert_relation<H>(
     repo: &H::Repo,
     expiry: ExpiryPolicy,
 ) -> TestResult<RelationDefinition>
@@ -110,7 +119,7 @@ where
     H: BackendHarness,
 {
     let relation = RelationDefinition::enabled(
-        H::tenant(),
+        H::tenant()?,
         Uuid::now_v7(),
         RelationKey::new("tag", format!("{}-{}", H::BACKEND, Uuid::now_v7()))?,
         expiry,
@@ -118,7 +127,7 @@ where
     Ok(H::upsert_relation(repo, &relation, ts("2026-01-01T00:00:00Z")?).await?)
 }
 
-pub async fn migration_initializes_backend_marker<H>() -> TestResult<()>
+pub(in super::super) async fn migration_initializes_backend_marker<H>() -> TestResult<()>
 where
     H: BackendHarness,
 {
@@ -129,7 +138,7 @@ where
     Ok(())
 }
 
-pub async fn apply_duplicate_and_active_read<H>() -> TestResult<()>
+pub(in super::super) async fn apply_duplicate_and_active_read<H>() -> TestResult<()>
 where
     H: BackendHarness,
 {
@@ -137,7 +146,7 @@ where
     let relation = upsert_relation::<H>(&repo, ExpiryPolicy::ManualOnly).await?;
     let subject = SubjectRef::new("account", format!("{}_acct_123", H::BACKEND))?;
     let command = ApplyKeepsake::new(
-        H::tenant(),
+        H::tenant()?,
         subject.clone(),
         relation.id,
         ts("2026-01-01T00:01:00Z")?,
@@ -148,7 +157,7 @@ where
     let second = H::apply(
         &repo,
         &ApplyKeepsake::new(
-            H::tenant(),
+            H::tenant()?,
             subject.clone(),
             relation.id,
             ts("2026-01-01T00:02:00Z")?,
@@ -162,11 +171,15 @@ where
     assert!(second.duplicate_prevented);
     assert_eq!(first.keepsake.id(), second.keepsake.id());
     assert_eq!(active.len(), 1);
-    assert_eq!(active[0].relation().id, relation.id);
+    assert_eq!(
+        active.first().map(|row| row.relation().id),
+        Some(relation.id)
+    );
     Ok(())
 }
 
-pub async fn nanosecond_timed_policy_round_trips_at_sql_precision<H>() -> TestResult<()>
+pub(in super::super) async fn nanosecond_timed_policy_round_trips_at_sql_precision<H>()
+-> TestResult<()>
 where
     H: BackendHarness,
 {
@@ -188,7 +201,7 @@ where
     );
 
     let command = ApplyKeepsake::new(
-        H::tenant(),
+        H::tenant()?,
         SubjectRef::new("account", format!("{}_nanos", H::BACKEND))?,
         relation.id,
         ts("2026-01-01T00:01:00.987654321Z")?,
@@ -201,7 +214,7 @@ where
     Ok(())
 }
 
-pub async fn bounded_relation_reads_filter_in_the_database<H>() -> TestResult<()>
+pub(in super::super) async fn bounded_relation_reads_filter_in_the_database<H>() -> TestResult<()>
 where
     H: BackendHarness,
 {
@@ -213,7 +226,7 @@ where
         H::apply(
             &repo,
             &ApplyKeepsake::new(
-                H::tenant(),
+                H::tenant()?,
                 subject.clone(),
                 relation_id,
                 ts("2026-01-01T00:01:00Z")?,
@@ -230,7 +243,10 @@ where
     )
     .await?;
     assert_eq!(by_ids.len(), 1);
-    assert_eq!(by_ids[0].relation().id, relation_a.id);
+    assert_eq!(
+        by_ids.first().map(|row| row.relation().id),
+        Some(relation_a.id)
+    );
 
     let missing_key = RelationKey::new("tag", format!("{}-missing", H::BACKEND))?;
     let by_keys = H::active_relations_for_subject_by_keys(
@@ -240,11 +256,14 @@ where
     )
     .await?;
     assert_eq!(by_keys.len(), 1);
-    assert_eq!(by_keys[0].relation().id, relation_b.id);
+    assert_eq!(
+        by_keys.first().map(|row| row.relation().id),
+        Some(relation_b.id)
+    );
     Ok(())
 }
 
-pub async fn identifier_contract_round_trips_case_and_unicode<H>() -> TestResult<()>
+pub(in super::super) async fn identifier_contract_round_trips_case_and_unicode<H>() -> TestResult<()>
 where
     H: BackendHarness,
 {
@@ -261,11 +280,11 @@ where
     ];
     let relations = keys
         .iter()
-        .enumerate()
-        .map(|(index, key)| {
+        .zip(1_u128..)
+        .map(|(key, id)| {
             RelationDefinition::enabled(
-                H::tenant(),
-                Uuid::from_u128((index + 1) as u128),
+                H::tenant()?,
+                Uuid::from_u128(id),
                 key.clone(),
                 ExpiryPolicy::ManualOnly,
             )
@@ -283,10 +302,11 @@ where
         let applied = H::apply(
             &repo,
             &ApplyKeepsake::new(
-                H::tenant(),
+                H::tenant()?,
                 subject.clone(),
                 relation.id,
-                at + time::Duration::seconds(i64::try_from(index).unwrap_or(0)),
+                at.checked_add(time::Duration::seconds(i64::try_from(index)?))
+                    .ok_or(TestError::TimestampRange)?,
                 context()?,
             ),
         )
@@ -303,26 +323,45 @@ where
                 relation.relation().key.name().to_owned(),
             )
         })
-        .collect::<std::collections::BTreeSet<_>>();
+        .collect::<BTreeSet<_>>();
     let expected_keys = keys
         .iter()
         .map(|key| (key.kind().to_owned(), key.name().to_owned()))
-        .collect::<std::collections::BTreeSet<_>>();
+        .collect::<BTreeSet<_>>();
     assert_eq!(found_keys, expected_keys);
 
-    let projected = H::upsert_counter_projection(&repo, keepsake_ids[0], &boundary, 1, at).await;
+    let projected = H::upsert_counter_projection(
+        &repo,
+        keepsake_ids
+            .first()
+            .copied()
+            .ok_or(sqlx::Error::RowNotFound)?,
+        &boundary,
+        1,
+        at,
+    )
+    .await;
     assert!(projected.is_ok());
     assert!(
-        H::upsert_counter_projection(&repo, keepsake_ids[0], &"é".repeat(96), 1, at,)
-            .await
-            .is_err()
+        H::upsert_counter_projection(
+            &repo,
+            keepsake_ids
+                .first()
+                .copied()
+                .ok_or(sqlx::Error::RowNotFound)?,
+            &"é".repeat(96),
+            1,
+            at,
+        )
+        .await
+        .is_err()
     );
     assert!(SubjectRef::new("User", "é".repeat(96)).is_err());
     assert!(RelationKey::new("Tag", "é".repeat(96)).is_err());
     Ok(())
 }
 
-pub async fn timed_expiry_expires_due_keepsake<H>() -> TestResult<()>
+pub(in super::super) async fn timed_expiry_expires_due_keepsake<H>() -> TestResult<()>
 where
     H: BackendHarness,
 {
@@ -338,7 +377,7 @@ where
     let applied = H::apply(
         &repo,
         &ApplyKeepsake::new(
-            H::tenant(),
+            H::tenant()?,
             subject,
             relation.id,
             ts("2026-01-01T00:01:00Z")?,
@@ -355,62 +394,14 @@ where
     Ok(())
 }
 
-#[allow(dead_code)]
-pub async fn fulfilled_expiry_uses_counter_snapshot<H>() -> TestResult<()>
-where
-    H: BackendHarness,
-{
-    let (repo, _pool) = H::repo().await?;
-    let relation = upsert_relation::<H>(
-        &repo,
-        ExpiryPolicy::WhenFulfilled {
-            policy: FulfillmentPolicy::CounterAtLeast {
-                key: "steps".to_owned(),
-                threshold: 3,
-            },
-        },
-    )
-    .await?;
-    let subject = SubjectRef::new("account", format!("{}_acct_steps", H::BACKEND))?;
-    let applied = H::apply(
-        &repo,
-        &ApplyKeepsake::new(
-            H::tenant(),
-            subject,
-            relation.id,
-            ts("2026-01-01T00:01:00Z")?,
-            context()?,
-        ),
-    )
-    .await?;
-
-    assert_eq!(
-        H::expire_due_fulfilled(&repo, ts("2026-01-01T00:02:00Z")?, 10).await?,
-        0
-    );
-    H::upsert_counter_projection(
-        &repo,
-        applied.keepsake.id(),
-        "steps",
-        3,
-        ts("2026-01-01T00:03:00Z")?,
-    )
-    .await?;
-
-    assert_eq!(
-        H::expire_due_fulfilled(&repo, ts("2026-01-01T00:04:00Z")?, 10).await?,
-        1
-    );
-    Ok(())
-}
-
-pub async fn fulfilled_expiry_skips_disabled_relations_before_limit<H>() -> TestResult<()>
+pub(in super::super) async fn fulfilled_expiry_skips_disabled_relations_before_limit<H>()
+-> TestResult<()>
 where
     H: BackendHarness,
 {
     let (repo, _pool) = H::repo().await?;
     let disabled_relation = RelationDefinition::enabled(
-        H::tenant(),
+        H::tenant()?,
         Uuid::from_u128(1),
         RelationKey::new("tag", format!("{}-disabled-first", H::BACKEND))?,
         ExpiryPolicy::WhenFulfilled {
@@ -421,7 +412,7 @@ where
         },
     )?;
     let enabled_relation = RelationDefinition::enabled(
-        H::tenant(),
+        H::tenant()?,
         Uuid::from_u128(2),
         RelationKey::new("tag", format!("{}-enabled-second", H::BACKEND))?,
         ExpiryPolicy::WhenFulfilled {
@@ -441,7 +432,7 @@ where
     let disabled = H::apply(
         &repo,
         &ApplyKeepsake::new(
-            H::tenant(),
+            H::tenant()?,
             disabled_subject.clone(),
             disabled_relation.id,
             ts("2026-01-01T00:02:00Z")?,
@@ -452,7 +443,7 @@ where
     let enabled = H::apply(
         &repo,
         &ApplyKeepsake::new(
-            H::tenant(),
+            H::tenant()?,
             enabled_subject.clone(),
             enabled_relation.id,
             ts("2026-01-01T00:02:00Z")?,
@@ -490,13 +481,14 @@ where
     Ok(())
 }
 
-pub async fn fulfilled_expiry_skips_unfulfilled_relations_before_limit<H>() -> TestResult<()>
+pub(in super::super) async fn fulfilled_expiry_skips_unfulfilled_relations_before_limit<H>()
+-> TestResult<()>
 where
     H: BackendHarness,
 {
     let (repo, _pool) = H::repo().await?;
     let unfulfilled_relation = RelationDefinition::enabled(
-        H::tenant(),
+        H::tenant()?,
         Uuid::from_u128(1),
         RelationKey::new("tag", format!("{}-unfulfilled-first", H::BACKEND))?,
         ExpiryPolicy::WhenFulfilled {
@@ -507,7 +499,7 @@ where
         },
     )?;
     let fulfilled_relation = RelationDefinition::enabled(
-        H::tenant(),
+        H::tenant()?,
         Uuid::from_u128(2),
         RelationKey::new("tag", format!("{}-fulfilled-second", H::BACKEND))?,
         ExpiryPolicy::WhenFulfilled {
@@ -528,7 +520,7 @@ where
     let _unfulfilled = H::apply(
         &repo,
         &ApplyKeepsake::new(
-            H::tenant(),
+            H::tenant()?,
             unfulfilled_subject.clone(),
             unfulfilled_relation.id,
             ts("2026-01-01T00:02:00Z")?,
@@ -539,7 +531,7 @@ where
     let fulfilled = H::apply(
         &repo,
         &ApplyKeepsake::new(
-            H::tenant(),
+            H::tenant()?,
             fulfilled_subject.clone(),
             fulfilled_relation.id,
             ts("2026-01-01T00:02:00Z")?,

@@ -6,7 +6,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::repository::{
-    RelationCache, RepositoryResult, SqliteBackend, TenantSqlxKeepsakeRepository,
+    RelationCache, RepositoryError, RepositoryResult, SqliteBackend, TenantSqlxKeepsakeRepository,
 };
 
 use super::rows::format_timestamp;
@@ -16,6 +16,10 @@ where
     C: RelationCache,
 {
     /// Upserts a simple fulfillment counter projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-key or database errors, including an assignment outside this tenant.
     pub async fn upsert_counter_projection(
         &self,
         keepsake_id: Uuid,
@@ -45,6 +49,12 @@ where
     }
 
     /// Atomically adds `delta` to a fulfillment counter and returns the new value.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-key or database errors, including an assignment outside this tenant
+    /// or `RepositoryError::CounterOverflow` when addition exceeds the integer range.
+    /// Overflow leaves the counter value and its observation time unchanged.
     pub async fn increment_counter_projection(
         &self,
         keepsake_id: Uuid,
@@ -61,6 +71,7 @@ where
             on conflict (tenant_id, keepsake_id, key) do update set
                 value = value + excluded.value,
                 observed_at = excluded.observed_at
+            where typeof(value + excluded.value) = 'integer'
             returning value
             ",
         )
@@ -69,12 +80,17 @@ where
         .bind(key)
         .bind(delta)
         .bind(format_timestamp(observed_at))
-        .fetch_one(self.pool)
-        .await?;
+        .fetch_optional(self.pool)
+        .await?
+        .ok_or(RepositoryError::CounterOverflow)?;
         Ok(row.try_get("value")?)
     }
 
     /// Upserts a checklist item completion projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-key or database errors, including an assignment outside this tenant.
     pub async fn upsert_checklist_projection(
         &self,
         keepsake_id: Uuid,

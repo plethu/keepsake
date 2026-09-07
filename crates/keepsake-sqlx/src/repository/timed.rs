@@ -68,6 +68,10 @@ where
     C: super::RelationCache,
 {
     /// Inserts or updates a relation definition using this view's timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-definition, tenant or database errors.
     pub async fn upsert_relation(
         &self,
         relation: &RelationDefinition,
@@ -76,6 +80,10 @@ where
     }
 
     /// Inserts or updates a typed relation spec using this view's timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-definition, tenant, stable-spec-identity conflict or database errors.
     pub async fn upsert_relation_spec<Spec>(&self) -> super::RepositoryResult<RelationDefinition>
     where
         Spec: RelationSpec,
@@ -84,6 +92,10 @@ where
     }
 
     /// Enables or disables a relation using this view's timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns database errors while updating the tenant-scoped definition.
     pub async fn set_relation_enabled(
         &self,
         relation_id: RelationId,
@@ -95,6 +107,11 @@ where
     }
 
     /// Lists due timed expiry candidates using this view's timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RepositoryError::InvalidLimit` outside the supported batch range, or a database
+    /// or invalid-record decoding error.
     pub async fn due_timed_expiry(
         &self,
         limit: i64,
@@ -103,12 +120,22 @@ where
     }
 
     /// Expires a stable batch of due timed keepsakes using this view's timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-limit, schema, isolation, storage or mandatory audit errors.
+    /// The owned transaction is not committed when reconciliation fails.
     pub async fn expire_due_timed(&self, limit: i64) -> super::RepositoryResult<u64> {
         self.repository.expire_due_timed(self.at, limit).await
     }
 
     /// Reads the persisted fulfillment counter snapshot for a keepsake.
     #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns database or invalid-projection decoding errors. Missing evidence remains absent
+    /// in the returned snapshot and is not fabricated as fulfilled.
     pub async fn fulfillment_snapshot(
         &self,
         keepsake_id: Uuid,
@@ -118,6 +145,11 @@ where
 
     /// Lists fulfillment expiry candidates.
     #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns `RepositoryError::InvalidLimit` outside the supported batch range, or a database
+    /// or invalid-policy decoding error.
     pub async fn due_fulfilled_expiry(
         &self,
         limit: i64,
@@ -127,12 +159,21 @@ where
 
     /// Expires fulfillment-satisfied keepsakes using this view's timestamp.
     #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-limit, schema, isolation, projection, storage or mandatory audit errors.
+    /// The owned transaction is not committed when reconciliation fails.
     pub async fn expire_due_fulfilled(&self, limit: i64) -> super::RepositoryResult<u64> {
         self.repository.expire_due_fulfilled(self.at, limit).await
     }
 
     /// Upserts a simple fulfillment counter projection using this view's timestamp.
     #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-key or database errors, including an assignment outside this tenant.
     pub async fn upsert_counter_projection(
         &self,
         keepsake_id: Uuid,
@@ -146,6 +187,11 @@ where
 
     /// Atomically increments a fulfillment counter using this view's timestamp.
     #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-key or database errors, including an assignment outside this tenant
+    /// and a counter value outside the backend integer range.
     pub async fn increment_counter_projection(
         &self,
         keepsake_id: Uuid,
@@ -159,6 +205,10 @@ where
 
     /// Upserts a checklist item completion projection using this view's timestamp.
     #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-key or database errors, including an assignment outside this tenant.
     pub async fn upsert_checklist_projection(
         &self,
         keepsake_id: Uuid,
@@ -177,6 +227,10 @@ where
     C: super::RelationCache,
 {
     /// Inserts or updates a relation definition using this view's timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-definition, tenant or database errors.
     pub async fn upsert_relation(
         &self,
         relation: &RelationDefinition,
@@ -185,6 +239,10 @@ where
     }
 
     /// Inserts or updates a typed relation spec using this view's timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-definition, tenant, stable-spec-identity conflict or database errors.
     pub async fn upsert_relation_spec<Spec>(&self) -> super::RepositoryResult<RelationDefinition>
     where
         Spec: RelationSpec,
@@ -193,6 +251,10 @@ where
     }
 
     /// Enables or disables a relation using this view's timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns database errors while updating the tenant-scoped definition.
     pub async fn set_relation_enabled(
         &self,
         relation_id: RelationId,
@@ -204,6 +266,11 @@ where
     }
 
     /// Lists due timed expiry candidates using this view's timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RepositoryError::InvalidLimit` outside the supported batch range, or a database
+    /// or invalid-record decoding error.
     pub async fn due_timed_expiry(
         &self,
         limit: i64,
@@ -212,12 +279,22 @@ where
     }
 
     /// Expires a stable batch of due timed keepsakes using this view's timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-limit, schema, isolation, storage or mandatory audit errors.
+    /// The owned transaction is not committed when reconciliation fails.
     pub async fn expire_due_timed(&self, limit: i64) -> super::RepositoryResult<u64> {
         self.repository.expire_due_timed(self.at, limit).await
     }
 
     /// Reads the persisted fulfillment counter snapshot for a keepsake.
     #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns database or invalid-projection decoding errors. Missing evidence remains absent
+    /// in the returned snapshot and is not fabricated as fulfilled.
     pub async fn fulfillment_snapshot(
         &self,
         keepsake_id: Uuid,
@@ -227,6 +304,11 @@ where
 
     /// Lists fulfillment expiry candidates.
     #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns `RepositoryError::InvalidLimit` outside the supported batch range, or a database
+    /// or invalid-policy decoding error.
     pub async fn due_fulfilled_expiry(
         &self,
         limit: i64,
@@ -236,12 +318,21 @@ where
 
     /// Expires fulfillment-satisfied keepsakes using this view's timestamp.
     #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-limit, schema, isolation, projection, storage or mandatory audit errors.
+    /// The owned transaction is not committed when reconciliation fails.
     pub async fn expire_due_fulfilled(&self, limit: i64) -> super::RepositoryResult<u64> {
         self.repository.expire_due_fulfilled(self.at, limit).await
     }
 
     /// Upserts a simple fulfillment counter projection using this view's timestamp.
     #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-key or database errors, including an assignment outside this tenant.
     pub async fn upsert_counter_projection(
         &self,
         keepsake_id: Uuid,
@@ -255,6 +346,11 @@ where
 
     /// Atomically increments a fulfillment counter using this view's timestamp.
     #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-key or database errors, including an assignment outside this tenant
+    /// and a counter value outside the backend integer range.
     pub async fn increment_counter_projection(
         &self,
         keepsake_id: Uuid,
@@ -268,6 +364,10 @@ where
 
     /// Upserts a checklist item completion projection using this view's timestamp.
     #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-key or database errors, including an assignment outside this tenant.
     pub async fn upsert_checklist_projection(
         &self,
         keepsake_id: Uuid,
@@ -286,6 +386,10 @@ where
     C: super::RelationCache,
 {
     /// Inserts or updates a relation definition using this view's timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-definition, tenant or database errors.
     pub async fn upsert_relation(
         &self,
         relation: &RelationDefinition,
@@ -294,6 +398,10 @@ where
     }
 
     /// Inserts or updates a typed relation spec using this view's timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-definition, tenant, stable-spec-identity conflict or database errors.
     pub async fn upsert_relation_spec<Spec>(&self) -> super::RepositoryResult<RelationDefinition>
     where
         Spec: RelationSpec,
@@ -302,6 +410,10 @@ where
     }
 
     /// Enables or disables a relation using this view's timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns database errors while updating the tenant-scoped definition.
     pub async fn set_relation_enabled(
         &self,
         relation_id: RelationId,
@@ -313,6 +425,11 @@ where
     }
 
     /// Lists due timed expiry candidates using this view's timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RepositoryError::InvalidLimit` outside the supported batch range, or a database
+    /// or invalid-record decoding error.
     pub async fn due_timed_expiry(
         &self,
         limit: i64,
@@ -321,12 +438,22 @@ where
     }
 
     /// Expires a stable batch of due timed keepsakes using this view's timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-limit, schema, isolation, storage or mandatory audit errors.
+    /// The owned transaction is not committed when reconciliation fails.
     pub async fn expire_due_timed(&self, limit: i64) -> super::RepositoryResult<u64> {
         self.repository.expire_due_timed(self.at, limit).await
     }
 
     /// Reads the persisted fulfillment counter snapshot for a keepsake.
     #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns database or invalid-projection decoding errors. Missing evidence remains absent
+    /// in the returned snapshot and is not fabricated as fulfilled.
     pub async fn fulfillment_snapshot(
         &self,
         keepsake_id: Uuid,
@@ -336,6 +463,11 @@ where
 
     /// Lists fulfillment expiry candidates.
     #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns `RepositoryError::InvalidLimit` outside the supported batch range, or a database
+    /// or invalid-policy decoding error.
     pub async fn due_fulfilled_expiry(
         &self,
         limit: i64,
@@ -345,12 +477,21 @@ where
 
     /// Expires fulfillment-satisfied keepsakes using this view's timestamp.
     #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-limit, schema, isolation, projection, storage or mandatory audit errors.
+    /// The owned transaction is not committed when reconciliation fails.
     pub async fn expire_due_fulfilled(&self, limit: i64) -> super::RepositoryResult<u64> {
         self.repository.expire_due_fulfilled(self.at, limit).await
     }
 
     /// Upserts a simple fulfillment counter projection using this view's timestamp.
     #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-key or database errors, including an assignment outside this tenant.
     pub async fn upsert_counter_projection(
         &self,
         keepsake_id: Uuid,
@@ -364,6 +505,11 @@ where
 
     /// Atomically increments a fulfillment counter using this view's timestamp.
     #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-key or database errors, including an assignment outside this tenant
+    /// and a counter value outside the backend integer range.
     pub async fn increment_counter_projection(
         &self,
         keepsake_id: Uuid,
@@ -377,6 +523,10 @@ where
 
     /// Upserts a checklist item completion projection using this view's timestamp.
     #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-key or database errors, including an assignment outside this tenant.
     pub async fn upsert_checklist_projection(
         &self,
         keepsake_id: Uuid,

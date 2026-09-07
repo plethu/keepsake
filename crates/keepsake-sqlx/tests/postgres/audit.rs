@@ -4,11 +4,12 @@ use keepsake::{
     RevokeBySubject, SubjectRef,
 };
 use sqlx::Row;
+use std::env;
 
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn lifecycle_events_are_typed_dovecote_rows() -> TestResult<()> {
-    let database_url = std::env::var("DATABASE_URL")?;
+    let database_url = env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
     reset_schema(&pool).await?;
     let root = KeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/postgres")?;
@@ -21,19 +22,24 @@ async fn lifecycle_events_are_typed_dovecote_rows() -> TestResult<()> {
             .execute(&pool)
             .await?;
     } else {
-        sqlx::raw_sql(dovecote_sqlx_postgres::MIGRATIONS[0].sql())
-            .execute(&pool)
-            .await?;
+        sqlx::raw_sql(
+            dovecote_sqlx_postgres::MIGRATIONS
+                .first()
+                .ok_or(sqlx::Error::RowNotFound)?
+                .sql(),
+        )
+        .execute(&pool)
+        .await?;
     }
     reset_database(&pool).await?;
-    let repo = root.for_tenant(test_tenant());
+    let repo = root.for_tenant(test_tenant()?);
 
     let relation = timed_relation(&repo, "dovecote-audit", "2026-01-02T00:00:00Z").await?;
     let subject = SubjectRef::new("user", format!("audit_{}", Uuid::now_v7()))?;
     let apply_at = ts("2026-01-01T00:01:00.123456Z")?;
     let apply_id = AuditEventId::deterministic(b"postgres-apply");
     let command = ApplyKeepsake::new(
-        test_tenant(),
+        test_tenant()?,
         subject.clone(),
         relation.id,
         apply_at,
@@ -46,7 +52,7 @@ async fn lifecycle_events_are_typed_dovecote_rows() -> TestResult<()> {
     let revoke_id = AuditEventId::deterministic(b"postgres-revoke");
     repo.revoke_by_subject(
         &RevokeBySubject::new(
-            test_tenant(),
+            test_tenant()?,
             subject,
             relation.id,
             ts("2026-01-01T00:02:00Z")?,
@@ -105,13 +111,13 @@ async fn lifecycle_events_are_typed_dovecote_rows() -> TestResult<()> {
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn exact_replay_is_idempotent_and_changed_content_conflicts() -> TestResult<()> {
     let root = repo().await?;
-    let repo = root.for_tenant(test_tenant());
-    let database_url = std::env::var("DATABASE_URL")?;
+    let repo = root.for_tenant(test_tenant()?);
+    let database_url = env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
     let relation = timed_relation(&repo, "dovecote-replay", "2026-01-02T00:00:00Z").await?;
     let id = AuditEventId::deterministic(b"postgres-replay");
     let command = ApplyKeepsake::new(
-        test_tenant(),
+        test_tenant()?,
         SubjectRef::new("user", format!("replay_{}", Uuid::now_v7()))?,
         relation.id,
         ts("2026-01-01T00:01:00Z")?,
@@ -127,7 +133,7 @@ async fn exact_replay_is_idempotent_and_changed_content_conflicts() -> TestResul
         1
     );
     let changed = ApplyKeepsake::new(
-        test_tenant(),
+        test_tenant()?,
         command.subject.clone(),
         relation.id,
         command.at,
@@ -148,14 +154,14 @@ async fn exact_replay_is_idempotent_and_changed_content_conflicts() -> TestResul
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn exact_replay_rejects_payload_tenant_mismatch() -> TestResult<()> {
     let root = repo().await?;
-    let repo = root.for_tenant(test_tenant());
-    let database_url = std::env::var("DATABASE_URL")?;
+    let repo = root.for_tenant(test_tenant()?);
+    let database_url = env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
     let relation =
         timed_relation(&repo, "dovecote-tenant-mismatch", "2026-01-02T00:00:00Z").await?;
     let id = AuditEventId::deterministic(b"postgres-tenant-mismatch");
     let command = ApplyKeepsake::new(
-        test_tenant(),
+        test_tenant()?,
         SubjectRef::new("user", "postgres_tenant_mismatch")?,
         relation.id,
         ts("2026-01-01T00:01:00Z")?,
@@ -168,7 +174,7 @@ async fn exact_replay_rejects_payload_tenant_mismatch() -> TestResult<()> {
     let payload = sqlx::query_scalar::<_, Vec<u8>>(
         "select data from dovecote_events where tenant_id = $1 and source = $2 and event_id = $3",
     )
-    .bind(test_tenant().as_str())
+    .bind(test_tenant()?.as_str())
     .bind("https://tests.invalid/keepsake/postgres")
     .bind(&event_id)
     .fetch_one(&pool)
@@ -179,7 +185,7 @@ async fn exact_replay_rejects_payload_tenant_mismatch() -> TestResult<()> {
         "update dovecote_events set data = $1 where tenant_id = $2 and source = $3 and event_id = $4",
     )
     .bind(serde_json::to_vec(&payload)?)
-    .bind(test_tenant().as_str())
+    .bind(test_tenant()?.as_str())
     .bind("https://tests.invalid/keepsake/postgres")
     .bind(event_id)
     .execute(&pool)

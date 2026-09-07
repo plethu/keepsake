@@ -8,13 +8,17 @@ use super::{
     validate_persisted_identifier_bytes,
 };
 use super::{RepositoryError, RepositoryResult, compact_sql, mismatch};
+use crate::SqliteBackend;
 use crate::repository::backend::KeepsakeSqlxBackend;
+#[cfg(feature = "migrations")]
+use sqlx::sqlite::SqliteRow;
+#[cfg(feature = "migrations")]
+use std::collections::BTreeSet;
 
 #[cfg(feature = "sqlite")]
 use super::SQLITE_V4_IDENTIFIER_ARTIFACT;
 
 #[cfg(all(feature = "sqlite", feature = "migrations"))]
-#[allow(clippy::too_many_lines)]
 async fn sqlite_domain_shape_check(
     pool: &sqlx::SqlitePool,
     activated_upgrade: bool,
@@ -90,36 +94,7 @@ async fn sqlite_domain_shape_check(
         }
     }
 
-    // An application may own unrelated SQLite objects, but an additional
-    // trigger attached to an invariant table can silently change lifecycle
-    // semantics. Reject those while leaving unrelated application objects
-    // alone.
-    let rows = sqlx::query(
-        "select name, sql from sqlite_master where type = 'trigger' and name not like 'sqlite_%'",
-    )
-    .fetch_all(pool)
-    .await?;
-    let expected_names: std::collections::BTreeSet<&str> =
-        expected_triggers.iter().map(|(_, name)| *name).collect();
-    for row in rows {
-        let name: String = row.try_get("name")?;
-        let sql: String = row.try_get("sql")?;
-        let compact = compact_sql(&sql);
-        if !expected_names.contains(name.as_str())
-            && [
-                "onkeepsakes",
-                "onkeepsakerelationdefinitions",
-                "onkeepsakefulfillmentcounters",
-                "onkeepsakefulfillmentchecklist",
-            ]
-            .iter()
-            .any(|table| compact.contains(table))
-        {
-            return Err(mismatch(format!(
-                "unexpected trigger {name} mutates a Keepsake invariant table"
-            )));
-        }
-    }
+    sqlite_extra_triggers_check(pool, expected_triggers).await?;
 
     // The clean track must not retain the active legacy SQL audit model. The
     // activated upgrade track deliberately expects these tables and validates
@@ -154,7 +129,6 @@ pub(in crate::repository) async fn sqlite_upgrade_schema_check(
 }
 
 #[cfg(feature = "sqlite")]
-#[allow(clippy::too_many_lines)]
 async fn sqlite_v3_domain_shape_check(pool: &sqlx::SqlitePool) -> RepositoryResult<()> {
     use sqlx::Row;
 
@@ -164,29 +138,10 @@ async fn sqlite_v3_domain_shape_check(pool: &sqlx::SqlitePool) -> RepositoryResu
         "keepsake_fulfillment_counters",
         "keepsake_fulfillment_checklist",
     ] {
-        let columns = match table {
-            "keepsake_relation_definitions" => {
-                sqlx::query("pragma table_info(keepsake_relation_definitions)")
-                    .fetch_all(pool)
-                    .await?
-            }
-            "keepsakes" => {
-                sqlx::query("pragma table_info(keepsakes)")
-                    .fetch_all(pool)
-                    .await?
-            }
-            "keepsake_fulfillment_counters" => {
-                sqlx::query("pragma table_info(keepsake_fulfillment_counters)")
-                    .fetch_all(pool)
-                    .await?
-            }
-            "keepsake_fulfillment_checklist" => {
-                sqlx::query("pragma table_info(keepsake_fulfillment_checklist)")
-                    .fetch_all(pool)
-                    .await?
-            }
-            _ => unreachable!("table list is static"),
-        };
+        let columns = sqlx::query("select * from pragma_table_info(?)")
+            .bind(table)
+            .fetch_all(pool)
+            .await?;
 
         let tenant = columns
             .iter()
@@ -252,39 +207,7 @@ async fn sqlite_v3_domain_shape_check(pool: &sqlx::SqlitePool) -> RepositoryResu
         }
     }
 
-    for (table, message) in [
-        (
-            "keepsakes",
-            "keepsakes relation foreign key is not tenant-composite",
-        ),
-        (
-            "keepsake_fulfillment_counters",
-            "counter foreign key is not tenant-composite",
-        ),
-        (
-            "keepsake_fulfillment_checklist",
-            "checklist foreign key is not tenant-composite",
-        ),
-    ] {
-        let foreign_keys = match table {
-            "keepsakes" => sqlx::query("pragma foreign_key_list(keepsakes)"),
-            "keepsake_fulfillment_counters" => {
-                sqlx::query("pragma foreign_key_list(keepsake_fulfillment_counters)")
-            }
-            "keepsake_fulfillment_checklist" => {
-                sqlx::query("pragma foreign_key_list(keepsake_fulfillment_checklist)")
-            }
-            _ => unreachable!("table list is static"),
-        }
-        .fetch_all(pool)
-        .await?;
-        if !foreign_keys.iter().any(|row| {
-            row.try_get::<String, _>("from").ok().as_deref() == Some("tenant_id")
-                && row.try_get::<String, _>("to").ok().as_deref() == Some("tenant_id")
-        }) {
-            return Err(mismatch(message));
-        }
-    }
+    sqlite_tenant_foreign_keys_check(pool).await?;
     Ok(())
 }
 
@@ -328,8 +251,11 @@ fn sqlite_v4_identifier_trigger_artifact(name: &str) -> Option<&'static str> {
     let lower = artifact.to_ascii_lowercase();
     let marker = format!("create trigger {name}");
     let start = lower.find(&marker)?;
-    let end = lower[start..].find("end;")? + "end;".len();
-    Some(&artifact[start..start + end])
+    let end = lower
+        .get(start..)?
+        .find("end;")?
+        .checked_add("end;".len())?;
+    artifact.get(start..)?.get(..end)
 }
 
 #[cfg(feature = "sqlite")]
@@ -433,7 +359,7 @@ async fn sqlite_scan_identifier(
 #[cfg(all(feature = "sqlite", feature = "migrations"))]
 fn sqlite_validate_identifier_row(
     identifier: super::PersistedIdentifier,
-    row: &sqlx::sqlite::SqliteRow,
+    row: &SqliteRow,
 ) -> RepositoryResult<()> {
     use sqlx::Row;
 
@@ -450,7 +376,7 @@ fn sqlite_validate_identifier_row(
     };
 
     if value_type != "text" {
-        if std::str::from_utf8(&value).is_err() {
+        if str::from_utf8(&value).is_err() {
             return validate_persisted_identifier_bytes(identifier, row_label, &value);
         }
 
@@ -483,7 +409,7 @@ pub(in crate::repository) async fn sqlite_runtime_schema_check(
     .fetch_optional(pool)
     .await?
     .flatten();
-    if backend.as_deref() != Some(super::super::SqliteBackend::NAME) {
+    if backend.as_deref() != Some(SqliteBackend::NAME) {
         return Err(mismatch(format!(
             "missing or incorrect SQLite backend marker: {backend:?}"
         )));
@@ -625,9 +551,7 @@ pub(in crate::repository) async fn sqlite_upgrade_schema_preflight(
 
 #[cfg(feature = "sqlite")]
 #[cfg(feature = "migrations")]
-pub(in crate::repository) async fn sqlite_schema_preflight(
-    pool: &sqlx::SqlitePool,
-) -> RepositoryResult<()> {
+async fn sqlite_schema_preflight(pool: &sqlx::SqlitePool) -> RepositoryResult<()> {
     let metadata_table = sqlx::query_scalar::<_, Option<String>>(
         "select name from sqlite_master where type = 'table' and name = 'keepsake_schema_metadata'",
     )
@@ -643,9 +567,9 @@ pub(in crate::repository) async fn sqlite_schema_preflight(
         .await?
         .flatten();
         return match backend.as_deref() {
-            Some(super::super::SqliteBackend::NAME) | None => Ok(()),
+            Some(SqliteBackend::NAME) | None => Ok(()),
             Some(actual) => Err(RepositoryError::BackendMismatch {
-                expected: super::super::SqliteBackend::NAME,
+                expected: SqliteBackend::NAME,
                 actual: actual.to_owned(),
             }),
         };
@@ -660,15 +584,86 @@ pub(in crate::repository) async fn sqlite_schema_preflight(
         Ok(())
     } else {
         Err(RepositoryError::BackendMismatch {
-            expected: super::super::SqliteBackend::NAME,
+            expected: SqliteBackend::NAME,
             actual: "unmarked non-empty schema".to_owned(),
         })
     }
 }
 
+#[cfg(feature = "migrations")]
+async fn sqlite_extra_triggers_check(
+    pool: &sqlx::SqlitePool,
+    expected_triggers: &[(&str, &str)],
+) -> RepositoryResult<()> {
+    use sqlx::Row;
+    // An application may own unrelated SQLite objects, but an additional
+    // trigger attached to an invariant table can silently change lifecycle
+    // semantics. Reject those while leaving unrelated application objects
+    // alone.
+    let rows = sqlx::query(
+        "select name, tbl_name from sqlite_master where type = 'trigger' and name not like 'sqlite_%'",
+    )
+    .fetch_all(pool)
+    .await?;
+    let expected_names: BTreeSet<&str> = expected_triggers.iter().map(|(_, name)| *name).collect();
+    for row in rows {
+        let name: String = row.try_get("name")?;
+        let table: String = row.try_get("tbl_name")?;
+        if !expected_names.contains(name.as_str())
+            && [
+                "keepsakes",
+                "keepsake_relation_definitions",
+                "keepsake_fulfillment_counters",
+                "keepsake_fulfillment_checklist",
+            ]
+            .contains(&table.as_str())
+        {
+            return Err(mismatch(format!(
+                "unexpected trigger {name} mutates a Keepsake invariant table"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+async fn sqlite_tenant_foreign_keys_check(pool: &sqlx::SqlitePool) -> RepositoryResult<()> {
+    use sqlx::Row;
+    for (table, message) in [
+        (
+            "keepsakes",
+            "keepsakes relation foreign key is not tenant-composite",
+        ),
+        (
+            "keepsake_fulfillment_counters",
+            "counter foreign key is not tenant-composite",
+        ),
+        (
+            "keepsake_fulfillment_checklist",
+            "checklist foreign key is not tenant-composite",
+        ),
+    ] {
+        let foreign_keys = sqlx::query("select * from pragma_foreign_key_list(?)")
+            .bind(table)
+            .fetch_all(pool)
+            .await?;
+        if !foreign_keys.iter().any(|row| {
+            row.try_get::<String, _>("from").ok().as_deref() == Some("tenant_id")
+                && row.try_get::<String, _>("to").ok().as_deref() == Some("tenant_id")
+        }) {
+            return Err(mismatch(message));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
-mod identifier_trigger_tests {
+mod trigger_tests {
     use super::normalize_sql_preserving_literals;
+    #[cfg(feature = "migrations")]
+    use super::{RepositoryError, RepositoryResult, sqlite_extra_triggers_check};
+    #[cfg(feature = "migrations")]
+    use sqlx::SqlitePool;
 
     #[test]
     fn trigger_normalization_preserves_literal_bytes() {
@@ -680,5 +675,44 @@ mod identifier_trigger_tests {
             normalize_sql_preserving_literals("select 'keepsake_identifier_contract'"),
             normalize_sql_preserving_literals("select ' keepsake_identifier_contract '")
         );
+    }
+
+    #[cfg(feature = "migrations")]
+    #[tokio::test]
+    async fn extra_triggers_are_rejected_on_every_protected_table() -> RepositoryResult<()> {
+        for table in [
+            "keepsakes",
+            "keepsake_relation_definitions",
+            "keepsake_fulfillment_counters",
+            "keepsake_fulfillment_checklist",
+        ] {
+            let pool = SqlitePool::connect(":memory:").await?;
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "create table \"{table}\" (id integer)"
+            )))
+            .execute(&pool)
+            .await?;
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "create trigger unexpected after insert on \"{table}\" begin select 1; end"
+            )))
+            .execute(&pool)
+            .await?;
+            let result = sqlite_extra_triggers_check(&pool, &[]).await;
+            assert!(
+                matches!(result, Err(RepositoryError::BackendMismatch { actual, .. }) if actual.contains("unexpected trigger unexpected")),
+                "accepted trigger on {table}"
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "migrations")]
+    #[tokio::test]
+    async fn extra_trigger_on_unrelated_prefix_table_is_allowed() -> RepositoryResult<()> {
+        let pool = SqlitePool::connect(":memory:").await?;
+        sqlx::raw_sql("create table keepsakes_archive (id integer); create trigger archive_insert after insert on keepsakes_archive begin select 1; end;")
+            .execute(&pool).await?;
+        sqlite_extra_triggers_check(&pool, &[]).await?;
+        Ok(())
     }
 }

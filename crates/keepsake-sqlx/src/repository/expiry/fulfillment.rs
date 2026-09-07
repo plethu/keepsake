@@ -1,6 +1,7 @@
+use crate::repository::observation;
 use std::collections::{BTreeMap, BTreeSet};
 
-use keepsake::{ExpiryCause, ExpiryPolicy, FulfillmentSnapshot};
+use keepsake::{ExpiryCause, ExpiryPolicy, FulfillmentSnapshot, KeepsakeId};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -16,10 +17,48 @@ where
 {
     /// Reads the persisted fulfillment snapshot (counters and checklist) for a keepsake.
     #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns database or invalid-projection decoding errors. Missing evidence remains absent
+    /// in the returned snapshot and is not fabricated as fulfilled.
     pub async fn fulfillment_snapshot(
         &self,
         keepsake_id: Uuid,
     ) -> RepositoryResult<FulfillmentSnapshot> {
+        let mut tx = self.pool.begin().await?;
+        let snapshot = self
+            .fulfillment_snapshot_in_transaction(&mut tx, keepsake_id)
+            .await?;
+        tx.commit().await?;
+        Ok(snapshot.into_snapshot())
+    }
+
+    /// Reads fulfillment evidence while retaining locks until the caller ends its transaction.
+    ///
+    /// Observe the relation first, then read evidence, then perform the protected write.
+    /// This method never begins, commits, or rolls back. After error or cancellation,
+    /// roll back the whole transaction. Missing projections remain absent from the snapshot;
+    /// the consumer must establish evidence completeness before effective-state evaluation.
+    /// Requires READ COMMITTED. Locks the counters table and then the checklist table
+    /// in SHARE ROW EXCLUSIVE mode, including protection against new projection rows.
+    #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns schema, isolation, missing-assignment, storage or invalid-projection errors.
+    /// Roll back the caller transaction on failure, including failed lock acquisition.
+    pub async fn fulfillment_snapshot_in_transaction(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        keepsake_id: Uuid,
+    ) -> RepositoryResult<keepsake::FulfillmentEvidence> {
+        observation::require_transaction_schema(tx).await?;
+        observation::require_read_committed(tx).await?;
+        sqlx::query("lock table keepsake_fulfillment_counters, keepsake_fulfillment_checklist in share row exclusive mode")
+            .execute(&mut **tx)
+            .await?;
+
         let counters = sqlx::query_as::<_, (String, i64)>(
             r"
             select key, value
@@ -29,7 +68,7 @@ where
         )
         .bind(self.tenant_id.as_str())
         .bind(keepsake_id)
-        .fetch_all(self.pool)
+        .fetch_all(&mut **tx)
         .await?
         .into_iter()
         .collect::<BTreeMap<_, _>>();
@@ -43,19 +82,28 @@ where
         )
         .bind(self.tenant_id.as_str())
         .bind(keepsake_id)
-        .fetch_all(self.pool)
+        .fetch_all(&mut **tx)
         .await?
         .into_iter()
         .collect::<BTreeMap<_, _>>();
 
-        Ok(FulfillmentSnapshot {
-            counters,
-            checklist,
-        })
+        Ok(keepsake::FulfillmentEvidence::new(
+            self.tenant_id.clone(),
+            keepsake_id,
+            FulfillmentSnapshot {
+                counters,
+                checklist,
+            },
+        ))
     }
 
     /// Lists fulfillment expiry candidates in stable batch order.
     #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns `RepositoryError::InvalidLimit` outside the supported batch range, or a database
+    /// or invalid-policy decoding error.
     pub async fn due_fulfilled_expiry(
         &self,
         limit: i64,
@@ -83,13 +131,51 @@ where
 
     /// Expires a stable batch whose persisted fulfillment snapshots satisfy policy.
     #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-limit, schema, isolation, projection, storage or mandatory audit errors.
+    /// The owned transaction is not committed when reconciliation fails.
     pub async fn expire_due_fulfilled(
         &self,
         now: OffsetDateTime,
         limit: i64,
     ) -> RepositoryResult<u64> {
-        let limit = validate_limit(limit)?;
         let mut tx = self.pool.begin().await?;
+        let expired = self
+            .expire_due_fulfilled_in_transaction(&mut tx, now, limit)
+            .await?;
+        let count =
+            u64::try_from(expired.len()).map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
+        tx.commit().await?;
+        Ok(count)
+    }
+
+    /// Reconciles due expiry inside the caller's transaction, including lifecycle audit.
+    /// Returns only transitioned assignment identities, in candidate order, for composing
+    /// notification intents before the caller commits.
+    ///
+    /// This method never begins, commits, or rolls back a transaction. On error or
+    /// cancellation, roll back the whole transaction; earlier writes may remain pending.
+    /// Candidate rows are locked in batch order, skipping rows another worker locks.
+    /// Acquire protected relation observations in sorted scope order before reconciling.
+    /// Retry the entire transaction after a deadlock. This worker operation does not
+    /// fence absent relations.
+    #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-limit, schema, isolation, projection, storage or mandatory audit errors.
+    /// Roll back the caller transaction on any error; earlier transitions may be staged.
+    pub async fn expire_due_fulfilled_in_transaction(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        now: OffsetDateTime,
+        limit: i64,
+    ) -> RepositoryResult<Vec<KeepsakeId>> {
+        observation::require_transaction_schema(tx).await?;
+        observation::require_read_committed(tx).await?;
+        let limit = validate_limit(limit)?;
         let target =
             usize::try_from(limit).map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
         let mut after = None;
@@ -97,17 +183,15 @@ where
         let mut satisfied_candidates = Vec::new();
 
         while satisfied_ids.len() < target {
-            let remaining = i64::try_from(target - satisfied_ids.len())
+            let remaining = i64::try_from(target.saturating_sub(satisfied_ids.len()))
                 .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
             let candidates =
-                due_fulfilled_expiry_tx(&mut tx, &self.tenant_id, after.as_ref(), remaining)
-                    .await?;
+                due_fulfilled_expiry_tx(tx, &self.tenant_id, after.as_ref(), remaining).await?;
             if candidates.is_empty() {
                 break;
             }
             after = candidates.last().map(FulfilledExpiryCursor::from);
-            let ids =
-                satisfied_fulfillment_ids_tx(&mut tx, &self.tenant_id, candidates.clone()).await?;
+            let ids = satisfied_fulfillment_ids_tx(tx, &self.tenant_id, candidates.clone()).await?;
             let id_set = ids.iter().copied().collect::<BTreeSet<_>>();
             satisfied_candidates.extend(
                 candidates
@@ -118,11 +202,10 @@ where
         }
 
         if satisfied_ids.is_empty() {
-            tx.commit().await?;
-            return Ok(0);
+            return Ok(Vec::new());
         }
 
-        let result = sqlx::query(
+        let transitioned = sqlx::query_scalar::<_, KeepsakeId>(
             r"
             update keepsakes
             set state = 'expired', fulfilled_at = $3, updated_at = $3
@@ -134,16 +217,22 @@ where
                 where r.tenant_id = keepsakes.tenant_id
                   and r.id = keepsakes.relation_id and r.enabled
               )
+            returning id
             ",
         )
         .bind(self.tenant_id.as_str())
         .bind(&satisfied_ids)
         .bind(now)
-        .execute(&mut *tx)
+        .fetch_all(&mut **tx)
         .await?;
+        let transitioned = transitioned.into_iter().collect::<BTreeSet<_>>();
+        let mut expired = Vec::with_capacity(transitioned.len());
         for candidate in satisfied_candidates {
+            if !transitioned.contains(&candidate.keepsake_id) {
+                continue;
+            }
             self.enqueue_audit_event_tx(
-                &mut tx,
+                tx,
                 &expiry_event(
                     now,
                     ExpiryCause::Fulfilled,
@@ -155,12 +244,16 @@ where
                 )?,
             )
             .await?;
+            expired.push(candidate.keepsake_id);
         }
-        tx.commit().await?;
-        Ok(result.rows_affected())
+        Ok(expired)
     }
     /// Upserts a simple fulfillment counter projection.
     #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-key or database errors, including an assignment outside this tenant.
     pub async fn upsert_counter_projection(
         &self,
         keepsake_id: Uuid,
@@ -195,6 +288,11 @@ where
     /// increment is computed in the database, so concurrent writers cannot lose
     /// updates to a read-modify-write race.
     #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-key or database errors, including an assignment outside this tenant
+    /// and a counter value outside the backend integer range.
     pub async fn increment_counter_projection(
         &self,
         keepsake_id: Uuid,
@@ -226,6 +324,10 @@ where
 
     /// Upserts a checklist item completion projection.
     #[cfg(feature = "fulfillment-counters")]
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-key or database errors, including an assignment outside this tenant.
     pub async fn upsert_checklist_projection(
         &self,
         keepsake_id: Uuid,

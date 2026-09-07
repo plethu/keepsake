@@ -1,3 +1,5 @@
+use core::result;
+use serde::de;
 use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize};
@@ -19,6 +21,10 @@ pub struct RelationKey {
 
 impl RelationKey {
     /// Builds a validated relation key from dynamic components.
+    ///
+    /// # Errors
+    ///
+    /// Returns an identifier error for an invalid relation component.
     pub fn new(kind: impl Into<String>, name: impl Into<String>) -> Result<Self> {
         let relation = Self {
             kind: RelationKind::new(kind)?,
@@ -28,6 +34,10 @@ impl RelationKey {
     }
 
     /// Validates the relation key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an identifier error for an invalid relation component.
     pub fn validate(&self) -> Result<()> {
         self.kind.validate()?;
         self.name.validate()
@@ -53,6 +63,10 @@ pub struct RelationKind(String);
 
 impl RelationKind {
     /// Builds a validated relation kind.
+    ///
+    /// # Errors
+    ///
+    /// Returns an identifier error for an invalid relation component.
     pub fn new(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
         validate_persisted_identifier("relation.kind", &value)?;
@@ -60,6 +74,10 @@ impl RelationKind {
     }
 
     /// Validates the relation kind.
+    ///
+    /// # Errors
+    ///
+    /// Returns an identifier error for an invalid relation component.
     pub fn validate(&self) -> Result<()> {
         validate_persisted_identifier("relation.kind", &self.0)
     }
@@ -84,11 +102,11 @@ impl fmt::Display for RelationKind {
 }
 
 impl<'de> Deserialize<'de> for RelationKind {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> result::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        Self::new(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+        Self::new(String::deserialize(deserializer)?).map_err(de::Error::custom)
     }
 }
 
@@ -99,6 +117,10 @@ pub struct RelationName(String);
 
 impl RelationName {
     /// Builds a validated relation name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an identifier error for an invalid relation component.
     pub fn new(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
         validate_persisted_identifier("relation.name", &value)?;
@@ -106,6 +128,10 @@ impl RelationName {
     }
 
     /// Validates the relation name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an identifier error for an invalid relation component.
     pub fn validate(&self) -> Result<()> {
         validate_persisted_identifier("relation.name", &self.0)
     }
@@ -130,11 +156,11 @@ impl fmt::Display for RelationName {
 }
 
 impl<'de> Deserialize<'de> for RelationName {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> result::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        Self::new(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+        Self::new(String::deserialize(deserializer)?).map_err(de::Error::custom)
     }
 }
 
@@ -149,6 +175,12 @@ pub struct StaticRelationKey {
 
 impl StaticRelationKey {
     /// Builds a static relation key.
+    ///
+    /// # Panics
+    ///
+    /// Panics if either component is empty, exceeds 191 UTF-8 bytes, or has
+    /// leading or trailing Unicode whitespace. In a const context invalid input
+    /// is rejected at compile time.
     #[must_use]
     pub const fn new(kind: &'static str, name: &'static str) -> Self {
         assert_valid_static_relation_component(kind);
@@ -157,6 +189,10 @@ impl StaticRelationKey {
     }
 
     /// Converts this static key into a validated owned relation key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an identifier error for an invalid relation component.
     pub fn to_relation_key(self) -> Result<RelationKey> {
         RelationKey::new(self.kind, self.name)
     }
@@ -168,28 +204,41 @@ const fn assert_valid_static_relation_component(value: &str) {
         !bytes.is_empty(),
         "static relation component must not be empty"
     );
-    let mut index = 0;
-    let mut has_non_whitespace = false;
-    while index < bytes.len() {
-        let byte = bytes[index];
-        if !(byte == b' ' || byte == b'\n' || byte == b'\r' || byte == b'\t') {
-            has_non_whitespace = true;
-        }
-        index += 1;
-    }
-    assert!(
-        has_non_whitespace,
-        "static relation component must not be whitespace"
-    );
     assert!(
         bytes.len() <= super::MAX_PERSISTED_IDENTIFIER_BYTES,
         "static relation component exceeds 191 UTF-8 bytes"
     );
     assert!(
-        !matches!(bytes.first(), Some(b' ' | b'\n' | b'\r' | b'\t'))
-            && !matches!(bytes.last(), Some(b' ' | b'\n' | b'\r' | b'\t')),
+        !starts_with_whitespace(bytes) && !ends_with_whitespace(bytes),
         "static relation component must not have leading or trailing whitespace"
     );
+}
+
+// `str::trim` and `char::is_whitespace` are not const on the pinned compiler.
+// Match their White_Space scalars at UTF-8 boundaries. The exhaustive scalar
+// parity test below makes a future standard-library Unicode change visible.
+const fn starts_with_whitespace(bytes: &[u8]) -> bool {
+    matches!(
+        bytes,
+        [0x09..=0x0d | 0x20, ..]
+            | [0xc2, 0x85 | 0xa0, ..]
+            | [0xe1, 0x9a, 0x80, ..]
+            | [0xe2, 0x80, 0x80..=0x8a | 0xa8 | 0xa9 | 0xaf, ..]
+            | [0xe2, 0x81, 0x9f, ..]
+            | [0xe3, 0x80, 0x80, ..]
+    )
+}
+
+const fn ends_with_whitespace(bytes: &[u8]) -> bool {
+    matches!(
+        bytes,
+        [.., 0x09..=0x0d | 0x20]
+            | [.., 0xc2, 0x85 | 0xa0]
+            | [.., 0xe1, 0x9a, 0x80]
+            | [.., 0xe2, 0x80, 0x80..=0x8a | 0xa8 | 0xa9 | 0xaf]
+            | [.., 0xe2, 0x81, 0x9f]
+            | [.., 0xe3, 0x80, 0x80]
+    )
 }
 
 /// Configured relation definition.
@@ -209,6 +258,10 @@ pub struct RelationDefinition {
 
 impl RelationDefinition {
     /// Builds a validated relation definition.
+    ///
+    /// # Errors
+    ///
+    /// Returns relation-key or expiry-policy validation errors.
     pub fn new(
         tenant_id: TenantId,
         id: RelationId,
@@ -228,12 +281,20 @@ impl RelationDefinition {
     }
 
     /// Revalidates a relation definition received across a trust boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns relation-key or expiry-policy validation errors.
     pub fn validate(&self) -> Result<()> {
         self.key.validate()?;
         self.expiry.validate()
     }
 
     /// Builds an enabled relation definition.
+    ///
+    /// # Errors
+    ///
+    /// Returns relation-key or expiry-policy validation errors.
     pub fn enabled(
         tenant_id: TenantId,
         id: RelationId,
@@ -244,6 +305,10 @@ impl RelationDefinition {
     }
 
     /// Builds a disabled relation definition.
+    ///
+    /// # Errors
+    ///
+    /// Returns relation-key or expiry-policy validation errors.
     pub fn disabled(
         tenant_id: TenantId,
         id: RelationId,
@@ -254,6 +319,10 @@ impl RelationDefinition {
     }
 
     /// Builds a relation definition from a typed relation spec.
+    ///
+    /// # Errors
+    ///
+    /// Returns relation-key or expiry-policy validation errors.
     pub fn from_spec<Spec>(tenant_id: TenantId, at: OffsetDateTime) -> Result<Self>
     where
         Spec: RelationSpec,
@@ -269,7 +338,7 @@ impl RelationDefinition {
 }
 
 impl<'de> Deserialize<'de> for RelationDefinition {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> result::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -284,7 +353,7 @@ impl<'de> Deserialize<'de> for RelationDefinition {
 
         let wire = WireRelationDefinition::deserialize(deserializer)?;
         Self::new(wire.tenant_id, wire.id, wire.key, wire.enabled, wire.expiry)
-            .map_err(serde::de::Error::custom)
+            .map_err(de::Error::custom)
     }
 }
 
@@ -299,6 +368,11 @@ pub struct ActiveRelation {
 
 impl ActiveRelation {
     /// Builds an active relation and validates the membership relation id.
+    ///
+    /// # Errors
+    ///
+    /// Returns a lifecycle-model error unless the assignment is applied and its tenant
+    /// and relation identity match the supplied definition.
     pub fn new(keepsake: Keepsake, relation: RelationDefinition) -> Result<Self> {
         if keepsake.tenant_id() != &relation.tenant_id {
             return Err(KeepsakeError::TenantMismatch {
@@ -342,7 +416,7 @@ impl ActiveRelation {
 }
 
 impl<'de> Deserialize<'de> for ActiveRelation {
-    fn deserialize<D>(deserializer: D) -> core::result::Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> result::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -353,7 +427,7 @@ impl<'de> Deserialize<'de> for ActiveRelation {
         }
 
         let record = ActiveRelationRecord::deserialize(deserializer)?;
-        Self::new(record.keepsake, record.relation).map_err(serde::de::Error::custom)
+        Self::new(record.keepsake, record.relation).map_err(de::Error::custom)
     }
 }
 
@@ -375,7 +449,46 @@ pub trait RelationSpec {
 
 #[cfg(test)]
 mod tests {
+    use std::panic::catch_unwind;
+
     use super::*;
+
+    #[test]
+    fn const_whitespace_matches_runtime_for_every_unicode_scalar() {
+        for scalar in (0..=0x10_ffff).filter_map(char::from_u32) {
+            let mut buffer = [0; 4];
+            let text = scalar.encode_utf8(&mut buffer);
+            let expected = scalar.is_whitespace();
+            assert_eq!(
+                starts_with_whitespace(text.as_bytes()),
+                expected,
+                "{scalar:?}"
+            );
+            assert_eq!(
+                ends_with_whitespace(text.as_bytes()),
+                expected,
+                "{scalar:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn static_relation_keys_reject_unicode_edge_whitespace() {
+        const VALID: StaticRelationKey = StaticRelationKey::new("game\u{2003}tag", "trusted");
+        for invalid in [
+            "\u{2003}",
+            "\u{2003}tag",
+            "tag\u{2003}",
+            "\u{b}tag",
+            "tag\u{c}",
+        ] {
+            assert!(RelationKey::new(invalid, "valid").is_err());
+            assert!(RelationKey::new("valid", invalid).is_err());
+            assert!(catch_unwind(|| StaticRelationKey::new(invalid, "valid")).is_err());
+            assert!(catch_unwind(|| StaticRelationKey::new("valid", invalid)).is_err());
+        }
+        assert!(VALID.to_relation_key().is_ok());
+    }
 
     #[test]
     fn serde_rejects_whitespace_relation_components() {

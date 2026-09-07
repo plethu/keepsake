@@ -9,11 +9,13 @@
 
 pub mod audit;
 pub mod command;
+pub mod effective;
 pub mod error;
 pub mod evaluation;
 pub mod model;
 pub mod observe;
 pub mod policy;
+pub mod snapshot;
 pub mod prelude {
     //! Common imports for application modules using Keepsake.
 
@@ -84,18 +86,19 @@ macro_rules! relation_spec {
 
 pub use audit::{
     AUDIT_PAYLOAD_SCHEMA_VERSION, AuditContext, AuditDecision, AuditEvent, AuditEventId,
-    AuditEventType, AuditPayloadSchemaVersion, AuditSink, NoopAuditSink,
+    AuditEventType, AuditPayloadSchemaVersion, AuditSink, LifecycleCommand, NoopAuditSink,
 };
 #[cfg(any(test, feature = "test"))]
 pub use audit::{InMemoryAuditError, InMemoryAuditSink};
 pub use command::{ApplyKeepsake, CommandContext, RevokeBySubject, RevokeKeepsake};
+pub use effective::{EffectiveRelationError, ObservationTime, effective_state};
 pub use error::{KeepsakeError, Result};
 pub use evaluation::{
     DecisionKind, EvaluationDecision, NoopReason, TransitionReason, evaluate, evaluate_active,
 };
 pub use model::{
-    ActiveRelation, ActorRef, ExpiryCause, FulfillmentSnapshot, Keepsake, KeepsakeId,
-    KeepsakeLifecycle, KeepsakeRecord, LifecycleState, MAX_PERSISTED_IDENTIFIER_BYTES,
+    ActiveRelation, ActorRef, ExpiryCause, FulfillmentEvidence, FulfillmentSnapshot, Keepsake,
+    KeepsakeId, KeepsakeLifecycle, KeepsakeRecord, LifecycleState, MAX_PERSISTED_IDENTIFIER_BYTES,
     RelationDefinition, RelationId, RelationKey, RelationKind, RelationName, RelationSpec,
     StaticRelationKey, SubjectRef, TenantId, validate_persisted_identifier,
 };
@@ -112,3 +115,4 @@ pub use provider::{
 pub use provider::{
     ActiveRelationSource, DynActiveRelationSource, FulfillmentProvider, KeepsakeStore,
 };
+pub use snapshot::RelationSnapshot;

@@ -1,6 +1,9 @@
 //! `SQLx` repository implementation.
 
+use core::result;
 use sqlx::Pool;
+#[cfg(feature = "migrations")]
+use sqlx::migrate::MigrateError;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -11,22 +14,24 @@ mod backend;
 mod cache;
 #[cfg(feature = "postgres")]
 mod expiry;
+#[cfg(feature = "migrations")]
+mod identifier_upgrade;
 #[cfg(feature = "postgres")]
 mod mutation;
 #[cfg(feature = "mysql")]
 mod mysql;
 #[cfg(feature = "postgres")]
+mod observation;
+#[cfg(feature = "postgres")]
 mod query;
+#[cfg(any(feature = "postgres", feature = "sqlite", feature = "mysql"))]
+mod receipt;
 #[cfg(feature = "postgres")]
 mod relation;
 #[cfg(feature = "postgres")]
 mod rows;
 #[cfg(feature = "sqlite")]
 mod sqlite;
-#[cfg_attr(
-    not(any(feature = "postgres", feature = "mysql", feature = "sqlite")),
-    allow(dead_code)
-)]
 mod support;
 #[cfg(all(
     feature = "migrations",
@@ -61,7 +66,8 @@ pub use timed::TimedMySqlKeepsakeRepository;
 pub use timed::TimedSqliteKeepsakeRepository;
 pub use timed::TimedTenantSqlxKeepsakeRepository;
 pub use types::{
-    AppliedKeepsake, FulfilledExpiryCandidate, MembershipCursor, TimedExpiryCandidate,
+    AppliedKeepsake, FulfilledExpiryCandidate, MembershipCursor, RelationObservation,
+    RevokedKeepsake, TimedExpiryCandidate,
 };
 
 #[cfg(all(feature = "migrations", feature = "postgres"))]
@@ -96,11 +102,11 @@ fn keepsake_v4_migrator(v3: &Migrator, v4: &Migrator) -> Migrator {
     Migrator::with_migrations(v3.iter().chain(v4.iter()).cloned().collect())
 }
 
-#[allow(dead_code)]
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 const MAX_BATCH_LIMIT: i64 = 10_000;
 
 /// Result alias for SQL repository operations.
-pub type RepositoryResult<T> = core::result::Result<T, RepositoryError>;
+pub type RepositoryResult<T> = result::Result<T, RepositoryError>;
 
 /// Backend-preserving Dovecote enqueue failures.
 #[derive(Debug, thiserror::Error)]
@@ -142,6 +148,30 @@ pub enum DovecoteSchemaError {
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum RepositoryError {
+    /// A counter increment exceeds the signed 64-bit storage range.
+    #[error("fulfillment counter increment exceeds its integer range")]
+    CounterOverflow,
+
+    /// No active assignment exists and this command has no committed receipt.
+    #[error("no active assignment exists for this revoke command")]
+    MissingActiveAssignment,
+
+    /// Scoped lifecycle evidence no longer matches current persisted history.
+    #[error("relation observation is stale or belongs to another scope")]
+    StaleObservation,
+
+    /// The transaction isolation level cannot support this observation contract.
+    #[error("relation observations require a supported transaction isolation level")]
+    UnsupportedIsolation,
+
+    /// Historical occurrence or assignment data cannot prove an exact receipt.
+    #[error("committed lifecycle receipt evidence is unavailable")]
+    ReceiptEvidenceUnavailable,
+
+    /// An immutable lifecycle command identity was reused with different content.
+    #[error("lifecycle command identity conflicts with its committed occurrence")]
+    CommandConflict,
+
     /// `SQLx` returned an error.
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
@@ -149,7 +179,7 @@ pub enum RepositoryError {
     /// Migration failed.
     #[cfg(feature = "migrations")]
     #[error(transparent)]
-    Migration(#[from] sqlx::migrate::MigrateError),
+    Migration(#[from] MigrateError),
 
     /// JSON policy could not be encoded or decoded.
     #[error(transparent)]
@@ -287,7 +317,6 @@ where
     B: KeepsakeSqlxBackend,
 {
     pool: Pool<B::Database>,
-    #[allow(dead_code)]
     relation_cache: C,
     backend: BackendMarker<B>,
     audit: support::DovecoteAuditConfig,
@@ -376,6 +405,10 @@ pub type MySqlKeepsakeRepository<C = NoopRelationCache> = SqlxKeepsakeRepository
 #[cfg(feature = "postgres")]
 impl PostgresKeepsakeRepository<NoopRelationCache> {
     /// Creates a repository from a Postgres pool and application-owned source.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the event source is not a valid absolute Dovecote source URI.
     pub fn new(pool: sqlx::PgPool, source: impl Into<String>) -> RepositoryResult<Self> {
         Ok(Self {
             pool,
@@ -389,6 +422,10 @@ impl PostgresKeepsakeRepository<NoopRelationCache> {
 #[cfg(feature = "sqlite")]
 impl SqliteKeepsakeRepository<NoopRelationCache> {
     /// Creates a repository from a `SQLite` pool and application-owned source.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the event source is not a valid absolute Dovecote source URI.
     pub fn new(pool: sqlx::SqlitePool, source: impl Into<String>) -> RepositoryResult<Self> {
         Ok(Self {
             pool,
@@ -402,6 +439,10 @@ impl SqliteKeepsakeRepository<NoopRelationCache> {
 #[cfg(feature = "mysql")]
 impl MySqlKeepsakeRepository<NoopRelationCache> {
     /// Creates a repository from a `MySQL` pool and application-owned source.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the event source is not a valid absolute Dovecote source URI.
     pub fn new(pool: sqlx::MySqlPool, source: impl Into<String>) -> RepositoryResult<Self> {
         Ok(Self {
             pool,
@@ -511,6 +552,11 @@ where
     C: RelationCache,
 {
     /// Verifies the Keepsake 4.0 domain schema and the selected Dovecote schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns backend/track, catalog, identifier or Dovecote schema errors, or database failures.
+    /// Do not serve lifecycle operations until this check succeeds.
     pub async fn check_schema(&self) -> RepositoryResult<()> {
         schema::postgres_runtime_schema_check(&self.pool).await?;
         dovecote_sqlx_postgres::check_schema(&self.pool)
@@ -520,6 +566,11 @@ where
 
     /// Runs embedded migrations.
     #[cfg(feature = "migrations")]
+    ///
+    /// # Errors
+    ///
+    /// Returns incompatible-track, identifier-preflight, database or migration errors.
+    /// Existing migration receipts are validated; published SQL is not rewritten.
     pub async fn migrate(&self) -> RepositoryResult<()> {
         schema::postgres_clean_schema_preflight(&self.pool).await?;
         keepsake_v4_migrator(&POSTGRES_V3_MIGRATOR, &POSTGRES_V4_MIGRATOR)
@@ -533,6 +584,11 @@ where
     /// This is an operator step. It does not assign tenants; callers must
     /// backfill using an independently reviewed mapping before activation.
     #[cfg(feature = "migrations")]
+    ///
+    /// # Errors
+    ///
+    /// Returns incompatible-schema, database or migration errors. The upgrade must be completed
+    /// and activated before tenant-scoped writers are enabled.
     pub async fn prepare_tenant_upgrade(&self) -> RepositoryResult<()> {
         sqlx::raw_sql(tenant_upgrade::POSTGRES_PREPARE_SQL)
             .execute(&self.pool)
@@ -545,6 +601,11 @@ where
     /// Activation fails while any tenant is missing and never chooses a
     /// sentinel or inferred tenant.
     #[cfg(feature = "migrations")]
+    ///
+    /// # Errors
+    ///
+    /// Returns incomplete tenant mapping, schema, database or migration errors.
+    /// Do not enable writers until activation and schema checks succeed.
     pub async fn activate_tenant_upgrade(&self) -> RepositoryResult<()> {
         sqlx::raw_sql(tenant_upgrade::POSTGRES_ACTIVATE_SQL)
             .execute(&self.pool)
@@ -555,6 +616,11 @@ where
     /// Runs the explicit 1.x upgrade track, preserving legacy audit tables as
     /// read-only migration material. New 4.0 operations never use this track.
     #[cfg(feature = "migrations")]
+    ///
+    /// # Errors
+    ///
+    /// Returns incompatible-track, preflight, database or migration errors.
+    /// Preserve the backup and recorded migration failure when recovery is required.
     pub async fn upgrade_migrate(&self) -> RepositoryResult<()> {
         schema::postgres_upgrade_schema_preflight(&self.pool).await?;
         POSTGRES_MIGRATOR.run(&self.pool).await?;
@@ -563,6 +629,11 @@ where
 
     /// Activates the historical 2.0 runtime after complete-history import and reconciliation.
     #[cfg(feature = "migrations")]
+    ///
+    /// # Errors
+    ///
+    /// Returns missing/conflicting complete-history evidence, Dovecote schema or database errors.
+    /// Keep writers fenced until reconciliation and activation succeed.
     pub async fn activate_upgrade(&self) -> RepositoryResult<()> {
         schema::postgres_upgrade_schema_preflight(&self.pool).await?;
         dovecote_sqlx_postgres::check_schema(&self.pool)
@@ -587,6 +658,11 @@ where
     C: RelationCache,
 {
     /// Verifies the Keepsake 4.0 domain schema and the selected Dovecote schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns backend/track, catalog, identifier or Dovecote schema errors, or database failures.
+    /// Do not serve lifecycle operations until this check succeeds.
     pub async fn check_schema(&self) -> RepositoryResult<()> {
         schema::sqlite_runtime_schema_check(&self.pool).await?;
         dovecote_sqlx_sqlite::check_schema(&self.pool)
@@ -596,6 +672,11 @@ where
 
     /// Runs embedded `SQLite` migrations.
     #[cfg(feature = "migrations")]
+    ///
+    /// # Errors
+    ///
+    /// Returns incompatible-track, identifier-preflight, database or migration errors.
+    /// Existing migration receipts are validated; published SQL is not rewritten.
     pub async fn migrate(&self) -> RepositoryResult<()> {
         schema::sqlite_clean_schema_preflight(&self.pool).await?;
         keepsake_v4_migrator(&SQLITE_V3_MIGRATOR, &SQLITE_V4_MIGRATOR)
@@ -606,6 +687,11 @@ where
 
     /// Adds nullable tenant columns to a `SQLite` Keepsake 2.x schema.
     #[cfg(feature = "migrations")]
+    ///
+    /// # Errors
+    ///
+    /// Returns incompatible-schema, database or migration errors. The upgrade must be completed
+    /// and activated before tenant-scoped writers are enabled.
     pub async fn prepare_tenant_upgrade(&self) -> RepositoryResult<()> {
         sqlx::raw_sql(tenant_upgrade::SQLITE_PREPARE_SQL)
             .execute(&self.pool)
@@ -615,6 +701,11 @@ where
 
     /// Activates a fully backfilled `SQLite` Keepsake 2.x schema as Keepsake 3.x.
     #[cfg(feature = "migrations")]
+    ///
+    /// # Errors
+    ///
+    /// Returns incomplete tenant mapping, schema, database or migration errors.
+    /// Do not enable writers until activation and schema checks succeed.
     pub async fn activate_tenant_upgrade(&self) -> RepositoryResult<()> {
         // The artifact disables foreign-key enforcement before BEGIN IMMEDIATE
         // because SQLite does not allow changing that pragma inside a
@@ -650,6 +741,11 @@ where
     /// Runs the explicit 1.x upgrade track and leaves legacy audit tables
     /// available for reconciliation and rollback.
     #[cfg(feature = "migrations")]
+    ///
+    /// # Errors
+    ///
+    /// Returns incompatible-track, preflight, database or migration errors.
+    /// Preserve the backup and recorded migration failure when recovery is required.
     pub async fn upgrade_migrate(&self) -> RepositoryResult<()> {
         schema::sqlite_upgrade_schema_preflight(&self.pool).await?;
         SQLITE_MIGRATOR.run(&self.pool).await?;
@@ -658,6 +754,11 @@ where
 
     /// Activates the 2.0 runtime after complete-history import and reconciliation.
     #[cfg(feature = "migrations")]
+    ///
+    /// # Errors
+    ///
+    /// Returns missing/conflicting complete-history evidence, Dovecote schema or database errors.
+    /// Keep writers fenced until reconciliation and activation succeed.
     pub async fn activate_upgrade(&self) -> RepositoryResult<()> {
         schema::sqlite_upgrade_schema_preflight(&self.pool).await?;
         dovecote_sqlx_sqlite::check_schema(&self.pool)
@@ -682,6 +783,11 @@ where
     C: RelationCache,
 {
     /// Verifies the Keepsake 4.0 domain schema and the selected Dovecote schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns backend/track, catalog, identifier or Dovecote schema errors, or database failures.
+    /// Do not serve lifecycle operations until this check succeeds.
     pub async fn check_schema(&self) -> RepositoryResult<()> {
         schema::mysql_runtime_schema_check(&self.pool).await?;
         dovecote_sqlx_mysql::check_schema(&self.pool)
@@ -691,6 +797,11 @@ where
 
     /// Runs embedded `MySQL` migrations.
     #[cfg(feature = "migrations")]
+    ///
+    /// # Errors
+    ///
+    /// Returns incompatible-track, identifier-preflight, database or migration errors.
+    /// Existing migration receipts are validated; published SQL is not rewritten.
     pub async fn migrate(&self) -> RepositoryResult<()> {
         schema::mysql_clean_schema_preflight(&self.pool).await?;
         keepsake_v4_migrator(&MYSQL_V3_MIGRATOR, &MYSQL_V4_MIGRATOR)
@@ -701,6 +812,11 @@ where
 
     /// Adds nullable tenant columns to a `MySQL` Keepsake 2.x schema.
     #[cfg(feature = "migrations")]
+    ///
+    /// # Errors
+    ///
+    /// Returns incompatible-schema, database or migration errors. The upgrade must be completed
+    /// and activated before tenant-scoped writers are enabled.
     pub async fn prepare_tenant_upgrade(&self) -> RepositoryResult<()> {
         sqlx::raw_sql(tenant_upgrade::MYSQL_PREPARE_SQL)
             .execute(&self.pool)
@@ -710,6 +826,11 @@ where
 
     /// Activates a fully backfilled `MySQL` Keepsake 2.x schema as Keepsake 3.x.
     #[cfg(feature = "migrations")]
+    ///
+    /// # Errors
+    ///
+    /// Returns incomplete tenant mapping, schema, database or migration errors.
+    /// Do not enable writers until activation and schema checks succeed.
     pub async fn activate_tenant_upgrade(&self) -> RepositoryResult<()> {
         sqlx::raw_sql(tenant_upgrade::MYSQL_ACTIVATE_SQL)
             .execute(&self.pool)
@@ -720,6 +841,11 @@ where
     /// Runs the explicit 1.x upgrade track and leaves legacy audit tables
     /// available for reconciliation and rollback.
     #[cfg(feature = "migrations")]
+    ///
+    /// # Errors
+    ///
+    /// Returns incompatible-track, preflight, database or migration errors.
+    /// Preserve the backup and recorded migration failure when recovery is required.
     pub async fn upgrade_migrate(&self) -> RepositoryResult<()> {
         schema::mysql_upgrade_schema_preflight(&self.pool).await?;
         MYSQL_MIGRATOR.run(&self.pool).await?;
@@ -728,6 +854,11 @@ where
 
     /// Activates the 2.0 runtime after complete-history import and reconciliation.
     #[cfg(feature = "migrations")]
+    ///
+    /// # Errors
+    ///
+    /// Returns missing/conflicting complete-history evidence, Dovecote schema or database errors.
+    /// Keep writers fenced until reconciliation and activation succeed.
     pub async fn activate_upgrade(&self) -> RepositoryResult<()> {
         schema::mysql_upgrade_schema_preflight(&self.pool).await?;
         dovecote_sqlx_mysql::check_schema(&self.pool)
@@ -746,7 +877,7 @@ where
     }
 }
 
-#[allow(dead_code)]
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 fn validate_limit(limit: i64) -> RepositoryResult<i64> {
     if (1..=MAX_BATCH_LIMIT).contains(&limit) {
         Ok(limit)

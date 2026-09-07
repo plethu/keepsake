@@ -1,14 +1,17 @@
+use super::receipt::existing_audit_event_tx;
+use crate::repository::RevokedKeepsake;
+use crate::repository::receipt::require_command;
 use keepsake::{
-    ApplyKeepsake, Keepsake, KeepsakeId, RelationDefinition, RelationId, RevokeBySubject,
-    RevokeKeepsake, SubjectRef,
+    ApplyKeepsake, Keepsake, KeepsakeId, LifecycleCommand, RelationDefinition, RelationId,
+    RevokeBySubject, RevokeKeepsake, SubjectRef,
 };
 use sqlx::{MySql, Transaction};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::repository::support::{
-    apply_event, canonical_timestamp, decode_current_audit_payload_for_tenant, dovecote_event,
-    dovecote_tenant_id, expires_at, replay_event, revoke_by_subject_event, revoke_event,
+    apply_event, canonical_expiry_policy, canonical_timestamp, dovecote_event, dovecote_tenant_id,
+    expires_at, revoke_by_subject_event, revoke_event,
 };
 use crate::repository::{
     AppliedKeepsake, MySqlBackend, RelationCache, RepositoryError, RepositoryResult,
@@ -22,7 +25,35 @@ where
     C: RelationCache,
 {
     /// Applies a command idempotently and records its audit event atomically.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, tenant, disabled-definition, command-conflict or receipt-evidence errors,
+    /// and propagates database or mandatory audit failures. A commit error may have an unknown outcome;
+    /// retry the same command after revalidating application authority.
     pub async fn apply(&self, command: &ApplyKeepsake) -> RepositoryResult<AppliedKeepsake> {
+        let mut tx = self.pool.begin().await?;
+        let result = self.apply_in_transaction(&mut tx, command).await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+
+    /// Executes inside the caller transaction, including the mandatory lifecycle audit.
+    ///
+    /// Never begins, commits, or rolls back a transaction. On any error or cancellation,
+    /// the caller must roll back the entire transaction rather than commit partial effects.
+    /// Authenticate and revalidate current authority before exposing replayed receipts.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, tenant, disabled-definition, schema, isolation, command-conflict or
+    /// receipt-evidence errors, and propagates database or mandatory audit failures. Roll back
+    /// the caller transaction on any error; it may already contain staged effects.
+    pub async fn apply_in_transaction(
+        &self,
+        tx: &mut Transaction<'_, MySql>,
+        command: &ApplyKeepsake,
+    ) -> RepositoryResult<AppliedKeepsake> {
         if command.tenant_id != self.tenant_id {
             return Err(RepositoryError::TenantScopeMismatch);
         }
@@ -30,27 +61,26 @@ where
         command.context.validate()?;
         let mut command = command.clone();
         command.at = canonical_timestamp(command.at);
+        command.expiry = command.expiry.map(canonical_expiry_policy);
         let command = &command;
 
-        let mut tx = self.pool.begin().await?;
-        let relation =
-            relation_for_update_tx(&mut tx, &self.tenant_id, command.relation_id).await?;
-        if let Some(existing) = active_keepsake_for_subject_relation_tx(
-            &mut tx,
-            &self.tenant_id,
-            &command.subject,
-            command.relation_id,
-        )
-        .await?
+        let observation = self
+            .observe_in_transaction(tx, &command.subject, command.relation_id)
+            .await?;
+        if let Some(receipt) = self
+            .replay_apply_in_transaction(tx, command, &observation)
+            .await?
         {
-            let event = replay_event(
-                existing_audit_event_tx(&mut tx, &self.tenant_id, self.audit, command.audit_id)
-                    .await?,
-                apply_event(command, &existing, true),
-            );
-            self.enqueue_audit_event_tx(&mut tx, &event).await?;
-            tx.commit().await?;
+            return Ok(receipt);
+        }
+
+        let relation = observation.relation().clone();
+        if let Some(active) = observation.active_relation()? {
+            let existing = active.keepsake().clone();
+            let event = apply_event(command, &existing, true);
+            self.enqueue_audit_event_tx(tx, &event).await?;
             return Ok(AppliedKeepsake {
+                replayed: false,
                 keepsake: existing,
                 duplicate_prevented: true,
             });
@@ -61,6 +91,8 @@ where
                 relation_id: command.relation_id,
             });
         }
+
+        let assignment = Keepsake::from_apply(command, &relation)?;
 
         sqlx::query(
             r"
@@ -75,54 +107,149 @@ where
         .bind(command.subject.kind())
         .bind(command.subject.id())
         .bind(command.relation_id.to_string())
-        .bind(serde_json::to_value(&relation.expiry)?)
+        .bind(serde_json::to_value(assignment.expiry())?)
         .bind(naive_timestamp(command.at))
-        .bind(expires_at(&relation.expiry).map(naive_timestamp))
+        .bind(expires_at(assignment.expiry()).map(naive_timestamp))
         .bind(serde_json::to_value(&command.metadata)?)
         .bind(naive_timestamp(command.at))
         .bind(naive_timestamp(command.at))
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
 
-        let keepsake = keepsake_by_id_tx(&mut tx, &self.tenant_id, command.id)
+        let keepsake = keepsake_by_id_tx(tx, &self.tenant_id, command.id)
             .await?
             .ok_or(RepositoryError::RelationDefinitionMissing {
                 relation_id: command.relation_id,
             })?;
-        self.enqueue_audit_event_tx(&mut tx, &apply_event(command, &keepsake, false))
+        self.enqueue_audit_event_tx(tx, &apply_event(command, &keepsake, false))
             .await?;
-        tx.commit().await?;
         Ok(AppliedKeepsake {
+            replayed: false,
             keepsake,
             duplicate_prevented: false,
         })
     }
 
     /// Revokes an active keepsake from a command and records its audit event atomically.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-context, tenant, schema, isolation or command-replay errors, and propagates
+    /// database or mandatory audit failures. An unknown commit outcome requires an exact command retry.
     pub async fn revoke(&self, command: &RevokeKeepsake) -> RepositoryResult<bool> {
+        let mut tx = self.pool.begin().await?;
+        match self.revoke_in_transaction(&mut tx, command).await {
+            Ok(_) => {
+                tx.commit().await?;
+                Ok(true)
+            }
+            Err(RepositoryError::MissingActiveAssignment) => {
+                tx.rollback().await?;
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Executes inside the caller transaction, including the mandatory lifecycle audit.
+    ///
+    /// Never begins, commits, or rolls back a transaction. On any error or cancellation,
+    /// the caller must roll back the entire transaction rather than commit partial effects.
+    /// Authenticate and revalidate current authority before exposing replayed receipts.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, tenant, schema, isolation, missing-assignment or command-replay errors,
+    /// and propagates database or mandatory audit failures. Roll back the caller transaction
+    /// on any error; it may already contain staged effects.
+    pub async fn revoke_in_transaction(
+        &self,
+        tx: &mut Transaction<'_, MySql>,
+        command: &RevokeKeepsake,
+    ) -> RepositoryResult<RevokedKeepsake> {
         if command.tenant_id != self.tenant_id {
             return Err(RepositoryError::TenantScopeMismatch);
         }
+        super::observation::require_transaction_schema(tx).await?;
+        super::require_repeatable_read(tx).await?;
         command.context.validate()?;
         let mut command = command.clone();
         command.at = canonical_timestamp(command.at);
         let command = &command;
 
-        let mut tx = self.pool.begin().await?;
-        let revoked = revoke_tx(&mut tx, &self.tenant_id, command.keepsake_id, command.at).await?;
-        if let Some(keepsake) = &revoked {
-            self.enqueue_audit_event_tx(&mut tx, &revoke_event(command, keepsake))
+        if let Some(assignment) =
+            keepsake_by_id_tx(tx, &self.tenant_id, command.keepsake_id).await?
+        {
+            self.observe_in_transaction(tx, assignment.subject(), assignment.relation_id())
                 .await?;
         }
-        tx.commit().await?;
-        Ok(revoked.is_some())
+
+        if let Some(event) =
+            existing_audit_event_tx(tx, &self.tenant_id, self.audit, command.audit_id).await?
+        {
+            require_command(&event, &LifecycleCommand::Revoke(command.clone()))?;
+            return Ok(RevokedKeepsake {
+                keepsake_id: event.keepsake_id,
+                replayed: true,
+            });
+        }
+
+        let revoked = revoke_tx(tx, &self.tenant_id, command.keepsake_id, command.at).await?;
+        if let Some(keepsake) = &revoked {
+            self.enqueue_audit_event_tx(tx, &revoke_event(command, keepsake))
+                .await?;
+        }
+
+        let revoked = revoked.ok_or(RepositoryError::MissingActiveAssignment)?;
+        Ok(RevokedKeepsake {
+            keepsake_id: revoked.id(),
+            replayed: false,
+        })
     }
 
     /// Revokes the active keepsake for a subject and relation pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-context, subject, tenant, schema, isolation or command-replay errors,
+    /// and propagates database or mandatory audit failures.
     pub async fn revoke_by_subject(
         &self,
         command: &RevokeBySubject,
     ) -> RepositoryResult<Option<KeepsakeId>> {
+        let mut tx = self.pool.begin().await?;
+        match self
+            .revoke_by_subject_in_transaction(&mut tx, command)
+            .await
+        {
+            Ok(receipt) => {
+                tx.commit().await?;
+                Ok(Some(receipt.keepsake_id))
+            }
+            Err(RepositoryError::MissingActiveAssignment) => {
+                tx.rollback().await?;
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Executes inside the caller transaction, including the mandatory lifecycle audit.
+    ///
+    /// Never begins, commits, or rolls back a transaction. On any error or cancellation,
+    /// the caller must roll back the entire transaction rather than commit partial effects.
+    /// Authenticate and revalidate current authority before exposing replayed receipts.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, tenant, schema, isolation, missing-assignment or command-replay errors,
+    /// and propagates database or mandatory audit failures. Roll back the caller transaction
+    /// on any error; it may already contain staged effects.
+    pub async fn revoke_by_subject_in_transaction(
+        &self,
+        tx: &mut Transaction<'_, MySql>,
+        command: &RevokeBySubject,
+    ) -> RepositoryResult<RevokedKeepsake> {
         if command.tenant_id != self.tenant_id {
             return Err(RepositoryError::TenantScopeMismatch);
         }
@@ -132,9 +259,20 @@ where
         command.at = canonical_timestamp(command.at);
         let command = &command;
 
-        let mut tx = self.pool.begin().await?;
+        self.observe_in_transaction(tx, &command.subject, command.relation_id)
+            .await?;
+        if let Some(event) =
+            existing_audit_event_tx(tx, &self.tenant_id, self.audit, command.audit_id).await?
+        {
+            require_command(&event, &LifecycleCommand::RevokeBySubject(command.clone()))?;
+            return Ok(RevokedKeepsake {
+                keepsake_id: event.keepsake_id,
+                replayed: true,
+            });
+        }
+
         let revoked = revoke_by_subject_tx(
-            &mut tx,
+            tx,
             &self.tenant_id,
             &command.subject,
             command.relation_id,
@@ -143,37 +281,16 @@ where
         .await?;
         let revoked_id = revoked.as_ref().map(Keepsake::id);
         if let Some(keepsake) = &revoked {
-            self.enqueue_audit_event_tx(&mut tx, &revoke_by_subject_event(command, keepsake))
+            self.enqueue_audit_event_tx(tx, &revoke_by_subject_event(command, keepsake))
                 .await?;
         }
-        tx.commit().await?;
-        Ok(revoked_id)
+
+        let keepsake_id = revoked_id.ok_or(RepositoryError::MissingActiveAssignment)?;
+        Ok(RevokedKeepsake {
+            keepsake_id,
+            replayed: false,
+        })
     }
-}
-
-async fn existing_audit_event_tx(
-    tx: &mut Transaction<'_, MySql>,
-    tenant_id: &keepsake::TenantId,
-    config: &super::super::support::DovecoteAuditConfig,
-    audit_id: keepsake::AuditEventId,
-) -> RepositoryResult<Option<keepsake::AuditEvent>> {
-    let event_id = format!("keepsake-audit-{}", audit_id.as_uuid());
-    let row = sqlx::query(
-        "select data from dovecote_events where tenant_id = ? and source = ? and event_id = ?",
-    )
-    .bind(tenant_id.as_str().as_bytes())
-    .bind(config.source())
-    .bind(event_id)
-    .fetch_optional(&mut **tx)
-    .await?;
-    let Some(row) = row else { return Ok(None) };
-
-    let data: Option<Vec<u8>> = sqlx::Row::try_get(&row, "data")?;
-    data.map(|data| {
-        decode_current_audit_payload_for_tenant(&data, tenant_id)
-            .map_err(RepositoryError::AuditPayload)
-    })
-    .transpose()
 }
 
 impl<C> TenantSqlxKeepsakeRepository<'_, MySqlBackend, C>
@@ -297,6 +414,7 @@ pub(super) async fn revoke_by_subject_tx(
     else {
         return Ok(None);
     };
+
     let result = sqlx::query(
         r"
         update keepsakes

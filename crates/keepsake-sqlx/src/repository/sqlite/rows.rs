@@ -1,4 +1,6 @@
+use sqlx::sqlite::SqliteRow;
 use std::collections::BTreeMap;
+use time::format_description::well_known::Rfc3339;
 
 use keepsake::{
     ExpiryPolicy, Keepsake, KeepsakeRecord, RelationDefinition, RelationKey, SubjectRef, TenantId,
@@ -10,9 +12,7 @@ use time::{OffsetDateTime, UtcOffset};
 use crate::repository::FulfilledExpiryCandidate;
 use crate::repository::support::{canonical_expiry_policy, parse_state, parse_uuid};
 use crate::repository::{RepositoryResult, TimedExpiryCandidate};
-pub(super) fn relation_from_row(
-    row: &sqlx::sqlite::SqliteRow,
-) -> RepositoryResult<RelationDefinition> {
+pub(super) fn relation_from_row(row: &SqliteRow) -> RepositoryResult<RelationDefinition> {
     let expiry = canonical_expiry_policy(serde_json::from_str::<ExpiryPolicy>(
         row.try_get("expiry_policy")?,
     )?);
@@ -28,7 +28,7 @@ pub(super) fn relation_from_row(
     )?)
 }
 
-pub(super) fn keepsake_from_row(row: &sqlx::sqlite::SqliteRow) -> RepositoryResult<Keepsake> {
+pub(super) fn keepsake_from_row(row: &SqliteRow) -> RepositoryResult<Keepsake> {
     let metadata = serde_json::from_str::<BTreeMap<String, String>>(row.try_get("metadata")?)?;
     let expiry = canonical_expiry_policy(serde_json::from_str::<ExpiryPolicy>(
         row.try_get("expiry_policy")?,
@@ -44,16 +44,18 @@ pub(super) fn keepsake_from_row(row: &sqlx::sqlite::SqliteRow) -> RepositoryResu
         state: parse_state(row.try_get("state")?)?,
         expiry,
         applied_at: parse_timestamp(row.try_get("applied_at")?)?,
-        expires_at: optional_timestamp(row.try_get("expires_at")?)?,
-        fulfilled_at: optional_timestamp(row.try_get("fulfilled_at")?)?,
-        revoked_at: optional_timestamp(row.try_get("revoked_at")?)?,
+        expires_at: optional_timestamp(row.try_get::<Option<String>, _>("expires_at")?.as_deref())?,
+        fulfilled_at: optional_timestamp(
+            row.try_get::<Option<String>, _>("fulfilled_at")?.as_deref(),
+        )?,
+        revoked_at: optional_timestamp(row.try_get::<Option<String>, _>("revoked_at")?.as_deref())?,
         metadata,
     }
     .try_into()?)
 }
 
 pub(super) fn relation_definition_from_active_row(
-    row: &sqlx::sqlite::SqliteRow,
+    row: &SqliteRow,
 ) -> RepositoryResult<RelationDefinition> {
     let expiry = canonical_expiry_policy(serde_json::from_str::<ExpiryPolicy>(
         row.try_get("relation_expiry_policy")?,
@@ -71,7 +73,7 @@ pub(super) fn relation_definition_from_active_row(
 }
 
 pub(super) fn timed_expiry_candidate_from_row(
-    row: &sqlx::sqlite::SqliteRow,
+    row: &SqliteRow,
 ) -> RepositoryResult<TimedExpiryCandidate> {
     Ok(TimedExpiryCandidate {
         keepsake_id: parse_uuid(row.try_get("keepsake_id")?)?,
@@ -84,7 +86,7 @@ pub(super) fn timed_expiry_candidate_from_row(
 
 #[cfg(feature = "fulfillment-counters")]
 pub(super) fn fulfilled_expiry_candidate_from_row(
-    row: &sqlx::sqlite::SqliteRow,
+    row: &SqliteRow,
 ) -> RepositoryResult<FulfilledExpiryCandidate> {
     Ok(FulfilledExpiryCandidate {
         keepsake_id: parse_uuid(row.try_get("keepsake_id")?)?,
@@ -98,18 +100,13 @@ pub(super) fn fulfilled_expiry_candidate_from_row(
 }
 
 pub(super) fn parse_timestamp(value: &str) -> RepositoryResult<OffsetDateTime> {
-    Ok(
-        OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
-            .map_err(|error| sqlx::Error::Decode(Box::new(error)))?
-            .to_offset(UtcOffset::UTC),
-    )
+    Ok(OffsetDateTime::parse(value, &Rfc3339)
+        .map_err(|error| sqlx::Error::Decode(Box::new(error)))?
+        .to_offset(UtcOffset::UTC))
 }
 
-#[allow(clippy::needless_pass_by_value)]
-pub(super) fn optional_timestamp(
-    value: Option<String>,
-) -> RepositoryResult<Option<OffsetDateTime>> {
-    value.as_deref().map(parse_timestamp).transpose()
+pub(super) fn optional_timestamp(value: Option<&str>) -> RepositoryResult<Option<OffsetDateTime>> {
+    value.map(parse_timestamp).transpose()
 }
 
 pub(super) fn format_timestamp(value: OffsetDateTime) -> String {

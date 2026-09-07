@@ -1,3 +1,5 @@
+use core::result;
+use serde::de;
 use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize};
@@ -17,6 +19,11 @@ pub struct TenantId(String);
 
 impl TenantId {
     /// Builds a tenant identity from an application-owned value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an identifier error for empty, edge-whitespace, overlong, control-character
+    /// or Unicode-noncharacter components.
     pub fn new(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
         validate_persisted_identifier("tenant_id", &value)?;
@@ -59,12 +66,12 @@ impl TryFrom<&str> for TenantId {
 }
 
 impl<'de> Deserialize<'de> for TenantId {
-    fn deserialize<D>(deserializer: D) -> core::result::Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> result::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         let value = String::deserialize(deserializer)?;
-        Self::new(value).map_err(serde::de::Error::custom)
+        Self::new(value).map_err(de::Error::custom)
     }
 }
 
@@ -85,6 +92,11 @@ pub struct SubjectRef {
 
 impl SubjectRef {
     /// Builds a validated subject reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns an identifier error for empty, edge-whitespace, overlong, control-character
+    /// or Unicode-noncharacter components.
     pub fn new(kind: impl Into<String>, id: impl Into<String>) -> Result<Self> {
         let subject = Self {
             kind: kind.into(),
@@ -95,6 +107,11 @@ impl SubjectRef {
     }
 
     /// Validates the subject reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns an identifier error for empty, edge-whitespace, overlong, control-character
+    /// or Unicode-noncharacter components.
     pub fn validate(&self) -> Result<()> {
         validate_persisted_identifier("subject.kind", self.kind())?;
         validate_persisted_identifier("subject.id", self.id())
@@ -114,7 +131,7 @@ impl SubjectRef {
 }
 
 impl<'de> Deserialize<'de> for SubjectRef {
-    fn deserialize<D>(deserializer: D) -> core::result::Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> result::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -125,7 +142,7 @@ impl<'de> Deserialize<'de> for SubjectRef {
         }
 
         let record = SubjectRefRecord::deserialize(deserializer)?;
-        Self::new(record.kind, record.id).map_err(serde::de::Error::custom)
+        Self::new(record.kind, record.id).map_err(de::Error::custom)
     }
 }
 
@@ -140,6 +157,11 @@ pub struct ActorRef {
 
 impl ActorRef {
     /// Builds a validated actor reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns an identifier error for empty, edge-whitespace, overlong, control-character
+    /// or Unicode-noncharacter components.
     pub fn new(kind: impl Into<String>, id: impl Into<String>) -> Result<Self> {
         let actor = Self {
             kind: kind.into(),
@@ -150,6 +172,11 @@ impl ActorRef {
     }
 
     /// Validates the actor reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns an identifier error for empty, edge-whitespace, overlong, control-character
+    /// or Unicode-noncharacter components.
     pub fn validate(&self) -> Result<()> {
         validate_persisted_identifier("actor.kind", self.kind())?;
         validate_persisted_identifier("actor.id", self.id())
@@ -169,7 +196,7 @@ impl ActorRef {
 }
 
 impl<'de> Deserialize<'de> for ActorRef {
-    fn deserialize<D>(deserializer: D) -> core::result::Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> result::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -180,6 +207,6 @@ impl<'de> Deserialize<'de> for ActorRef {
         }
 
         let record = ActorRefRecord::deserialize(deserializer)?;
-        Self::new(record.kind, record.id).map_err(serde::de::Error::custom)
+        Self::new(record.kind, record.id).map_err(de::Error::custom)
     }
 }

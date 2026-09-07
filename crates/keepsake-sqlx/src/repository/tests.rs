@@ -1,18 +1,20 @@
 use keepsake::{SubjectRef, TenantId};
 use sqlx::postgres::PgPoolOptions;
 use time::OffsetDateTime;
+use time::error::Parse;
+use time::format_description::well_known::Rfc3339;
 
 use super::support::parse_state;
 use super::*;
 
-fn ts(value: &str) -> Result<OffsetDateTime, time::error::Parse> {
-    OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+fn ts(value: &str) -> Result<OffsetDateTime, Parse> {
+    OffsetDateTime::parse(value, &Rfc3339)
 }
 
 #[derive(Debug, thiserror::Error)]
 enum TestError {
     #[error(transparent)]
-    Time(#[from] time::error::Parse),
+    Time(#[from] Parse),
 
     #[error(transparent)]
     Keepsake(#[from] keepsake::KeepsakeError),

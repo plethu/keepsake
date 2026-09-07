@@ -16,6 +16,10 @@ where
     ///
     /// If a relation already exists for the same kind/name, its stable id is preserved and
     /// the returned definition contains the existing id.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-definition, tenant or database errors.
     pub async fn upsert_relation(
         &self,
         relation: &RelationDefinition,
@@ -85,6 +89,10 @@ where
     }
 
     /// Inserts or updates a typed relation spec by its natural relation key.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-definition, tenant, stable-spec-identity conflict or database errors.
     pub async fn upsert_relation_spec<Spec>(
         &self,
         at: OffsetDateTime,
@@ -153,6 +161,10 @@ where
     }
 
     /// Looks up a relation definition by stable id.
+    ///
+    /// # Errors
+    ///
+    /// Returns database or invalid-definition decoding errors.
     pub async fn relation_by_id(
         &self,
         relation_id: RelationId,
@@ -173,6 +185,10 @@ where
     }
 
     /// Looks up a relation definition by its natural relation key.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-key, database or invalid-definition decoding errors.
     pub async fn relation_by_key(
         &self,
         key: &RelationKey,
@@ -189,6 +205,10 @@ where
     }
 
     /// Enables or disables a relation.
+    ///
+    /// # Errors
+    ///
+    /// Returns database errors while updating the tenant-scoped definition.
     pub async fn set_relation_enabled(
         &self,
         relation_id: RelationId,

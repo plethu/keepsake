@@ -1,4 +1,7 @@
-use keepsake::ExpiryCause;
+use crate::repository::observation;
+use std::collections::BTreeSet;
+
+use keepsake::{ExpiryCause, KeepsakeId};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -16,6 +19,11 @@ where
     C: RelationCache,
 {
     /// Lists due timed expiry candidates in stable batch order.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RepositoryError::InvalidLimit` outside the supported batch range, or a database
+    /// or invalid-record decoding error.
     pub async fn due_timed_expiry(
         &self,
         now: OffsetDateTime,
@@ -44,20 +52,56 @@ where
         Ok(rows)
     }
     /// Expires a stable batch of due timed keepsakes.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-limit, schema, isolation, storage or mandatory audit errors.
+    /// The owned transaction is not committed when reconciliation fails.
     pub async fn expire_due_timed(&self, now: OffsetDateTime, limit: i64) -> RepositoryResult<u64> {
-        let limit = validate_limit(limit)?;
         let mut tx = self.pool.begin().await?;
-        let candidates = due_timed_expiry_tx(&mut tx, &self.tenant_id, now, limit).await?;
+        let expired = self
+            .expire_due_timed_in_transaction(&mut tx, now, limit)
+            .await?;
+        let count =
+            u64::try_from(expired.len()).map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
+        tx.commit().await?;
+        Ok(count)
+    }
+
+    /// Reconciles due expiry inside the caller's transaction, including lifecycle audit.
+    /// Returns only transitioned assignment identities, in candidate order, for composing
+    /// notification intents before the caller commits.
+    ///
+    /// This method never begins, commits, or rolls back a transaction. On error or
+    /// cancellation, roll back the whole transaction; earlier writes may remain pending.
+    /// Candidate rows are locked in batch order, skipping rows another worker locks.
+    /// Acquire protected relation observations in sorted scope order before reconciling.
+    /// Retry the entire transaction after a deadlock. This worker operation does not
+    /// fence absent relations.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-limit, schema, isolation, storage or mandatory audit errors.
+    /// Roll back the caller transaction on any error; earlier transitions may be staged.
+    pub async fn expire_due_timed_in_transaction(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        now: OffsetDateTime,
+        limit: i64,
+    ) -> RepositoryResult<Vec<KeepsakeId>> {
+        observation::require_transaction_schema(tx).await?;
+        observation::require_read_committed(tx).await?;
+        let limit = validate_limit(limit)?;
+        let candidates = due_timed_expiry_tx(tx, &self.tenant_id, now, limit).await?;
         let ids = candidates
             .iter()
             .map(|row| row.keepsake_id)
             .collect::<Vec<Uuid>>();
         if ids.is_empty() {
-            tx.commit().await?;
-            return Ok(0);
+            return Ok(Vec::new());
         }
 
-        let result = sqlx::query(
+        let transitioned = sqlx::query_scalar::<_, KeepsakeId>(
             r"
             update keepsakes
             set state = 'expired', updated_at = $3
@@ -69,16 +113,22 @@ where
                 where r.tenant_id = keepsakes.tenant_id
                   and r.id = keepsakes.relation_id and r.enabled
               )
+            returning id
             ",
         )
         .bind(self.tenant_id.as_str())
         .bind(&ids)
         .bind(now)
-        .execute(&mut *tx)
+        .fetch_all(&mut **tx)
         .await?;
+        let transitioned = transitioned.into_iter().collect::<BTreeSet<_>>();
+        let mut expired = Vec::with_capacity(transitioned.len());
         for candidate in candidates {
+            if !transitioned.contains(&candidate.keepsake_id) {
+                continue;
+            }
             self.enqueue_audit_event_tx(
-                &mut tx,
+                tx,
                 &expiry_event(
                     now,
                     ExpiryCause::Timed,
@@ -90,9 +140,9 @@ where
                 )?,
             )
             .await?;
+            expired.push(candidate.keepsake_id);
         }
-        tx.commit().await?;
-        Ok(result.rows_affected())
+        Ok(expired)
     }
 }
 

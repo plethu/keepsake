@@ -4,13 +4,15 @@ use keepsake::{
     ExpiryPolicy, RevokeBySubject, SubjectRef,
 };
 use sqlx::Row;
+use sqlx::mysql::MySqlRow;
+use std::io;
 use time::PrimitiveDateTime;
 
 fn decode_utf8(bytes: Vec<u8>, field: &str) -> Result<String, sqlx::Error> {
     String::from_utf8(bytes).map_err(|source| {
         sqlx::Error::Decode(
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
+            io::Error::new(
+                io::ErrorKind::InvalidData,
                 format!("stored {field} is not UTF-8: {source}"),
             )
             .into(),
@@ -18,7 +20,7 @@ fn decode_utf8(bytes: Vec<u8>, field: &str) -> Result<String, sqlx::Error> {
     })
 }
 
-fn text(row: &sqlx::mysql::MySqlRow, column: &str) -> TestResult<String> {
+fn text(row: &MySqlRow, column: &str) -> TestResult<String> {
     Ok(decode_utf8(row.try_get::<Vec<u8>, _>(column)?, column)?)
 }
 
@@ -31,7 +33,7 @@ async fn mysql_lifecycle_events_are_typed_dovecote_rows() -> TestResult<()> {
     let apply_at = ts("2026-01-01T00:01:00Z")?;
     let apply_id = AuditEventId::deterministic(b"mysql-apply");
     let command = ApplyKeepsake::new(
-        MySqlHarness::tenant(),
+        MySqlHarness::tenant()?,
         subject.clone(),
         relation.id,
         apply_at,
@@ -45,7 +47,7 @@ async fn mysql_lifecycle_events_are_typed_dovecote_rows() -> TestResult<()> {
     let revoke_id = AuditEventId::deterministic(b"mysql-revoke");
     repo.revoke_by_subject(
         &RevokeBySubject::new(
-            MySqlHarness::tenant(),
+            MySqlHarness::tenant()?,
             subject,
             relation.id,
             ts("2026-01-01T00:02:00Z")?,
@@ -111,7 +113,7 @@ async fn mysql_exact_replay_is_idempotent_and_changed_content_conflicts() -> Tes
     let relation = upsert_relation::<MySqlHarness>(&repo, ExpiryPolicy::ManualOnly).await?;
     let id = AuditEventId::deterministic(b"mysql-replay");
     let command = ApplyKeepsake::new(
-        MySqlHarness::tenant(),
+        MySqlHarness::tenant()?,
         SubjectRef::new("account", "mysql_replay")?,
         relation.id,
         ts("2026-01-01T00:01:00Z")?,
@@ -127,7 +129,7 @@ async fn mysql_exact_replay_is_idempotent_and_changed_content_conflicts() -> Tes
         1
     );
     let changed = ApplyKeepsake::new(
-        MySqlHarness::tenant(),
+        MySqlHarness::tenant()?,
         command.subject.clone(),
         relation.id,
         command.at,
@@ -151,7 +153,7 @@ async fn mysql_exact_replay_rejects_payload_tenant_mismatch() -> TestResult<()> 
     let relation = upsert_relation::<MySqlHarness>(&repo, ExpiryPolicy::ManualOnly).await?;
     let id = AuditEventId::deterministic(b"mysql-tenant-mismatch");
     let command = ApplyKeepsake::new(
-        MySqlHarness::tenant(),
+        MySqlHarness::tenant()?,
         SubjectRef::new("account", "mysql_tenant_mismatch")?,
         relation.id,
         ts("2026-01-01T00:01:00Z")?,
@@ -164,7 +166,7 @@ async fn mysql_exact_replay_rejects_payload_tenant_mismatch() -> TestResult<()> 
     let payload = sqlx::query_scalar::<_, Vec<u8>>(
         "select data from dovecote_events where tenant_id = ? and source = ? and event_id = ?",
     )
-    .bind(MySqlHarness::tenant().as_str().as_bytes())
+    .bind(MySqlHarness::tenant()?.as_str().as_bytes())
     .bind("https://tests.invalid/keepsake/mysql")
     .bind(&event_id)
     .fetch_one(&pool)
@@ -175,7 +177,7 @@ async fn mysql_exact_replay_rejects_payload_tenant_mismatch() -> TestResult<()> 
         "update dovecote_events set data = ? where tenant_id = ? and source = ? and event_id = ?",
     )
     .bind(serde_json::to_vec(&payload)?)
-    .bind(MySqlHarness::tenant().as_str().as_bytes())
+    .bind(MySqlHarness::tenant()?.as_str().as_bytes())
     .bind("https://tests.invalid/keepsake/mysql")
     .bind(event_id)
     .execute(&pool)

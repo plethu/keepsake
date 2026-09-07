@@ -7,16 +7,16 @@ use super::{RepositoryError, RepositoryResult};
 /// This is deliberately separate from the evidence row schema version. The
 /// former identifies the source tables; the latter identifies this row's
 /// interpretation.
-pub const UPGRADE_SOURCE_SCHEMA: &str = "keepsake-sqlx-1.1";
+pub(super) const UPGRADE_SOURCE_SCHEMA: &str = "keepsake-sqlx-1.1";
 
 /// Version of the importer evidence row contract.
-pub const UPGRADE_EVIDENCE_SCHEMA_VERSION: i64 = 1;
+pub(super) const UPGRADE_EVIDENCE_SCHEMA_VERSION: i64 = 1;
 
 /// Fixed provenance marker for the complete-history importer.
-pub const UPGRADE_EVIDENCE_PROVENANCE: &str = "keepsake-dovecote-importer";
+pub(super) const UPGRADE_EVIDENCE_PROVENANCE: &str = "keepsake-dovecote-importer";
 
 /// The stream owned by Keepsake's Dovecote audit projection.
-pub const UPGRADE_EVIDENCE_STREAM: &str = "keepsake-audit";
+pub(super) const UPGRADE_EVIDENCE_STREAM: &str = "keepsake-audit";
 
 #[derive(Debug, sqlx::FromRow)]
 pub(super) struct UpgradeEvidenceRow {

@@ -79,6 +79,10 @@ pub struct Keepsake {
 
 impl Keepsake {
     /// Creates a new active keepsake.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid subject, policy or lifecycle errors.
     pub fn applied(
         id: KeepsakeId,
         subject: SubjectRef,
@@ -98,6 +102,54 @@ impl Keepsake {
             lifecycle: KeepsakeLifecycle::Applied,
             metadata,
         })
+    }
+
+    /// Builds an assignment from a command and its stored definition.
+    ///
+    /// Validates tenant, relation and assignment policy at the mutation boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid command/definition, tenant/relation mismatch, disabled-definition
+    /// or lifecycle errors before constructing the assignment.
+    pub fn from_apply(
+        command: &crate::ApplyKeepsake,
+        relation: &RelationDefinition,
+    ) -> Result<Self> {
+        if command.tenant_id != relation.tenant_id {
+            return Err(crate::KeepsakeError::TenantMismatch {
+                expected: relation.tenant_id.clone(),
+                actual: command.tenant_id.clone(),
+            });
+        }
+
+        if command.relation_id != relation.id {
+            return Err(crate::KeepsakeError::ActiveRelationMismatch {
+                keepsake_relation_id: command.relation_id,
+                relation_id: relation.id,
+            });
+        }
+
+        if !relation.enabled {
+            return Err(crate::KeepsakeError::RelationDisabled {
+                relation_id: relation.id,
+            });
+        }
+
+        command.context.validate()?;
+        let mut assignment = Self::applied(
+            command.id,
+            command.subject.clone(),
+            relation,
+            command.at,
+            command.metadata.clone(),
+        )?;
+        if let Some(expiry) = &command.expiry {
+            expiry.validate()?;
+            assignment.expiry = expiry.clone();
+        }
+
+        Ok(assignment)
     }
 
     /// Returns the owning tenant identity.

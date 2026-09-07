@@ -24,7 +24,9 @@ When a change touches SQLx, migrations, or database queries, also run:
 mise run test-db
 ```
 
-The canonical gate includes cargo-machete unused-dependency checks. For a focused
+The canonical gate includes cargo-machete unused-dependency checks, strict API
+documentation, TOML validation and spelling. The [maintainability contract](docs/operations/maintainability.md)
+records lint coverage and deliberate test/API distinctions. For a focused
 test, run `mise exec -- just test <filter> -- --nocapture`.
 
 The structural Rust checks are documented in

@@ -33,6 +33,7 @@ API reference: [docs.rs/keepsake](https://docs.rs/keepsake) and
 - [Lifecycle model](reference/lifecycle-model.md)
 - [Command API](reference/command-api.md)
 - [SQLx adapter](reference/sqlx-adapter.md)
+- [Caller-owned relation transactions](reference/transactional-lifecycle.md)
 - [Feature flags](reference/feature-flags.md)
 - [Error model](reference/error-model.md)
 
@@ -41,6 +42,7 @@ API reference: [docs.rs/keepsake](https://docs.rs/keepsake) and
 - [Migrations](operations/migrations.md)
 - [Security](../SECURITY.md)
 - [Versioning](operations/versioning.md)
+- [Maintainability](operations/maintainability.md)
 - [Indexes](operations/indexes.md)
 - [Cron and workers](operations/cron-workers.md)
 - [Query performance](operations/query-performance.md)

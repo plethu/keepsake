@@ -165,9 +165,14 @@ async fn sqlite_v4_repository() -> TestResult<(SqliteKeepsakeRepository, sqlx::S
     ))
     .execute(&pool)
     .await?;
-    sqlx::raw_sql(dovecote_sqlx_sqlite::MIGRATIONS[0].sql())
-        .execute(&pool)
-        .await?;
+    sqlx::raw_sql(
+        dovecote_sqlx_sqlite::MIGRATIONS
+            .first()
+            .ok_or(sqlx::Error::RowNotFound)?
+            .sql(),
+    )
+    .execute(&pool)
+    .await?;
     let repository =
         SqliteKeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/sqlite-v4")?;
     repository.check_schema().await?;
@@ -307,5 +312,68 @@ async fn sqlite_v4_schema_check_rejects_a_tautological_identifier_trigger() -> T
     )
     .await?;
     assert!(repository.check_schema().await.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_identifier_upgrade_preserves_terminal_history_and_receipt() -> TestResult<()> {
+    let pool = sqlite_v3_pool().await?;
+    sqlx::query("insert into keepsake_relation_definitions (tenant_id,id,kind,key,enabled,expiry_policy,created_at,updated_at) values ('tenant-upgrade','00000000-0000-0000-0000-000000000001','block','social',1,'{\"type\":\"manual_only\"}','2026-01-01T00:00:00.000000Z','2026-01-01T00:00:00.000000Z')")
+        .execute(&pool).await?;
+    sqlx::query("insert into keepsakes (tenant_id,id,subject_kind,subject_id,relation_id,state,expiry_policy,applied_at,expires_at,fulfilled_at,revoked_at,metadata,created_at,updated_at) values ('tenant-upgrade','00000000-0000-0000-0000-000000000002','directed-pair','a:b','00000000-0000-0000-0000-000000000001','revoked','{\"type\":\"manual_only\"}','2026-01-01T00:00:00.000000Z',null,null,'2026-01-01T00:00:00.000000Z','{\"origin\":\"published-v3\"}','2026-01-01T00:00:00.000000Z','2026-01-01T00:00:00.000000Z')")
+        .execute(&pool).await?;
+    let root =
+        SqliteKeepsakeRepository::new(pool.clone(), "https://tests.invalid/identifier-upgrade")?;
+    root.upgrade_identifier_contract().await?;
+    root.upgrade_identifier_contract().await?;
+    sqlx::raw_sql(
+        dovecote_sqlx_sqlite::MIGRATIONS
+            .first()
+            .ok_or(sqlx::Error::RowNotFound)?
+            .sql(),
+    )
+    .execute(&pool)
+    .await?;
+    root.check_schema().await?;
+    let scoped = root.for_tenant(keepsake::TenantId::new("tenant-upgrade")?);
+    let mut tx = pool.begin().await?;
+    let observation = scoped
+        .observe_in_transaction(
+            &mut tx,
+            &keepsake::SubjectRef::new("directed-pair", "a:b")?,
+            uuid::Uuid::from_u128(1),
+        )
+        .await?;
+    assert_eq!(observation.history().len(), 1);
+    assert_eq!(observation.history()[0].id(), uuid::Uuid::from_u128(2));
+    assert_eq!(
+        observation.history()[0].state(),
+        keepsake::LifecycleState::Revoked
+    );
+    assert_eq!(
+        observation.history()[0]
+            .metadata()
+            .get("origin")
+            .map(String::as_str),
+        Some("published-v3")
+    );
+    assert!(observation.active_relation()?.is_none());
+    tx.rollback().await?;
+    let events: i64 = sqlx::query_scalar("select count(*) from dovecote_events")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(events, 0);
+    let baseline: i64 =
+        sqlx::query_scalar("select count(*) from _sqlx_migrations where version = 3000")
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(baseline, 0);
+    sqlx::query("update _sqlx_migrations set success = false where version = 4000")
+        .execute(&pool)
+        .await?;
+    assert!(matches!(
+        root.upgrade_identifier_contract().await,
+        Err(RepositoryError::BackendMismatch { .. })
+    ));
     Ok(())
 }

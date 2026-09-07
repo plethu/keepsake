@@ -1,4 +1,5 @@
-#![allow(missing_docs)]
+//! postgres persistence contract tests.
+
 #![cfg(feature = "postgres-tests")]
 //! Docker-backed Postgres integration tests.
 
@@ -18,3 +19,6 @@ mod schema;
 mod support;
 #[path = "postgres/tenancy.rs"]
 mod tenancy;
+
+#[path = "postgres/transactions.rs"]
+mod transactions;

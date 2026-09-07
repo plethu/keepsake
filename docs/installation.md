@@ -5,16 +5,16 @@ entitlement state. [Dovecote](https://github.com/plethu/dovecote) owns
 immutable audit events and their at-least-once deliveries. Dovecote is published
 on crates.io; install both schemas before serving requests.
 
-Keepsake 5.0 retains the v4 database and JSON contracts. Existing v4 databases
+Keepsake 6.0 retains the v4 database and JSON contracts. Existing v4 databases
 need no new migration; the [versioning guide](operations/versioning.md) covers
-the Rust API change.
+the Rust API changes.
 
 For Postgres:
 
 ```toml
 [dependencies]
-keepsake = "5"
-keepsake-sqlx = "5"
+keepsake = "6"
+keepsake-sqlx = "6"
 dovecote-sqlx-postgres = "0.2"
 sqlx = { version = "0.9", features = ["postgres", "runtime-tokio", "tls-rustls"] }
 time = "0.3"
@@ -48,8 +48,8 @@ Select SQLite explicitly and use the `dovecote-sqlx-sqlite` adapter:
 
 ```toml
 [dependencies]
-keepsake = "5"
-keepsake-sqlx = { version = "5", default-features = false, features = ["sqlite", "migrations"] }
+keepsake = "6"
+keepsake-sqlx = { version = "6", default-features = false, features = ["sqlite", "migrations"] }
 dovecote-sqlx-sqlite = "0.2"
 sqlx = { version = "0.9", default-features = false, features = ["sqlite", "runtime-tokio", "tls-rustls"] }
 time = "0.3"
@@ -67,8 +67,8 @@ For MySQL, select the matching backend and use the Dovecote adapter:
 
 ```toml
 [dependencies]
-keepsake = "5"
-keepsake-sqlx = { version = "5", default-features = false, features = ["mysql", "migrations"] }
+keepsake = "6"
+keepsake-sqlx = { version = "6", default-features = false, features = ["mysql", "migrations"] }
 dovecote-sqlx-mysql = "0.2"
 sqlx = { version = "0.9", default-features = false, features = ["mysql", "runtime-tokio", "tls-rustls"] }
 time = "0.3"

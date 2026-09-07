@@ -16,6 +16,10 @@ where
     C: RelationCache,
 {
     /// Returns active keepsakes for a subject.
+    ///
+    /// # Errors
+    ///
+    /// Returns subject-validation, database or invalid-assignment decoding errors.
     pub async fn active_for_subject(
         &self,
         subject: &SubjectRef,
@@ -41,6 +45,10 @@ where
     }
 
     /// Returns active keepsakes for a subject with their relation definitions.
+    ///
+    /// # Errors
+    ///
+    /// Returns subject-validation, database or invalid-assignment/definition decoding errors.
     pub async fn active_relations_for_subject(
         &self,
         subject: &SubjectRef,
@@ -97,6 +105,10 @@ where
     /// catalogue. Missing ids are ignored, duplicate requested ids do not
     /// duplicate output rows, and disabled relation definitions are still
     /// returned when their keepsake is active.
+    ///
+    /// # Errors
+    ///
+    /// Returns subject-validation, database or invalid-assignment/definition decoding errors.
     pub async fn active_relations_for_subject_by_ids(
         &self,
         subject: &SubjectRef,
@@ -176,6 +188,10 @@ where
     /// request paths that know the small set of relation keys they care about.
     /// Missing keys are ignored, and disabled relation definitions are still
     /// returned when their keepsake is active.
+    ///
+    /// # Errors
+    ///
+    /// Returns subject/key-validation, database or invalid-assignment/definition decoding errors.
     pub async fn active_relations_for_subject_by_keys(
         &self,
         subject: &SubjectRef,
@@ -260,6 +276,10 @@ where
     }
 
     /// Scans active memberships for a relation in stable order.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-limit, database or invalid-assignment decoding errors.
     pub async fn active_membership_scan(
         &self,
         relation_id: RelationId,
@@ -270,6 +290,10 @@ where
     }
 
     /// Scans active memberships after a keyset cursor in stable order.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-limit, database or invalid-assignment decoding errors.
     pub async fn active_membership_scan_after(
         &self,
         relation_id: RelationId,

@@ -46,6 +46,28 @@ databases and SQLite file-per-tenant deployments provide the clearest physical
 boundaries for regulated workloads; use shared schemas only with equivalent
 operational controls and verified tenant isolation tests.
 
+An operator-managed tenant activation finishes at domain track 3. Complete it
+with `repo.upgrade_identifier_contract().await?`, then `repo.check_schema().await?`.
+This supported step validates existing identifiers and catalog shape, runs the
+published backend `4000_identifier_contract.sql` artifact with its real SQLx
+receipt, and never replays or fabricates the clean v3 baseline. A valid domain
+track 4 is an unchanged retry.
+
+Stop or fence all writers and verify a restorable backup before either upgrade.
+PostgreSQL and SQLite use transactional migration execution; MySQL DDL may commit
+partially. If the migration fails, preserve the SQLx dirty marker and logs, restore
+or explicitly repair the failed step, and rerun the schema checks before allowing
+writers. Do not clear the marker and blindly retry nontransactional DDL. Neither
+step copies nor republishes Dovecote history.
+
+```rust,ignore
+repo.prepare_tenant_upgrade().await?;
+// Apply the reviewed tenant mapping to every prepared nullable tenant column.
+repo.activate_tenant_upgrade().await?;
+repo.upgrade_identifier_contract().await?;
+repo.check_schema().await?;
+```
+
 Do not enable tenant-aware writers until the Keepsake and Dovecote schema
 checks pass, cross-tenant isolation tests pass on the selected backend, and
 rollback/backup procedures have been rehearsed. The historical 2.x clean

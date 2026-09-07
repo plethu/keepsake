@@ -1,3 +1,4 @@
+use sqlx::mysql::MySqlRow;
 use std::collections::BTreeSet;
 
 use keepsake::{
@@ -18,6 +19,10 @@ where
     C: RelationCache,
 {
     /// Returns active keepsakes for a subject.
+    ///
+    /// # Errors
+    ///
+    /// Returns subject-validation, database or invalid-assignment decoding errors.
     pub async fn active_for_subject(
         &self,
         subject: &SubjectRef,
@@ -40,6 +45,10 @@ where
     }
 
     /// Returns active keepsakes for a subject with their relation definitions.
+    ///
+    /// # Errors
+    ///
+    /// Returns subject-validation, database or invalid-assignment/definition decoding errors.
     pub async fn active_relations_for_subject(
         &self,
         subject: &SubjectRef,
@@ -54,6 +63,10 @@ where
     }
 
     /// Returns active keepsakes for a subject, filtered by relation ids.
+    ///
+    /// # Errors
+    ///
+    /// Returns subject-validation, database or invalid-assignment/definition decoding errors.
     pub async fn active_relations_for_subject_by_ids(
         &self,
         subject: &SubjectRef,
@@ -85,6 +98,10 @@ where
     }
 
     /// Returns active keepsakes for a subject, filtered by relation keys.
+    ///
+    /// # Errors
+    ///
+    /// Returns subject/key-validation, database or invalid-assignment/definition decoding errors.
     pub async fn active_relations_for_subject_by_keys(
         &self,
         subject: &SubjectRef,
@@ -124,6 +141,10 @@ where
     }
 
     /// Scans active memberships for a relation in stable order.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-limit, database or invalid-assignment decoding errors.
     pub async fn active_membership_scan(
         &self,
         relation_id: RelationId,
@@ -134,6 +155,10 @@ where
     }
 
     /// Scans active memberships after a keyset cursor in stable order.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-limit, database or invalid-assignment decoding errors.
     pub async fn active_membership_scan_after(
         &self,
         relation_id: RelationId,
@@ -170,7 +195,7 @@ where
 
     async fn active_relations_from_rows(
         &self,
-        rows: &[sqlx::mysql::MySqlRow],
+        rows: &[MySqlRow],
     ) -> RepositoryResult<Vec<ActiveRelation>> {
         let mut active = Vec::with_capacity(rows.len());
         for row in rows {

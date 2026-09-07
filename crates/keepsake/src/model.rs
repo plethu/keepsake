@@ -8,7 +8,7 @@ mod relation;
 #[cfg(test)]
 mod tests;
 
-pub use fulfillment::FulfillmentSnapshot;
+pub use fulfillment::{FulfillmentEvidence, FulfillmentSnapshot};
 pub use identity::{ActorRef, KeepsakeId, RelationId, SubjectRef, TenantId};
 pub use keepsake::{ExpiryCause, Keepsake, KeepsakeLifecycle, KeepsakeRecord, LifecycleState};
 pub use relation::{
@@ -25,6 +25,11 @@ pub const MAX_PERSISTED_IDENTIFIER_BYTES: usize = 191;
 ///
 /// Successful values are retained exactly as supplied: Keepsake does not trim,
 /// normalize, or case-fold them.
+///
+/// # Errors
+///
+/// Returns a typed identifier error for an empty value, edge whitespace, more than
+/// 191 UTF-8 bytes, control characters or Unicode noncharacters.
 pub fn validate_persisted_identifier(field: &'static str, value: &str) -> Result<()> {
     if value.is_empty() {
         return Err(KeepsakeError::EmptyIdentifier { field });
@@ -46,11 +51,11 @@ pub fn validate_persisted_identifier(field: &'static str, value: &str) -> Result
         if character.is_control() {
             return Err(KeepsakeError::IdentifierControlCharacter {
                 field,
-                code_point: character as u32,
+                code_point: u32::from(character),
             });
         }
 
-        let code_point = character as u32;
+        let code_point = u32::from(character);
         if (0xFDD0..=0xFDEF).contains(&code_point) || (code_point & 0xFFFF) >= 0xFFFE {
             return Err(KeepsakeError::IdentifierNoncharacter { field, code_point });
         }

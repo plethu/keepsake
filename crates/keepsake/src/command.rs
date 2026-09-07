@@ -47,6 +47,10 @@ impl CommandContext {
     }
 
     /// Validates the command context.
+    ///
+    /// # Errors
+    ///
+    /// Returns actor identifier validation errors; opaque context metadata is not interpreted.
     pub fn validate(&self) -> Result<()> {
         self.actor.validate()
     }
@@ -66,6 +70,9 @@ pub struct ApplyKeepsake {
     /// Command timestamp.
     #[serde(with = "time::serde::rfc3339")]
     pub at: OffsetDateTime,
+    /// Assignment-specific expiry; absent uses the definition policy.
+    #[serde(default)]
+    pub expiry: Option<crate::ExpiryPolicy>,
     /// Opaque application metadata.
     pub metadata: BTreeMap<String, String>,
     /// Audit context.
@@ -91,6 +98,7 @@ impl ApplyKeepsake {
             relation_id,
             at,
             metadata: BTreeMap::new(),
+            expiry: None,
             context,
             audit_id: AuditEventId::new(),
         }
@@ -108,6 +116,14 @@ impl ApplyKeepsake {
         Spec: RelationSpec,
     {
         Self::new(tenant_id, subject, Spec::ID, at, context)
+    }
+
+    /// Sets the authoritative expiry policy for this assignment.
+    /// The persistence boundary validates the policy before applying it.
+    #[must_use]
+    pub fn with_expiry(mut self, expiry: crate::ExpiryPolicy) -> Self {
+        self.expiry = Some(expiry);
+        self
     }
 
     /// Adds opaque application metadata.

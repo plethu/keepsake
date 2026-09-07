@@ -51,11 +51,21 @@ comments, conditional compilation, or unusual organization.
 
 ## Mutation Helpers
 
-`apply(&ApplyKeepsake)` is idempotent for active duplicates and writes one
-Dovecote event in the same transaction. Duplicate commands return the existing
-active keepsake with `duplicate_prevented = true`. Disabled relations reject new
-non-duplicate applies, but duplicate applies still return the existing active
-keepsake so retry loops do not turn a committed apply into an error.
+`apply(&ApplyKeepsake)` writes its lifecycle change and Dovecote audit in one
+transaction. An exact committed command retry returns the original receipt with
+`replayed = true`, including after that assignment was revoked or expired. It
+does not apply the relation again. Reusing the command identity with different
+content returns `CommandConflict`.
+
+A new command targeting an already-applied relation returns that assignment
+with `duplicate_prevented = true` and records the duplicate-prevention audit.
+Disabled relations reject new non-duplicate applies. Authenticate and revalidate
+current application authority before exposing any old receipt.
+
+Use the [caller-owned transaction APIs](transactional-lifecycle.md) to compose
+current observations, conditional writes, business changes and mandatory events.
+Convenience methods own rollback on failure. With a caller-owned transaction,
+roll back the entire transaction after any error or cancellation.
 
 Apply validates `SubjectRef` before writing. Empty subject kinds or ids fail
 without inserting a keepsake row.
@@ -63,8 +73,9 @@ without inserting a keepsake row.
 Use `ApplyKeepsake::for_spec::<Spec>` for typed relation catalogues and
 `ApplyKeepsake::new` when the relation id is dynamic. `revoke(&RevokeKeepsake)`
 records explicit revocation audit. `CommandContext::idempotency_key` is copied
-into audit context attributes; duplicate active prevention is still based on the
-active `(subject_kind, subject_id, relation_id)` relation, not on that key.
+into audit context attributes. Exact command replay uses the tenant, configured
+event source and audit ID. Active duplicate prevention uses the tenant-scoped
+`(subject_kind, subject_id, relation_id)` relation, not the context key.
 
 Mutation methods take explicit timestamps instead of reading database time.
 Pass the same timestamp through related relation and keepsake writes when they

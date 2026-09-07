@@ -1,8 +1,32 @@
 # Versioning
 
-Keepsake 5.0 changes the Rust audit API while retaining the v4 database track
+Keepsake 6.0 provides caller-owned relation lifecycle
+and effective authorization integration. It retains the v4 database track
 and numeric JSON payload schema version 4. Crate major versions and durable
 schema versions are separate contracts.
+
+## Upgrading from published 5.0
+
+This release is a major API change, not a database-format rewrite.
+`ApplyKeepsake` literals add `expiry: None` to use the definition policy;
+constructors already provide that default. Use `with_expiry` for an individually
+assigned deadline. `AuditEvent` literals add `command: None` for historical or
+system occurrences; new lifecycle storage writes capture complete typed commands.
+`AppliedKeepsake.replayed` distinguishes a committed retry from a new application
+or prevented duplicate. Do not repeat business effects when it is true.
+
+Current domain and audit schemas remain version 4. Existing published migration
+bytes are unchanged, terminal/delivered rows remain history, and existing version-5
+payloads remain readable. Old events without complete command evidence cannot be
+used as exact receipts: the SQL adapter returns `ReceiptEvidenceUnavailable`.
+Keep their original bytes and route recovery through the application's existing
+records. Do not backfill invented commands or republish historical notifications.
+
+See [transactional lifecycle](../reference/transactional-lifecycle.md) for
+transaction methods, backend isolation, expiry reconciliation and retry identity.
+The source dependency graph and executable consumer can be verified locally;
+package publication and registry resolution are separate release gates. Verify
+the package versions used by your service before deployment.
 
 ## Upgrading from 4.0
 
@@ -39,8 +63,9 @@ the new audit contract.
   required ordering.
 - For new databases, apply the clean 4.0 domain baseline, v4 contract, and
   Dovecote schema.
-- For existing v3 databases, run `repo.migrate()` to apply the additive v4
-  track. Resolve the migration's incompatible-row preflight before deploying
+- For existing clean v3 databases with their SQLx baseline receipt, run
+  `repo.migrate()` to apply the additive v4 track. For operator-managed tenant
+  activation, use `repo.upgrade_identifier_contract()` instead. Resolve the migration's incompatible-row preflight before deploying
   4.0 writers; do not edit historical v3 SQL.
 - For 1.x databases, select `upgrade_migrate()` explicitly and complete the
   documented history import before deploying the historical 2.0 writers.

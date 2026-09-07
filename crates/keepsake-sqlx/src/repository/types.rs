@@ -1,5 +1,7 @@
+use super::{RepositoryError, RepositoryResult};
 use keepsake::{ExpiryPolicy, Keepsake};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -32,6 +34,8 @@ impl MembershipCursor {
 /// Result of an apply operation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppliedKeepsake {
+    /// Whether the exact command already committed and no new lifecycle effect occurred.
+    pub replayed: bool,
     /// Created keepsake, or the existing active keepsake for duplicate applies.
     pub keepsake: Keepsake,
     /// Whether a duplicate active keepsake was prevented.
@@ -83,4 +87,92 @@ impl<'row> sqlx::FromRow<'row, PgRow> for FulfilledExpiryCandidate {
             expiry_policy,
         })
     }
+}
+
+/// Opaque evidence of one tenant, subject and relation's complete persisted history.
+///
+/// Revalidate inside the transaction that performs the protected business write.
+/// Holding this value alone provides no lock or freshness guarantee.
+#[derive(Clone, PartialEq, Eq)]
+pub struct RelationObservation {
+    pub(super) tenant_id: keepsake::TenantId,
+    pub(super) subject: keepsake::SubjectRef,
+    pub(super) relation: keepsake::RelationDefinition,
+    pub(super) history: Vec<Keepsake>,
+}
+
+impl RelationObservation {
+    /// Converts locked scope evidence into an explicitly scoped effective-state snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns a lifecycle-model error if a stored active assignment does not match its definition.
+    pub fn snapshot(&self) -> RepositoryResult<keepsake::RelationSnapshot> {
+        Ok(keepsake::RelationSnapshot::new(
+            self.tenant_id.clone(),
+            self.subject.clone(),
+            self.relation.id,
+            self.active_relation()?,
+        )?)
+    }
+
+    /// Returns the unique persisted applied assignment with its current definition.
+    /// Effective expiry must still be evaluated at authoritative observation time.
+    ///
+    /// # Errors
+    ///
+    /// Returns a lifecycle-model error if a stored active assignment does not match its definition.
+    pub fn active_relation(&self) -> RepositoryResult<Option<keepsake::ActiveRelation>> {
+        self.history
+            .iter()
+            .find(|row| row.state() == keepsake::LifecycleState::Applied)
+            .cloned()
+            .map(|row| {
+                keepsake::ActiveRelation::new(row, self.relation.clone())
+                    .map_err(RepositoryError::from)
+            })
+            .transpose()
+    }
+
+    /// Returns complete persisted assignment history, ordered by immutable identity.
+    #[must_use]
+    pub fn history(&self) -> &[Keepsake] {
+        &self.history
+    }
+
+    /// Returns the tenant bound to this evidence.
+    #[must_use]
+    pub const fn tenant_id(&self) -> &keepsake::TenantId {
+        &self.tenant_id
+    }
+
+    /// Returns the subject bound to this evidence.
+    #[must_use]
+    pub const fn subject(&self) -> &keepsake::SubjectRef {
+        &self.subject
+    }
+
+    /// Returns the relation definition bound to this evidence.
+    #[must_use]
+    pub const fn relation(&self) -> &keepsake::RelationDefinition {
+        &self.relation
+    }
+}
+
+impl fmt::Debug for RelationObservation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RelationObservation")
+            .field("assignment_count", &self.history.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// A committed or pending revocation occurrence; outer commit remains caller-owned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RevokedKeepsake {
+    /// Assignment addressed by this immutable occurrence.
+    pub keepsake_id: keepsake::KeepsakeId,
+    /// Whether the exact command already committed without a new lifecycle effect.
+    pub replayed: bool,
 }

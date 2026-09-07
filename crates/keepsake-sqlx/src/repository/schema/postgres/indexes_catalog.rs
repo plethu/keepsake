@@ -1,0 +1,54 @@
+//! Expected indexes in published schema tracks.
+
+#[cfg(feature = "migrations")]
+pub(super) const PG_INDEXES_CHECK_EXPECTED: &[(&str, &str, bool, &str, &str)] = &[
+    (
+        "keepsakes_one_active_relation_per_subject",
+        "keepsakes",
+        true,
+        "subject_kind,subject_id,relation_id",
+        "state='applied'",
+    ),
+    (
+        "keepsakes_active_subject_lookup",
+        "keepsakes",
+        false,
+        "subject_kind,subject_id,relation_id,id",
+        "state='applied'",
+    ),
+    (
+        "keepsakes_active_relation_membership",
+        "keepsakes",
+        false,
+        "relation_id,subject_kind,subject_id,id",
+        "state='applied'",
+    ),
+    (
+        "keepsakes_due_timed_expiry",
+        "keepsakes",
+        false,
+        "expires_at,relation_id,subject_kind,subject_id,id",
+        "state='applied'andexpires_atisnotnull",
+    ),
+    (
+        "keepsake_fulfillment_counter_scan",
+        "keepsake_fulfillment_counters",
+        false,
+        "key,value,keepsake_id",
+        "",
+    ),
+    (
+        "keepsakes_due_fulfilled_expiry",
+        "keepsakes",
+        false,
+        "relation_id,subject_kind,subject_id,id",
+        "state='applied'andexpiry_policy->>'type'='when_fulfilled'",
+    ),
+    (
+        "keepsake_fulfillment_checklist_scan",
+        "keepsake_fulfillment_checklist",
+        false,
+        "item,complete,keepsake_id",
+        "",
+    ),
+];

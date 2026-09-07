@@ -32,7 +32,7 @@ async fn mysql_non_utc_instants_round_trip_as_same_instant() -> TestResult<()> {
 
     let applied = repo
         .apply(&ApplyKeepsake::new(
-            MySqlHarness::tenant(),
+            MySqlHarness::tenant()?,
             subject.clone(),
             relation.id,
             applied_at,
@@ -66,7 +66,7 @@ async fn mysql_legacy_nanosecond_relation_policy_applies_at_sql_precision() -> T
         "update keepsake_relation_definitions set expiry_policy = ? where tenant_id = ? and id = ?",
     )
     .bind(&legacy_policy)
-    .bind(MySqlHarness::tenant().as_str().as_bytes())
+    .bind(MySqlHarness::tenant()?.as_str().as_bytes())
     .bind(relation.id.to_string())
     .execute(&pool)
     .await?;
@@ -74,7 +74,7 @@ async fn mysql_legacy_nanosecond_relation_policy_applies_at_sql_precision() -> T
     let subject = SubjectRef::new("account", "mysql-legacy-nanos")?;
     let applied = repo
         .apply(&ApplyKeepsake::new(
-            MySqlHarness::tenant(),
+            MySqlHarness::tenant()?,
             subject.clone(),
             relation.id,
             ts("2026-01-01T00:01:00Z")?,
@@ -109,7 +109,7 @@ async fn mysql_concurrent_duplicate_apply_creates_one_active_keepsake() -> TestR
         let relation_id = relation.id;
         tokio::spawn(async move {
             let command = ApplyKeepsake::new(
-                MySqlHarness::tenant(),
+                MySqlHarness::tenant()?,
                 subject,
                 relation_id,
                 at,
@@ -228,7 +228,7 @@ async fn mysql_revoke_by_subject_revokes_active_keepsake() -> TestResult<()> {
     let subject = SubjectRef::new("account", "mysql_acct_revoke_subject")?;
     let applied = repo
         .apply(&ApplyKeepsake::new(
-            MySqlHarness::tenant(),
+            MySqlHarness::tenant()?,
             subject.clone(),
             relation.id,
             ts("2026-01-01T00:01:00Z")?,
@@ -238,7 +238,7 @@ async fn mysql_revoke_by_subject_revokes_active_keepsake() -> TestResult<()> {
 
     let revoked = repo
         .revoke_by_subject(&RevokeBySubject::new(
-            MySqlHarness::tenant(),
+            MySqlHarness::tenant()?,
             subject.clone(),
             relation.id,
             ts("2026-01-01T00:02:00Z")?,
@@ -251,7 +251,7 @@ async fn mysql_revoke_by_subject_revokes_active_keepsake() -> TestResult<()> {
 
     let again = repo
         .revoke_by_subject(&RevokeBySubject::new(
-            MySqlHarness::tenant(),
+            MySqlHarness::tenant()?,
             subject,
             relation.id,
             ts("2026-01-01T00:03:00Z")?,

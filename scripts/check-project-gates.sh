@@ -16,6 +16,7 @@ Runs Keepsake's canonical local project gates:
   7. cargo deny advisory, ban, license, and source checks
   8. cargo test --workspace --all-features
   9. cargo machete
+  10. production panic-result contract, strict rustdoc, TOML and spelling checks
 EOF
 }
 
@@ -62,6 +63,35 @@ echo "== cargo clippy =="
 (
   cd "$repo_root"
   cargo clippy --workspace --all-targets --all-features -- -D warnings
+)
+
+echo
+echo "== production panic-result contract =="
+(
+  cd "$repo_root"
+  cargo clippy --workspace --lib --bins --all-features -- -D warnings -D clippy::panic_in_result_fn -D unreachable_pub
+)
+
+echo
+echo "== strict API documentation =="
+(
+  cd "$repo_root"
+  RUSTDOCFLAGS="${RUSTDOCFLAGS:+$RUSTDOCFLAGS }-D warnings" cargo doc --workspace --all-features --no-deps
+)
+
+echo
+echo "== TOML and spelling =="
+(
+  cd "$repo_root"
+  for tool in taplo typos; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+      echo "$tool is unavailable; run 'mise install' and invoke the gate through mise" >&2
+      exit 2
+    fi
+  done
+  taplo fmt --check
+  taplo lint
+  typos
 )
 
 echo

@@ -1,4 +1,5 @@
 use super::support::*;
+use std::env;
 
 async fn seed_importer_evidence(pool: &PgPool, source: &str) -> TestResult<()> {
     sqlx::query("insert into keepsake_upgrade_evidence (evidence_id, evidence_schema_version, provenance, source, source_schema, stream, audit_high_water, outbox_high_water, missing_count, extra_count, state_delta_count, digest_delta_count, active_claim_count, codec_version, complete) values (1, 1, 'keepsake-dovecote-importer', $1, 'keepsake-sqlx-1.1', 'keepsake-audit', 0, 0, 0, 0, 0, 0, 0, 'keepsake.audit.json.v1', true)")
@@ -13,7 +14,7 @@ async fn seed_importer_evidence(pool: &PgPool, source: &str) -> TestResult<()> {
 #[tokio::test]
 #[ignore = "requires an isolated PostgreSQL URL; run explicitly with --ignored --test-threads=1"]
 async fn catalog_check_rejects_changed_column_index_and_constraint() -> TestResult<()> {
-    let database_url = std::env::var("DATABASE_URL")?;
+    let database_url = env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
     reset_schema(&pool).await?;
     let repo = KeepsakeRepository::new(
@@ -88,7 +89,7 @@ async fn catalog_check_rejects_changed_column_index_and_constraint() -> TestResu
 #[tokio::test]
 #[ignore = "requires a disposable PostgreSQL URL; run explicitly with --ignored --test-threads=1"]
 async fn upgrade_track_activates_after_importer_evidence() -> TestResult<()> {
-    let database_url = std::env::var("DATABASE_URL")?;
+    let database_url = env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
     let repo = KeepsakeRepository::new(
         pool.clone(),
@@ -117,7 +118,7 @@ async fn upgrade_track_activates_after_importer_evidence() -> TestResult<()> {
 #[tokio::test]
 #[ignore = "requires an isolated PostgreSQL URL; run explicitly with --ignored --test-threads=1"]
 async fn postgres_v3_preflight_rejects_unicode_edge_whitespace() -> TestResult<()> {
-    let database_url = std::env::var("DATABASE_URL")?;
+    let database_url = env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
     reset_schema(&pool).await?;
     sqlx::raw_sql(include_str!(
@@ -154,7 +155,7 @@ async fn postgres_v3_preflight_rejects_unicode_edge_whitespace() -> TestResult<(
 #[tokio::test]
 #[ignore = "requires an isolated PostgreSQL URL; run explicitly with --ignored --test-threads=1"]
 async fn postgres_runtime_check_rejects_v3_track() -> TestResult<()> {
-    let database_url = std::env::var("DATABASE_URL")?;
+    let database_url = env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
     reset_schema(&pool).await?;
     sqlx::raw_sql(include_str!(
@@ -225,7 +226,7 @@ async fn seed_v2_tenant_upgrade_fixture(pool: &PgPool) -> TestResult<Uuid> {
 #[tokio::test]
 #[ignore = "requires an isolated PostgreSQL URL; run explicitly with --ignored --test-threads=1"]
 async fn tenant_upgrade_activates_v3_schema_with_explicit_backfill() -> TestResult<()> {
-    let database_url = std::env::var("DATABASE_URL")?;
+    let database_url = env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
     reset_schema(&pool).await?;
     let relation_id = seed_v2_tenant_upgrade_fixture(&pool).await?;
@@ -295,6 +296,25 @@ async fn tenant_upgrade_activates_v3_schema_with_explicit_backfill() -> TestResu
         ts("2026-01-01T00:05:00Z")?,
         test_context("upgrade-test")?,
     );
+    assert!(matches!(
+        scoped.apply(&command).await,
+        Err(RepositoryError::BackendMismatch { .. })
+    ));
+    repo.upgrade_identifier_contract().await?;
+    repo.upgrade_identifier_contract().await?;
+    repo.check_schema().await?;
+    let retained = scoped
+        .active_for_subject(&SubjectRef::new("account", "legacy-subject")?)
+        .await?;
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0].id(), Uuid::from_u128(43));
+    assert_eq!(
+        retained[0].metadata().get("origin").map(String::as_str),
+        Some("v2-fixture")
+    );
+    let snapshot = scoped.fulfillment_snapshot(Uuid::from_u128(43)).await?;
+    assert_eq!(snapshot.counters.get("review"), Some(&1));
+    assert_eq!(snapshot.checklist.get("identity"), Some(&true));
     let applied = scoped.apply(&command).await?;
     assert_eq!(applied.keepsake.tenant_id(), &tenant);
     assert_eq!(scoped.active_for_subject(&subject).await?.len(), 1);
@@ -304,7 +324,7 @@ async fn tenant_upgrade_activates_v3_schema_with_explicit_backfill() -> TestResu
 #[tokio::test]
 #[ignore = "requires an isolated PostgreSQL URL; run explicitly with --ignored --test-threads=1"]
 async fn identifier_checks_reject_weakened_predicates() -> TestResult<()> {
-    let pool = PgPool::connect(&std::env::var("DATABASE_URL")?).await?;
+    let pool = PgPool::connect(&env::var("DATABASE_URL")?).await?;
     reset_schema(&pool).await?;
     let repo = KeepsakeRepository::new(pool.clone(), "https://tests.invalid/identifier-checks")?;
     repo.migrate().await?;

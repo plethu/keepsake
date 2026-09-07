@@ -7,7 +7,7 @@ use std::sync::Arc;
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn postgres_identifier_contract_round_trips_case_and_unicode() -> TestResult<()> {
     let root = repo().await?;
-    let repo = root.for_tenant(test_tenant());
+    let repo = root.for_tenant(test_tenant()?);
     let at = ts("2026-01-01T00:00:00Z")?;
     let boundary = format!("{}a", "é".repeat(95));
     assert_eq!(boundary.len(), keepsake::MAX_PERSISTED_IDENTIFIER_BYTES);
@@ -20,11 +20,11 @@ async fn postgres_identifier_contract_round_trips_case_and_unicode() -> TestResu
     ];
     let relations = keys
         .iter()
-        .enumerate()
-        .map(|(index, key)| {
+        .zip(1_u128..)
+        .map(|(key, id)| {
             RelationDefinition::enabled(
-                test_tenant(),
-                Uuid::from_u128((index + 1) as u128),
+                test_tenant()?,
+                Uuid::from_u128(id),
                 key.clone(),
                 ExpiryPolicy::ManualOnly,
             )
@@ -40,7 +40,7 @@ async fn postgres_identifier_contract_round_trips_case_and_unicode() -> TestResu
     let mut keepsake_ids = Vec::with_capacity(relations.len());
     for (index, relation) in relations.iter().enumerate() {
         let command = ApplyKeepsake::new(
-            test_tenant(),
+            test_tenant()?,
             subject.clone(),
             relation.id,
             at + time::Duration::seconds(i64::try_from(index).unwrap_or(0)),
@@ -96,7 +96,7 @@ async fn active_relation_source_accepts_generic_and_erased_sqlx_repository() -> 
         pool,
         "https://tests.invalid/keepsake/postgres",
     )?));
-    let repo = root.for_tenant(test_tenant());
+    let repo = root.for_tenant(test_tenant()?);
 
     assert_generic(&repo);
     let erased: Arc<dyn DynActiveRelationSource<Error = RepositoryError>> = Arc::new(repo);
@@ -108,7 +108,7 @@ async fn active_relation_source_accepts_generic_and_erased_sqlx_repository() -> 
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn active_membership_scan_uses_keyset_pagination() -> TestResult<()> {
     let root = repo().await?;
-    let repo = root.for_tenant(test_tenant());
+    let repo = root.for_tenant(test_tenant()?);
     let relation = timed_relation(&repo, "membership-pages", "2026-01-02T00:00:00Z").await?;
     let subjects = [
         SubjectRef::new("user", format!("a_{}", Uuid::now_v7()))?,
@@ -150,7 +150,7 @@ async fn active_membership_scan_uses_keyset_pagination() -> TestResult<()> {
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn active_relations_for_subject_returns_joined_relation_definitions() -> TestResult<()> {
     let root = repo().await?;
-    let repo = root.for_tenant(test_tenant());
+    let repo = root.for_tenant(test_tenant()?);
     let relation_a = timed_relation(&repo, "joined-a", "2026-01-02T00:00:00Z").await?;
     let relation_b = timed_relation(&repo, "joined-b", "2026-01-03T00:00:00Z").await?;
     let subject = SubjectRef::new("user", format!("joined_{}", Uuid::now_v7()))?;
@@ -183,7 +183,7 @@ async fn active_relations_for_subject_returns_joined_relation_definitions() -> T
 async fn active_relations_for_subject_by_ids_returns_requested_active_relations() -> TestResult<()>
 {
     let root = repo().await?;
-    let repo = root.for_tenant(test_tenant());
+    let repo = root.for_tenant(test_tenant()?);
     let relation_a = timed_relation(&repo, "ids-a", "2026-01-04T00:00:00Z").await?;
     let relation_b = timed_relation(&repo, "ids-b", "2026-01-05T00:00:00Z").await?;
     let disabled = timed_relation(&repo, "ids-disabled", "2026-01-06T00:00:00Z").await?;
@@ -240,7 +240,7 @@ async fn active_relations_for_subject_by_ids_returns_requested_active_relations(
 async fn active_relations_for_subject_by_keys_returns_requested_active_relations() -> TestResult<()>
 {
     let root = repo().await?;
-    let repo = root.for_tenant(test_tenant());
+    let repo = root.for_tenant(test_tenant()?);
     let relation_a = timed_relation(&repo, "keyed-a", "2026-01-04T00:00:00Z").await?;
     let relation_b = timed_relation(&repo, "keyed-b", "2026-01-05T00:00:00Z").await?;
     let disabled = timed_relation(&repo, "keyed-disabled", "2026-01-06T00:00:00Z").await?;
@@ -296,7 +296,7 @@ async fn active_relations_for_subject_by_keys_returns_requested_active_relations
 #[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn batch_queries_reject_invalid_limits() -> TestResult<()> {
     let root = repo().await?;
-    let repo = root.for_tenant(test_tenant());
+    let repo = root.for_tenant(test_tenant()?);
     let relation = timed_relation(&repo, "invalid-limit", "2026-01-02T00:00:00Z").await?;
 
     let membership = repo.active_membership_scan(relation.id, 0).await;

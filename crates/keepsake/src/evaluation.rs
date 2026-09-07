@@ -94,6 +94,14 @@ pub fn evaluate(
         return noop(NoopReason::AlreadyTerminal, keepsake.state());
     }
 
+    evaluate_policy(now, keepsake, fulfillment)
+}
+
+pub(crate) fn evaluate_policy(
+    now: OffsetDateTime,
+    keepsake: &Keepsake,
+    fulfillment: Option<&FulfillmentSnapshot>,
+) -> EvaluationDecision {
     match keepsake.expiry() {
         ExpiryPolicy::ManualOnly => noop(NoopReason::ManualOnly, keepsake.state()),
         ExpiryPolicy::At { timestamp } if now >= *timestamp => transition(
@@ -134,6 +142,10 @@ const fn transition(
 
 #[cfg(test)]
 mod tests {
+    use core::result;
+    use time::error::Parse;
+    use time::format_description::well_known::Rfc3339;
+
     use std::collections::BTreeMap;
 
     use time::OffsetDateTime;
@@ -143,16 +155,16 @@ mod tests {
     use crate::model::{ActiveRelation, KeepsakeRecord, RelationKey, SubjectRef};
     use crate::policy::FulfillmentPolicy;
 
-    fn ts(value: &str) -> Result<OffsetDateTime, time::error::Parse> {
-        OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+    fn ts(value: &str) -> Result<OffsetDateTime, Parse> {
+        OffsetDateTime::parse(value, &Rfc3339)
     }
 
-    type TestResult<T> = core::result::Result<T, TestError>;
+    type TestResult<T> = result::Result<T, TestError>;
 
     #[derive(Debug, thiserror::Error)]
     enum TestError {
         #[error(transparent)]
-        Time(#[from] time::error::Parse),
+        Time(#[from] Parse),
 
         #[error(transparent)]
         Keepsake(#[from] crate::KeepsakeError),

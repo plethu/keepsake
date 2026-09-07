@@ -4,10 +4,11 @@
 //! a valid target for the runner. `check_schema`, in contrast, is a runtime
 //! gate and verifies the complete domain catalog before it verifies Dovecote.
 
-#![cfg_attr(
-    not(any(feature = "postgres", feature = "mysql", feature = "sqlite")),
-    allow(dead_code)
-)]
+#[cfg(all(
+    feature = "migrations",
+    any(feature = "postgres", feature = "mysql", feature = "sqlite")
+))]
+use std::fmt::Display;
 
 #[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 use super::{RepositoryError, RepositoryResult};
@@ -102,10 +103,10 @@ fn mismatch(detail: impl Into<String>) -> RepositoryError {
 ))]
 pub(super) fn validate_persisted_identifier_bytes(
     identifier: PersistedIdentifier,
-    row: impl std::fmt::Display,
+    row: impl Display,
     bytes: &[u8],
 ) -> RepositoryResult<()> {
-    let value = std::str::from_utf8(bytes).map_err(|error| {
+    let value = str::from_utf8(bytes).map_err(|error| {
         mismatch(format!(
             "v4 identifier migration preflight rejected {}.{} row {}: invalid UTF-8 ({error})",
             identifier.table, identifier.column, row
@@ -125,7 +126,7 @@ pub(super) fn validate_persisted_identifier_bytes(
 ))]
 pub(super) fn persisted_identifier_type_mismatch(
     identifier: PersistedIdentifier,
-    row: impl std::fmt::Display,
+    row: impl Display,
     actual_type: &str,
 ) -> RepositoryError {
     mismatch(format!(
@@ -134,398 +135,21 @@ pub(super) fn persisted_identifier_type_mismatch(
     ))
 }
 
-fn normalize_sql(sql: &str) -> String {
-    let mut normalized = String::with_capacity(sql.len());
-    for line in sql.lines() {
-        let line = line.split_once("--").map_or(line, |(line, _)| line);
-        if !line.trim().is_empty() {
-            if !normalized.is_empty() {
-                normalized.push(' ');
-            }
-            normalized.push_str(line.trim());
-        }
-    }
-    normalized
-        .trim_end_matches(';')
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_ascii_lowercase()
-}
-
-#[cfg(any(feature = "postgres", feature = "mysql"))]
-fn default_sql(sql: &str) -> String {
-    normalize_sql(sql)
-        .replace("_utf8mb4", "")
-        .replace("_utf8mb3", "")
-        .replace("\\'", "'")
-        .trim_matches('(')
-        .trim_matches(')')
-        .trim_matches('\'')
-        .to_owned()
-}
-
-fn compact_sql(sql: &str) -> String {
-    normalize_sql(sql)
-        .replace([' ', '\n', '`'], "")
-        .replace("_utf8mb4", "")
-        .replace("_utf8mb3", "")
-        .replace("_latin1", "")
-        .replace("\\'", "'")
-}
-
-#[cfg(feature = "mysql")]
-#[allow(clippy::excessive_nesting)]
-fn normalize_mysql_generated_expression(expression: &str) -> String {
-    let mut normalized = compact_sql(expression).replace("\\'", "'");
-    // MySQL's generated-column deparser wraps the whole CASE and its WHEN
-    // predicate, and makes the implicit ELSE NULL explicit. Those are
-    // equivalent representations of the migration's expression, while the
-    // function calls and predicates inside them remain byte-for-byte strict.
-    while normalized.starts_with('(') && normalized.ends_with(')') {
-        let mut depth = 0usize;
-        let mut wraps_entire_expression = true;
-        for (offset, character) in normalized.char_indices() {
-            match character {
-                '(' => depth += 1,
-                ')' => {
-                    depth = depth.saturating_sub(1);
-                    if depth == 0 && offset != normalized.len() - 1 {
-                        wraps_entire_expression = false;
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        if !wraps_entire_expression {
-            break;
-        }
-        normalized = normalized[1..normalized.len() - 1].to_owned();
-    }
-
-    if let Some(predicate) = normalized.strip_prefix("casewhen(") {
-        normalized = format!("casewhen{}", predicate.replacen(")then", "then", 1));
-    }
-
-    while normalized.starts_with("casewhen(") {
-        normalized = normalized.replacen("casewhen(", "casewhen", 1);
-    }
-    // The catalog may also parenthesize one atomic predicate inside the CASE
-    // condition. These deparser boundaries surround atomic predicates; no
-    // parentheses containing an AND/OR expression are removed.
-    normalized
-        .replace(")and(", "and")
-        .replace(")then", "then")
-        .replace("elsenullend", "end")
-}
-
 #[cfg(all(test, feature = "mysql"))]
-mod mysql_normalization_tests {
-    use super::{
-        artifact_check_expression, normalize_check_expression, normalize_mysql_generated_expression,
-    };
-
-    #[test]
-    fn check_normalization_preserves_outer_close_after_in_list() {
-        let source = "check(coalesce(x in ('a', 'b'), false))";
-        assert_eq!(
-            normalize_check_expression(source),
-            "coalesce(x=any(array['a','b']),false)"
-        );
-    }
-
-    #[test]
-    fn all_mysql_check_artifacts_are_extractable() {
-        assert!(
-            artifact_check_expression(
-                super::MYSQL_CLEAN_ARTIFACT,
-                "constraint keepsakes_state_check check"
-            )
-            .is_some()
-        );
-        for marker in [
-            "constraint keepsakes_state_check check",
-            "constraint keepsakes_expiry_policy_projection check",
-            "constraint keepsakes_lifecycle_timestamps check",
-        ] {
-            assert!(artifact_check_expression(super::MYSQL_V3_CLEAN_ARTIFACT, marker).is_some());
-        }
-        assert!(
-            artifact_check_expression(
-                super::MYSQL_UPGRADE_ARTIFACT,
-                "state varchar(16) not null check"
-            )
-            .is_some()
-        );
-        for marker in [
-            "constraint keepsakes_expiry_policy_projection check",
-            "constraint keepsakes_lifecycle_timestamps check",
-        ] {
-            assert!(artifact_check_expression(super::MYSQL_CLEAN_ARTIFACT, marker).is_some());
-            assert!(artifact_check_expression(super::MYSQL_UPGRADE_ARTIFACT, marker).is_some());
-        }
-    }
-
-    #[test]
-    fn v3_mysql_identifier_shape_is_mariadb_compatible() {
-        let clean = super::normalize_sql(super::MYSQL_V3_CLEAN_ARTIFACT);
-        assert!(!clean.contains(" id char(36)"));
-        assert!(!clean.contains(" relation_id char(36)"));
-        assert!(!clean.contains(" keepsake_id char(36)"));
-        assert_eq!(clean.matches("varchar(36)").count(), 6);
-
-        let activation = super::normalize_sql(super::MYSQL_V3_UPGRADE_ACTIVATE_ARTIFACT);
-        for fragment in [
-            "modify id varchar(36) not null",
-            "modify id varchar(36) not null, modify relation_id varchar(36) not null",
-            "modify active_relation_key varchar(36) generated always",
-            "modify keepsake_id varchar(36) not null",
-        ] {
-            assert!(
-                activation.contains(fragment),
-                "missing activation fragment: {fragment}"
-            );
-        }
-    }
-
-    #[test]
-    fn v4_mysql_identifier_contract_is_explicit_and_binary() {
-        let contract = super::normalize_sql(super::MYSQL_V4_IDENTIFIER_ARTIFACT);
-        assert_eq!(contract.matches("collate utf8mb4_bin").count(), 10);
-        for marker in [
-            "keepsake_relation_definitions_identifier_contract",
-            "keepsakes_identifier_contract",
-            "keepsake_fulfillment_counter_identifier_contract",
-            "keepsake_fulfillment_checklist_identifier_contract",
-        ] {
-            assert!(contract.contains(marker));
-        }
-    }
-
-    #[test]
-    fn generated_case_deparser_forms_compare_equal() {
-        assert_eq!(
-            normalize_mysql_generated_expression(
-                "(case when (`state` = _utf8mb4'applied') then `relation_id` else NULL end)"
-            ),
-            normalize_mysql_generated_expression(
-                "case when state = 'applied' then relation_id end"
-            )
-        );
-        assert_eq!(
-            normalize_mysql_generated_expression(
-                r"(case when (`state` = _utf8mb4\'applied\') then `relation_id` else NULL end)"
-            ),
-            normalize_mysql_generated_expression(
-                "case when state = 'applied' then relation_id end"
-            )
-        );
-    }
-
-    #[test]
-    fn fulfillment_generated_case_keeps_predicate_semantics() {
-        assert_eq!(
-            normalize_mysql_generated_expression(
-                "(case when (`state` = _utf8mb4'applied' and json_unquote(json_extract(`expiry_policy`, '$.type')) = _utf8mb4'when_fulfilled') then 1 else NULL end)"
-            ),
-            normalize_mysql_generated_expression(
-                "case when state = 'applied' and json_unquote(json_extract(expiry_policy, '$.type')) = 'when_fulfilled' then 1 end"
-            )
-        );
-        assert_eq!(
-            normalize_mysql_generated_expression(
-                "case when (state = 'applied') and (json_unquote(json_extract(expiry_policy, '$.type')) = 'when_fulfilled') then 1 else NULL end"
-            ),
-            normalize_mysql_generated_expression(
-                "case when state = 'applied' and json_unquote(json_extract(expiry_policy, '$.type')) = 'when_fulfilled' then 1 end"
-            )
-        );
-    }
-
-    #[test]
-    fn generated_null_default_is_absent_but_quoted_null_is_not() {
-        assert!(super::mysql_default_matches(Some("NULL"), None));
-        assert!(!super::mysql_default_matches(Some("'NULL'"), None));
-        assert!(!super::mysql_is_generated_extra("DEFAULT_GENERATED"));
-        assert!(super::mysql_is_generated_extra("STORED GENERATED"));
-    }
-
-    #[test]
-    fn v3_referential_actions_reject_update_cascade() {
-        assert!(super::mysql_v3_referential_action_matches(
-            "NO ACTION",
-            "NO ACTION"
-        ));
-        assert!(super::mysql_v3_referential_action_matches(
-            "NO ACTION",
-            "RESTRICT"
-        ));
-        assert!(!super::mysql_v3_referential_action_matches(
-            "NO ACTION",
-            "CASCADE"
-        ));
-        assert!(!super::mysql_v3_referential_action_matches(
-            "CASCADE",
-            "NO ACTION"
-        ));
-    }
-}
+mod mysql_normalization_tests;
 
 #[cfg(all(test, feature = "postgres", feature = "migrations"))]
-mod postgres_artifact_tests {
-    use super::artifact_check_expression;
-
-    #[test]
-    fn all_postgres_check_artifacts_are_extractable() {
-        assert!(
-            artifact_check_expression(
-                super::PG_CLEAN_ARTIFACT,
-                "constraint keepsakes_state_check check"
-            )
-            .is_some()
-        );
-        assert!(
-            artifact_check_expression(super::PG_UPGRADE_ARTIFACT, "state text not null check")
-                .is_some()
-        );
-        for marker in [
-            "constraint keepsakes_expiry_policy_projection check",
-            "constraint keepsakes_lifecycle_timestamps check",
-        ] {
-            assert!(artifact_check_expression(super::PG_CLEAN_ARTIFACT, marker).is_some());
-            assert!(artifact_check_expression(super::PG_UPGRADE_ARTIFACT, marker).is_some());
-        }
-    }
-
-    #[test]
-    fn v3_postgres_tenant_contract_requires_nonempty_c_collated_columns() {
-        let clean = super::normalize_sql(super::PG_V3_CLEAN_ARTIFACT);
-        assert_eq!(
-            clean
-                .matches("tenant_id text collate \"c\" not null")
-                .count(),
-            4
-        );
-        let activation = super::normalize_sql(super::PG_V3_UPGRADE_ACTIVATE_ARTIFACT);
-        assert_eq!(
-            activation
-                .matches("alter column tenant_id type text collate \"c\"")
-                .count(),
-            4
-        );
-        let prepare = super::normalize_sql(super::PG_V3_UPGRADE_PREPARE_ARTIFACT);
-        assert_eq!(
-            prepare
-                .matches("add column tenant_id text collate \"c\"")
-                .count(),
-            4
-        );
-        for marker in [
-            "keepsake_relation_definitions_tenant_nonempty",
-            "keepsakes_tenant_nonempty",
-            "keepsake_fulfillment_counter_tenant_nonempty",
-            "keepsake_fulfillment_checklist_tenant_nonempty",
-        ] {
-            let marker = format!("constraint {marker} check");
-            assert!(artifact_check_expression(super::PG_V3_CLEAN_ARTIFACT, &marker).is_some());
-            assert!(
-                artifact_check_expression(super::PG_V3_UPGRADE_ACTIVATE_ARTIFACT, &marker)
-                    .is_some()
-            );
-        }
-    }
-
-    #[test]
-    fn v4_postgres_identifier_contract_is_byte_bounded() {
-        let contract = super::normalize_sql(super::PG_V4_IDENTIFIER_ARTIFACT);
-        assert_eq!(contract.matches("collate \"c\"").count(), 10);
-        assert_eq!(contract.matches("<= 191").count(), 10);
-        for marker in [
-            "keepsake_relation_definitions_identifier_contract",
-            "keepsakes_identifier_contract",
-            "keepsake_fulfillment_counter_identifier_contract",
-            "keepsake_fulfillment_checklist_identifier_contract",
-        ] {
-            assert!(contract.contains(marker));
-        }
-    }
-}
+mod postgres_artifact_tests;
 
 #[cfg(all(test, feature = "sqlite", feature = "migrations"))]
-mod sqlite_artifact_tests {
-    #[test]
-    fn v4_sqlite_identifier_contract_covers_every_domain_table() {
-        let contract = super::normalize_sql(super::SQLITE_V4_IDENTIFIER_ARTIFACT);
-        let compact = super::compact_sql(super::SQLITE_V4_IDENTIFIER_ARTIFACT);
-        for table in [
-            "keepsake_relation_definitions",
-            "keepsakes",
-            "keepsake_fulfillment_counters",
-            "keepsake_fulfillment_checklist",
-        ] {
-            assert!(contract.contains(&format!(
-                "create trigger {table}_identifier_contract_insert"
-            )));
-            assert!(contract.contains(&format!(
-                "create trigger {table}_identifier_contract_update"
-            )));
-        }
-        assert_eq!(
-            contract
-                .matches("raise(abort, 'keepsake_identifier_contract')")
-                .count(),
-            8
-        );
-        assert!(compact.contains("length(cast(new.tenant_idasblob))<=191"));
-        assert!(contract.contains("update keepsake_schema_metadata set value = '4'"));
-    }
-}
+mod sqlite_artifact_tests;
 
 #[cfg(all(
     test,
     feature = "migrations",
     any(feature = "postgres", feature = "mysql", feature = "sqlite")
 ))]
-mod persisted_identifier_tests {
-    use super::{PERSISTED_IDENTIFIERS, validate_persisted_identifier_bytes};
-
-    #[test]
-    fn byte_reader_matches_core_identifier_contract() {
-        let identifier = PERSISTED_IDENTIFIERS[0];
-        let valid = format!("{}a", "é".repeat(95));
-        assert_eq!(valid.len(), 191);
-        assert!(validate_persisted_identifier_bytes(identifier, "row-1", valid.as_bytes()).is_ok());
-
-        for (value, expected) in [
-            ("", "must not be empty"),
-            ("\u{2003}tenant", "leading or trailing whitespace"),
-            ("tenant\u{2003}", "leading or trailing whitespace"),
-            ("tenant\u{007f}", "control character"),
-            ("tenant\u{fdd0}", "noncharacter"),
-        ] {
-            let result = validate_persisted_identifier_bytes(identifier, "row-2", value.as_bytes());
-            assert!(result.is_err(), "{value:?} should be rejected");
-            if let Err(error) = result {
-                assert!(error.to_string().contains(expected), "{error}");
-            }
-        }
-
-        let too_long = "é".repeat(96);
-        let result = validate_persisted_identifier_bytes(identifier, "row-3", too_long.as_bytes());
-        assert!(result.is_err(), "byte length should be bounded");
-        if let Err(error) = result {
-            assert!(error.to_string().contains("192 UTF-8 bytes"), "{error}");
-        }
-
-        let result = validate_persisted_identifier_bytes(identifier, "row-4", &[0xff]);
-        assert!(result.is_err(), "invalid UTF-8 should be rejected");
-        if let Err(error) = result {
-            assert!(error.to_string().contains("invalid UTF-8"), "{error}");
-        }
-    }
-}
+mod persisted_identifier_tests;
 
 #[cfg(all(feature = "postgres", feature = "migrations"))]
 const PG_CLEAN_ARTIFACT: &str =
@@ -587,178 +211,6 @@ const MYSQL_UPGRADE_ARTIFACT: &str = concat!(
     include_str!("../../migrations/mysql/0005_audit_outbox.sql"),
     include_str!("../../migrations/mysql/0006_dovecote_bridge.sql"),
 );
-
-#[cfg(any(feature = "mysql", feature = "postgres"))]
-fn artifact_check_expression(artifact: &str, marker: &str) -> Option<String> {
-    let artifact = normalize_sql(artifact);
-    let lower = artifact.to_ascii_lowercase();
-    let marker_start = lower.find(&normalize_sql(marker))?;
-    let check_start = lower[marker_start..].find("check")? + marker_start;
-    let open = lower[check_start..].find('(')? + check_start;
-    let mut depth = 0usize;
-    let mut quoted = false;
-    for (offset, character) in artifact[open..].char_indices() {
-        if character == '\'' {
-            quoted = !quoted;
-            continue;
-        }
-
-        if quoted {
-            continue;
-        }
-
-        match character {
-            '(' => depth += 1,
-            ')' => {
-                depth = depth.checked_sub(1)?;
-                if depth == 0 {
-                    return Some(artifact[open..=open + offset].to_owned());
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-#[cfg(any(feature = "postgres", feature = "mysql"))]
-fn identifier_check_matches(actual: &str, expected: &str) -> bool {
-    // These artifacts contain only AND-connected length/trim predicates, no
-    // literals or arithmetic. Catalogs add grouping parentheses to individual
-    // predicates. Removing those groups is safe only for this narrow contract;
-    // keep every operand, operator, and conjunction in the comparison.
-    if actual.contains(['\'', '"']) || actual.contains("--") || actual.contains("/*") {
-        return false;
-    }
-
-    let normalize =
-        |expression: &str| normalize_check_expression(expression).replace(['(', ')'], "");
-    normalize(actual) == normalize(expected)
-}
-
-#[cfg(any(feature = "postgres", feature = "mysql"))]
-fn identifier_check_from_artifact(artifact: &str, table: &str, name: &str) -> Option<String> {
-    // Include the table in the marker so a valid constraint on the wrong table
-    // cannot satisfy another table's identifier contract.
-    artifact_check_expression(
-        artifact,
-        &format!("alter table {table} add constraint {name} check"),
-    )
-}
-
-#[cfg(any(feature = "postgres", feature = "mysql"))]
-#[allow(clippy::excessive_nesting)]
-fn normalize_check_expression(expression: &str) -> String {
-    let mut normalized = compact_sql(expression);
-    if normalized.starts_with("check(") {
-        normalized = normalized["check".len()..].to_owned();
-    }
-
-    while normalized.starts_with('(') && normalized.ends_with(')') {
-        let mut depth = 0usize;
-        let mut wraps_entire_expression = true;
-        for (offset, character) in normalized.char_indices() {
-            match character {
-                '(' => depth += 1,
-                ')' => {
-                    depth = depth.saturating_sub(1);
-                    if depth == 0 && offset != normalized.len() - 1 {
-                        wraps_entire_expression = false;
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        if !wraps_entire_expression {
-            break;
-        }
-        normalized = normalized[1..normalized.len() - 1].to_owned();
-    }
-    // PostgreSQL's deparser spells an IN list as = ANY (ARRAY[...]) and
-    // annotates string literals with their inferred text type. The migration
-    // source is canonicalized to the same representation below.
-    for cast in ["::text", "::timestamptz", "::timestampwithtimezone"] {
-        normalized = normalized.replace(cast, "");
-    }
-    normalize_in_list(&normalized)
-}
-
-#[cfg(any(feature = "postgres", feature = "mysql"))]
-#[allow(clippy::excessive_nesting)]
-fn normalize_in_list(expression: &str) -> String {
-    let mut normalized = expression.to_owned();
-    while let Some(in_offset) = normalized.find("in(") {
-        let mut left_start = in_offset;
-        if left_start > 0 && normalized.as_bytes()[left_start - 1] as char == ')' {
-            let mut depth = 0usize;
-            while left_start > 0 {
-                left_start -= 1;
-                match normalized.as_bytes()[left_start] as char {
-                    ')' => depth += 1,
-                    '(' if depth == 1 => break,
-                    '(' => depth -= 1,
-                    _ => {}
-                }
-            }
-        } else {
-            while left_start > 0 {
-                let character = normalized.as_bytes()[left_start - 1] as char;
-                if character.is_ascii_alphanumeric() || matches!(character, '_' | '\'' | '-' | '>')
-                {
-                    left_start -= 1;
-                } else {
-                    break;
-                }
-            }
-        }
-
-        if left_start == in_offset {
-            break;
-        }
-
-        let mut depth = 0usize;
-        let close = normalized[in_offset + 3..]
-            .char_indices()
-            .find_map(|(offset, character)| match character {
-                '(' => {
-                    depth += 1;
-                    None
-                }
-                ')' if depth == 0 => Some(in_offset + 3 + offset),
-                ')' => {
-                    depth -= 1;
-                    None
-                }
-                _ => None,
-            });
-        let Some(close) = close else { break };
-
-        let left = &normalized[left_start..in_offset];
-        let values = &normalized[in_offset + 3..close];
-        let replacement = format!("{left}=any(array[{values}])");
-        normalized.replace_range(left_start..=close, &replacement);
-    }
-
-    normalized
-}
-
-#[cfg(all(feature = "sqlite", feature = "migrations"))]
-fn artifact_object_sql<'a>(artifact: &'a str, kind: &str, name: &str) -> Option<&'a str> {
-    let lower = artifact.to_ascii_lowercase();
-    let marker = format!("create {kind} {name}");
-    let start = lower.find(&marker)?;
-    let remainder = &lower[start..];
-    let end = if kind == "trigger" {
-        remainder
-            .find("\nend;")
-            .map(|offset| offset + "\nend;".len())?
-    } else {
-        remainder.find(';').map(|offset| offset + 1)?
-    };
-    Some(&artifact[start..start + end])
-}
 
 #[cfg(all(feature = "sqlite", feature = "migrations"))]
 const SQLITE_CLEAN_ARTIFACT: &str =
@@ -870,3 +322,35 @@ pub(super) use sqlite::sqlite_runtime_schema_check;
 pub(super) use sqlite::{
     sqlite_clean_schema_preflight, sqlite_upgrade_schema_check, sqlite_upgrade_schema_preflight,
 };
+
+#[cfg(all(test, any(feature = "postgres", feature = "mysql")))]
+mod predicate_parsing_tests;
+
+mod sql;
+#[cfg(any(
+    feature = "mysql",
+    all(feature = "postgres", any(feature = "migrations", test))
+))]
+use sql::artifact_check_expression;
+#[cfg(all(feature = "sqlite", feature = "migrations"))]
+use sql::artifact_object_sql;
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
+use sql::compact_sql;
+#[cfg(any(feature = "postgres", feature = "mysql"))]
+use sql::default_sql;
+#[cfg(any(feature = "postgres", feature = "mysql"))]
+use sql::identifier_check_from_artifact;
+#[cfg(any(feature = "postgres", feature = "mysql"))]
+use sql::identifier_check_matches;
+#[cfg(any(feature = "postgres", feature = "mysql"))]
+use sql::normalize_check_expression;
+#[cfg(feature = "mysql")]
+use sql::normalize_mysql_generated_expression;
+#[cfg(any(
+    feature = "postgres",
+    all(feature = "sqlite", feature = "migrations"),
+    all(test, feature = "mysql")
+))]
+use sql::normalize_sql;
+#[cfg(all(test, any(feature = "postgres", feature = "mysql")))]
+use sql::strip_sql_outer_groups;

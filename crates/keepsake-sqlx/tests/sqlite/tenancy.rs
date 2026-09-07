@@ -16,9 +16,14 @@ async fn sqlite_tenants_isolate_same_ids_and_reject_wrong_scope() -> TestResult<
     let root =
         SqliteKeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/sqlite")?;
     root.migrate().await?;
-    sqlx::raw_sql(dovecote_sqlx_sqlite::MIGRATIONS[0].sql())
-        .execute(&pool)
-        .await?;
+    sqlx::raw_sql(
+        dovecote_sqlx_sqlite::MIGRATIONS
+            .first()
+            .ok_or(sqlx::Error::RowNotFound)?
+            .sql(),
+    )
+    .execute(&pool)
+    .await?;
 
     let tenant_a = TenantId::new("sqlite-tenant-a")?;
     let tenant_b = TenantId::new("sqlite-tenant-b")?;
@@ -88,7 +93,7 @@ async fn sqlite_relation_upsert_rejects_same_id_with_a_different_key_without_mut
 -> TestResult<()> {
     let (repo, _pool) = SqliteHarness::repo().await?;
     let first = RelationDefinition::enabled(
-        SqliteHarness::tenant(),
+        SqliteHarness::tenant()?,
         Uuid::now_v7(),
         RelationKey::new("tag", "original")?,
         ExpiryPolicy::ManualOnly,
@@ -97,7 +102,7 @@ async fn sqlite_relation_upsert_rejects_same_id_with_a_different_key_without_mut
         .upsert_relation(&first, ts("2026-01-01T00:00:00Z")?)
         .await?;
     let incoming = RelationDefinition::enabled(
-        SqliteHarness::tenant(),
+        SqliteHarness::tenant()?,
         stored.id,
         RelationKey::new("tag", "different")?,
         ExpiryPolicy::ManualOnly,

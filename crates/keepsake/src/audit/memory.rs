@@ -22,6 +22,10 @@ pub struct InMemoryAuditSink {
 
 impl InMemoryAuditSink {
     /// Returns a snapshot of recorded events.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InMemoryAuditError::Poisoned` if an earlier writer poisoned the audit lock.
     pub fn events(&self) -> Result<Vec<AuditEvent>, InMemoryAuditError> {
         self.events
             .lock()

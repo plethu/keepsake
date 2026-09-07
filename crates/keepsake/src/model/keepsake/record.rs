@@ -1,3 +1,5 @@
+use core::result;
+use serde::de;
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -9,7 +11,7 @@ use crate::policy::ExpiryPolicy;
 use super::{ExpiryCause, Keepsake, KeepsakeLifecycle, LifecycleState};
 use crate::model::{KeepsakeId, RelationId, SubjectRef, TenantId};
 
-type SerdeResult<T, E> = core::result::Result<T, E>;
+type SerdeResult<T, E> = result::Result<T, E>;
 
 /// Flat storage and serde boundary record for keepsakes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -156,7 +158,7 @@ impl<'de> Deserialize<'de> for Keepsake {
     {
         KeepsakeRecord::deserialize(deserializer)?
             .try_into()
-            .map_err(serde::de::Error::custom)
+            .map_err(de::Error::custom)
     }
 }
 

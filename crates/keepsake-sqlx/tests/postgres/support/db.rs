@@ -48,9 +48,14 @@ pub async fn reset_database(pool: &PgPool) -> TestResult<()> {
             .fetch_one(pool)
             .await?;
     if !has_dovecote {
-        sqlx::raw_sql(dovecote_sqlx_postgres::MIGRATIONS[0].sql())
-            .execute(pool)
-            .await?;
+        sqlx::raw_sql(
+            dovecote_sqlx_postgres::MIGRATIONS
+                .first()
+                .ok_or(sqlx::Error::RowNotFound)?
+                .sql(),
+        )
+        .execute(pool)
+        .await?;
     }
     sqlx::query(
         r"
@@ -107,7 +112,7 @@ pub async fn insert_raw_keepsake_value(
         values ($1, $2, 'user', $3, $4, $5, $6, $7, $8, $9, $10, '{}'::jsonb, $7, $7)
         ",
     )
-    .bind(test_tenant().as_str())
+    .bind(test_tenant()?.as_str())
     .bind(Uuid::now_v7())
     .bind(format!("invalid_{}", Uuid::now_v7()))
     .bind(relation_id)
@@ -142,7 +147,7 @@ pub async fn lock_relation_for_share(
         for share
         ",
     )
-    .bind(test_tenant().as_str())
+    .bind(test_tenant()?.as_str())
     .bind(relation_id)
     .execute(&mut **tx)
     .await?;
@@ -169,7 +174,7 @@ pub async fn lock_due_keepsake_and_relation_for_expiry(
         for share of r
         ",
     )
-    .bind(test_tenant().as_str())
+    .bind(test_tenant()?.as_str())
     .bind(relation_id)
     .execute(&mut **tx)
     .await?;

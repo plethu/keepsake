@@ -1,6 +1,6 @@
 [package]
 name = "keepsake-sqlx"
-version = "5.0.0"
+version = "6.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -16,7 +16,13 @@ documentation = "https://docs.rs/keepsake-sqlx"
 [features]
 default = ["postgres", "cache", "fulfillment-counters", "migrations"]
 cache = ["dep:moka"]
-postgres = ["sqlx/postgres", "sqlx/uuid", "sqlx/time", "sqlx/json", "dep:dovecote-sqlx-postgres"]
+postgres = [
+  "sqlx/postgres",
+  "sqlx/uuid",
+  "sqlx/time",
+  "sqlx/json",
+  "dep:dovecote-sqlx-postgres",
+]
 sqlite = ["sqlx/sqlite", "sqlx/time", "sqlx/json", "dep:dovecote-sqlx-sqlite"]
 mysql = ["sqlx/mysql", "sqlx/time", "sqlx/json", "dep:dovecote-sqlx-mysql"]
 dovecote-postgres = ["postgres"]

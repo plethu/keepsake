@@ -1,6 +1,13 @@
+use core::result;
 pub use std::collections::BTreeMap;
+use std::env;
+use std::num::TryFromIntError;
 #[cfg(feature = "cache")]
 pub use std::time::Duration;
+use time::error::Parse;
+use time::format_description::well_known::Rfc3339;
+use tokio::task::JoinError;
+use tokio::task::JoinHandle;
 
 pub use keepsake::{
     ActiveRelationSource, ActorRef, ApplyKeepsake, CommandContext, DynActiveRelationSource,
@@ -44,22 +51,24 @@ impl RelationSpec for ConflictingTrustedAccountTag {
     }
 }
 
-pub fn ts(value: &str) -> Result<OffsetDateTime, time::error::Parse> {
-    OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+pub fn ts(value: &str) -> Result<OffsetDateTime, Parse> {
+    OffsetDateTime::parse(value, &Rfc3339)
 }
 
-pub type TestResult<T> = core::result::Result<T, TestError>;
+pub type TestResult<T> = result::Result<T, TestError>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TestError {
     #[error(transparent)]
-    Time(#[from] time::error::Parse),
+    Integer(#[from] TryFromIntError),
+    #[error(transparent)]
+    Time(#[from] Parse),
 
     #[error(transparent)]
-    Env(#[from] std::env::VarError),
+    Env(#[from] env::VarError),
 
     #[error(transparent)]
-    Join(#[from] tokio::task::JoinError),
+    Join(#[from] JoinError),
 
     #[error(transparent)]
     Keepsake(#[from] keepsake::KeepsakeError),
@@ -75,7 +84,7 @@ pub enum TestError {
 }
 
 pub async fn repo() -> TestResult<KeepsakeRepository> {
-    let database_url = std::env::var("DATABASE_URL")?;
+    let database_url = env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
     reset_schema(&pool).await?;
     let repo = KeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/postgres")?;
@@ -84,8 +93,8 @@ pub async fn repo() -> TestResult<KeepsakeRepository> {
     Ok(repo)
 }
 
-pub fn test_tenant() -> TenantId {
-    TenantId::new("tenant-test").unwrap_or_else(|_| unreachable!("static test tenant is valid"))
+pub fn test_tenant() -> keepsake::Result<TenantId> {
+    TenantId::new("tenant-test")
 }
 
 pub async fn timed_relation<C>(
@@ -185,8 +194,7 @@ pub fn spawn_apply(
     subject: SubjectRef,
     relation_id: Uuid,
     applied_at: OffsetDateTime,
-) -> tokio::task::JoinHandle<Result<keepsake_sqlx::AppliedKeepsake, keepsake_sqlx::RepositoryError>>
-{
+) -> JoinHandle<Result<keepsake_sqlx::AppliedKeepsake, keepsake_sqlx::RepositoryError>> {
     tokio::spawn(async move {
         let command = ApplyKeepsake::new(
             tenant_id.clone(),
@@ -203,7 +211,7 @@ pub fn spawn_expire_due(
     repo: KeepsakeRepository,
     tenant_id: TenantId,
     due_at: OffsetDateTime,
-) -> tokio::task::JoinHandle<Result<u64, keepsake_sqlx::RepositoryError>> {
+) -> JoinHandle<Result<u64, keepsake_sqlx::RepositoryError>> {
     tokio::spawn(async move { repo.for_tenant(tenant_id).expire_due_timed(due_at, 2).await })
 }
 

@@ -1,5 +1,5 @@
 #[path = "../support/backend_cases.rs"]
-pub mod backend_cases;
+pub(super) mod backend_cases;
 
 use keepsake_sqlx::{
     RepositoryError, SqliteBackend, SqliteKeepsakeRepository, TenantSqlxKeepsakeRepository,
@@ -7,9 +7,9 @@ use keepsake_sqlx::{
 use sqlx::sqlite::SqlitePoolOptions;
 use uuid::Uuid;
 
-pub use backend_cases::{BackendHarness, TestResult, ts, upsert_relation};
+pub(super) use backend_cases::{BackendHarness, TestResult, ts, upsert_relation};
 
-pub struct SqliteHarness;
+pub(super) struct SqliteHarness;
 
 #[async_trait::async_trait]
 impl BackendHarness for SqliteHarness {
@@ -29,10 +29,15 @@ impl BackendHarness for SqliteHarness {
             "https://tests.invalid/keepsake/sqlite",
         )?));
         root.migrate().await?;
-        sqlx::raw_sql(dovecote_sqlx_sqlite::MIGRATIONS[0].sql())
-            .execute(&pool)
-            .await?;
-        Ok((root.for_tenant(Self::tenant()), pool))
+        sqlx::raw_sql(
+            dovecote_sqlx_sqlite::MIGRATIONS
+                .first()
+                .ok_or(sqlx::Error::RowNotFound)?
+                .sql(),
+        )
+        .execute(&pool)
+        .await?;
+        Ok((root.for_tenant(Self::tenant()?), pool))
     }
 
     async fn backend_marker(pool: &Self::Pool) -> Result<String, sqlx::Error> {

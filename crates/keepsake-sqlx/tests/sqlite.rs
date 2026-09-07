@@ -1,4 +1,5 @@
-#![allow(missing_docs)]
+//! sqlite persistence contract tests.
+
 #![cfg(feature = "sqlite-tests")]
 
 mod sqlite {
@@ -10,4 +11,5 @@ mod sqlite {
     mod queries;
     mod support;
     mod tenancy;
+    mod transactions;
 }

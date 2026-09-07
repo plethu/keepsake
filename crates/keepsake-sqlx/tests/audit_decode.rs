@@ -1,6 +1,9 @@
 //! Contract tests for typed Keepsake audit history decoding.
 
 use std::error::Error;
+use std::io;
+use time::error::ComponentRange;
+use time::format_description::well_known::Rfc3339;
 
 use keepsake::{
     AUDIT_PAYLOAD_SCHEMA_VERSION, ActorRef, AuditContext, AuditDecision, AuditEvent, AuditEventId,
@@ -13,14 +16,12 @@ type TestResult<T> = Result<T, Box<dyn Error>>;
 
 fn audit_event() -> TestResult<AuditEvent> {
     Ok(AuditEvent {
+        command: None,
         schema_version: AuditPayloadSchemaVersion::CURRENT,
         tenant_id: TenantId::new("tenant-test")?,
         id: AuditEventId::from_uuid(uuid::Uuid::nil()),
         event_type: AuditEventType::Apply,
-        at: OffsetDateTime::parse(
-            "2023-11-14T22:13:20.123456Z",
-            &time::format_description::well_known::Rfc3339,
-        )?,
+        at: OffsetDateTime::parse("2023-11-14T22:13:20.123456Z", &Rfc3339)?,
         actor: ActorRef::new("system", "test")?,
         keepsake_id: KeepsakeId::nil(),
         subject: SubjectRef::new("account", "acct-1")?,
@@ -32,7 +33,7 @@ fn audit_event() -> TestResult<AuditEvent> {
     })
 }
 
-fn event_time(event: &AuditEvent) -> Result<time::OffsetDateTime, time::error::ComponentRange> {
+fn event_time(event: &AuditEvent) -> Result<time::OffsetDateTime, ComponentRange> {
     time::OffsetDateTime::from_unix_timestamp(event.at.unix_timestamp())?
         .replace_nanosecond(event.at.nanosecond())
 }
@@ -140,7 +141,7 @@ fn decoder_requires_an_explicit_supported_payload_schema() -> TestResult<()> {
     let mut omitted_v3 = current.clone();
     omitted_v3
         .as_object_mut()
-        .ok_or_else(|| std::io::Error::other("audit event did not serialize as an object"))?
+        .ok_or_else(|| io::Error::other("audit event did not serialize as an object"))?
         .remove("schema_version");
     let stored = stored_event(
         &format!("keepsake-audit-{}", event.id.as_uuid()),

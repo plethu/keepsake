@@ -1,4 +1,8 @@
-#![allow(missing_docs)]
+//! dovecote sqlite persistence contract tests.
+
+use std::error;
+use time::error::Parse;
+use time::format_description::well_known::Rfc3339;
 
 use keepsake::{
     ActorRef, ApplyKeepsake, AuditEventId, CommandContext, ExpiryPolicy, RelationDefinition,
@@ -10,17 +14,22 @@ use sqlx::sqlite::SqlitePoolOptions;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-async fn repository()
--> Result<(SqliteKeepsakeRepository, sqlx::SqlitePool), Box<dyn std::error::Error>> {
+async fn repository() -> Result<(SqliteKeepsakeRepository, sqlx::SqlitePool), Box<dyn error::Error>>
+{
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect("sqlite::memory:")
         .await?;
     let repository = SqliteKeepsakeRepository::new(pool.clone(), "https://example.test/keepsake")?;
     repository.migrate().await?;
-    sqlx::raw_sql(dovecote_sqlx_sqlite::MIGRATIONS[0].sql())
-        .execute(&pool)
-        .await?;
+    sqlx::raw_sql(
+        dovecote_sqlx_sqlite::MIGRATIONS
+            .first()
+            .ok_or(sqlx::Error::RowNotFound)?
+            .sql(),
+    )
+    .execute(&pool)
+    .await?;
     repository.check_schema().await?;
     Ok((repository, pool))
 }
@@ -32,12 +41,12 @@ async fn pool() -> Result<sqlx::SqlitePool, sqlx::Error> {
         .await
 }
 
-fn timestamp(value: &str) -> Result<OffsetDateTime, time::error::Parse> {
-    OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+fn timestamp(value: &str) -> Result<OffsetDateTime, Parse> {
+    OffsetDateTime::parse(value, &Rfc3339)
 }
 
-fn tenant() -> TenantId {
-    TenantId::new("sqlite-test-tenant").unwrap_or_else(|_| unreachable!("test tenant is valid"))
+fn tenant() -> keepsake::Result<TenantId> {
+    TenantId::new("sqlite-test-tenant")
 }
 
 async fn seed_importer_evidence(
@@ -54,12 +63,11 @@ async fn seed_importer_evidence(
 }
 
 #[tokio::test]
-async fn clean_track_writes_one_exact_typed_dovecote_event()
--> Result<(), Box<dyn std::error::Error>> {
+async fn clean_track_writes_one_exact_typed_dovecote_event() -> Result<(), Box<dyn error::Error>> {
     let (root, pool) = repository().await?;
-    let repository = root.for_tenant(tenant());
+    let repository = root.for_tenant(tenant()?);
     let relation = RelationDefinition::new(
-        tenant(),
+        tenant()?,
         Uuid::now_v7(),
         RelationKey::new("tag", "trusted")?,
         true,
@@ -69,7 +77,7 @@ async fn clean_track_writes_one_exact_typed_dovecote_event()
         .upsert_relation(&relation, timestamp("2026-01-01T00:00:00Z")?)
         .await?;
     let command = ApplyKeepsake::new(
-        tenant(),
+        tenant()?,
         SubjectRef::new("account", "café")?,
         relation.id,
         timestamp("2026-01-01T00:01:00.123456789Z")?,
@@ -82,7 +90,7 @@ async fn clean_track_writes_one_exact_typed_dovecote_event()
     changed.context = CommandContext::new(ActorRef::new("operator", "different")?);
     assert!(repository.apply(&changed).await.is_err());
     let distinct_duplicate = ApplyKeepsake::new(
-        tenant(),
+        tenant()?,
         SubjectRef::new("account", "café")?,
         relation.id,
         command.at,
@@ -146,8 +154,7 @@ async fn clean_track_writes_one_exact_typed_dovecote_event()
 }
 
 #[tokio::test]
-async fn identical_audit_identity_is_independent_per_tenant()
--> Result<(), Box<dyn std::error::Error>> {
+async fn identical_audit_identity_is_independent_per_tenant() -> Result<(), Box<dyn error::Error>> {
     let (root, pool) = repository().await?;
     let tenant_a = TenantId::new("sqlite-tenant-a")?;
     let tenant_b = TenantId::new("sqlite-tenant-b")?;
@@ -238,7 +245,7 @@ fn source_configuration_rejects_relative_uris() {
 }
 
 #[tokio::test]
-async fn upgrade_track_activates_clean_schema_marker() -> Result<(), Box<dyn std::error::Error>> {
+async fn upgrade_track_activates_clean_schema_marker() -> Result<(), Box<dyn error::Error>> {
     let pool = pool().await?;
     let repository = SqliteKeepsakeRepository::new(pool.clone(), "https://example.test/keepsake")?;
     repository.upgrade_migrate().await?;
@@ -251,9 +258,14 @@ async fn upgrade_track_activates_clean_schema_marker() -> Result<(), Box<dyn std
         1
     );
     assert!(repository.check_schema().await.is_err());
-    sqlx::raw_sql(dovecote_sqlx_sqlite::MIGRATIONS[0].sql())
-        .execute(&pool)
-        .await?;
+    sqlx::raw_sql(
+        dovecote_sqlx_sqlite::MIGRATIONS
+            .first()
+            .ok_or(sqlx::Error::RowNotFound)?
+            .sql(),
+    )
+    .execute(&pool)
+    .await?;
     assert!(repository.activate_upgrade().await.is_err());
     seed_importer_evidence(&pool, 0, 0).await?;
     repository.activate_upgrade().await?;
@@ -275,13 +287,18 @@ async fn upgrade_track_activates_clean_schema_marker() -> Result<(), Box<dyn std
 
 #[tokio::test]
 async fn activation_rejects_corrupt_upgrade_domain_before_writing_marker()
--> Result<(), Box<dyn std::error::Error>> {
+-> Result<(), Box<dyn error::Error>> {
     let pool = pool().await?;
     let repository = SqliteKeepsakeRepository::new(pool.clone(), "https://example.test/keepsake")?;
     repository.upgrade_migrate().await?;
-    sqlx::raw_sql(dovecote_sqlx_sqlite::MIGRATIONS[0].sql())
-        .execute(&pool)
-        .await?;
+    sqlx::raw_sql(
+        dovecote_sqlx_sqlite::MIGRATIONS
+            .first()
+            .ok_or(sqlx::Error::RowNotFound)?
+            .sql(),
+    )
+    .execute(&pool)
+    .await?;
     seed_importer_evidence(&pool, 0, 0).await?;
 
     // Evidence is valid, but the upgrade-track domain shape is not. Activation
@@ -300,7 +317,7 @@ async fn activation_rejects_corrupt_upgrade_domain_before_writing_marker()
 }
 
 #[tokio::test]
-async fn migration_tracks_refuse_cross_use() -> Result<(), Box<dyn std::error::Error>> {
+async fn migration_tracks_refuse_cross_use() -> Result<(), Box<dyn error::Error>> {
     let pool = pool().await?;
     let repository = SqliteKeepsakeRepository::new(pool, "https://example.test/keepsake")?;
     repository.migrate().await?;
@@ -310,7 +327,7 @@ async fn migration_tracks_refuse_cross_use() -> Result<(), Box<dyn std::error::E
 
 #[tokio::test]
 async fn tenant_upgrade_requires_mapping_and_activates_v3_schema()
--> Result<(), Box<dyn std::error::Error>> {
+-> Result<(), Box<dyn error::Error>> {
     let pool = pool().await?;
     let relation_id = Uuid::from_u128(42);
     let keepsake_id = Uuid::from_u128(43);
@@ -357,9 +374,14 @@ async fn tenant_upgrade_requires_mapping_and_activates_v3_schema()
             .await?,
         1
     );
-    sqlx::raw_sql(dovecote_sqlx_sqlite::MIGRATIONS[0].sql())
-        .execute(&pool)
-        .await?;
+    sqlx::raw_sql(
+        dovecote_sqlx_sqlite::MIGRATIONS
+            .first()
+            .ok_or(sqlx::Error::RowNotFound)?
+            .sql(),
+    )
+    .execute(&pool)
+    .await?;
     assert!(repository.check_schema().await.is_err());
     assert_eq!(
         sqlx::query_scalar::<_, String>(
@@ -374,7 +396,7 @@ async fn tenant_upgrade_requires_mapping_and_activates_v3_schema()
 
 #[tokio::test]
 async fn tenant_upgrade_activation_rolls_back_populated_v2_on_validation_failure()
--> Result<(), Box<dyn std::error::Error>> {
+-> Result<(), Box<dyn error::Error>> {
     let pool = pool().await?;
     let relation_id = Uuid::from_u128(42);
     let keepsake_id = Uuid::from_u128(43);
@@ -467,20 +489,25 @@ async fn tenant_upgrade_activation_rolls_back_populated_v2_on_validation_failure
             .await?,
         1
     );
-    sqlx::raw_sql(dovecote_sqlx_sqlite::MIGRATIONS[0].sql())
-        .execute(&pool)
-        .await?;
+    sqlx::raw_sql(
+        dovecote_sqlx_sqlite::MIGRATIONS
+            .first()
+            .ok_or(sqlx::Error::RowNotFound)?
+            .sql(),
+    )
+    .execute(&pool)
+    .await?;
     assert!(repository.check_schema().await.is_err());
     Ok(())
 }
 
 #[tokio::test]
-async fn enqueue_failure_rolls_back_domain_mutation_and_event()
--> Result<(), Box<dyn std::error::Error>> {
+async fn enqueue_failure_rolls_back_domain_mutation_and_event() -> Result<(), Box<dyn error::Error>>
+{
     let (root, pool) = repository().await?;
-    let repository = root.for_tenant(tenant());
+    let repository = root.for_tenant(tenant()?);
     let relation = RelationDefinition::new(
-        tenant(),
+        tenant()?,
         Uuid::now_v7(),
         RelationKey::new("tag", "rollback")?,
         true,
@@ -494,7 +521,7 @@ async fn enqueue_failure_rolls_back_domain_mutation_and_event()
         .await?;
 
     let command = ApplyKeepsake::new(
-        tenant(),
+        tenant()?,
         SubjectRef::new("account", "rollback")?,
         relation.id,
         timestamp("2026-01-01T00:01:00Z")?,
@@ -517,8 +544,7 @@ async fn enqueue_failure_rolls_back_domain_mutation_and_event()
 }
 
 #[tokio::test]
-async fn check_schema_rejects_a_corrupted_dovecote_shape() -> Result<(), Box<dyn std::error::Error>>
-{
+async fn check_schema_rejects_a_corrupted_dovecote_shape() -> Result<(), Box<dyn error::Error>> {
     let (repository, pool) = repository().await?;
     sqlx::query("drop index dovecote_events_tenant_source_event_id")
         .execute(&pool)
@@ -529,7 +555,7 @@ async fn check_schema_rejects_a_corrupted_dovecote_shape() -> Result<(), Box<dyn
 
 #[tokio::test]
 async fn check_schema_rejects_a_rebuilt_domain_table_with_a_missing_column()
--> Result<(), Box<dyn std::error::Error>> {
+-> Result<(), Box<dyn error::Error>> {
     let (repository, pool) = repository().await?;
     sqlx::query("drop trigger keepsakes_clean_invariants_insert")
         .execute(&pool)
@@ -578,8 +604,8 @@ async fn check_schema_rejects_a_rebuilt_domain_table_with_a_missing_column()
 }
 
 #[tokio::test]
-async fn check_schema_rejects_a_missing_or_wrong_domain_index()
--> Result<(), Box<dyn std::error::Error>> {
+async fn check_schema_rejects_a_missing_or_wrong_domain_index() -> Result<(), Box<dyn error::Error>>
+{
     let (repository1, pool) = repository().await?;
     sqlx::query("drop index keepsakes_due_timed_expiry")
         .execute(&pool)
@@ -603,7 +629,7 @@ async fn check_schema_rejects_a_missing_or_wrong_domain_index()
 
 #[tokio::test]
 async fn check_schema_rejects_a_missing_or_wrong_domain_trigger()
--> Result<(), Box<dyn std::error::Error>> {
+-> Result<(), Box<dyn error::Error>> {
     let (repository2, pool) = repository().await?;
     sqlx::query("drop trigger keepsakes_clean_invariants_insert")
         .execute(&pool)
@@ -629,14 +655,18 @@ async fn check_schema_rejects_a_missing_or_wrong_domain_trigger()
 }
 
 #[tokio::test]
-async fn activation_rejects_nonzero_reconciliation_evidence()
--> Result<(), Box<dyn std::error::Error>> {
+async fn activation_rejects_nonzero_reconciliation_evidence() -> Result<(), Box<dyn error::Error>> {
     let pool = pool().await?;
     let repository = SqliteKeepsakeRepository::new(pool.clone(), "https://example.test/keepsake")?;
     repository.upgrade_migrate().await?;
-    sqlx::raw_sql(dovecote_sqlx_sqlite::MIGRATIONS[0].sql())
-        .execute(&pool)
-        .await?;
+    sqlx::raw_sql(
+        dovecote_sqlx_sqlite::MIGRATIONS
+            .first()
+            .ok_or(sqlx::Error::RowNotFound)?
+            .sql(),
+    )
+    .execute(&pool)
+    .await?;
     seed_importer_evidence(&pool, 0, 0).await?;
     sqlx::query("update keepsake_upgrade_evidence set missing_count = 1")
         .execute(&pool)

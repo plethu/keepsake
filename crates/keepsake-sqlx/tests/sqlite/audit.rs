@@ -13,7 +13,7 @@ async fn sqlite_lifecycle_events_are_typed_dovecote_rows() -> TestResult<()> {
     let apply_at = ts("2026-01-01T00:01:00.123456Z")?;
     let apply_id = AuditEventId::deterministic(b"sqlite-apply");
     let command = ApplyKeepsake::new(
-        SqliteHarness::tenant(),
+        SqliteHarness::tenant()?,
         subject.clone(),
         relation.id,
         apply_at,
@@ -27,7 +27,7 @@ async fn sqlite_lifecycle_events_are_typed_dovecote_rows() -> TestResult<()> {
     let revoke_id = AuditEventId::deterministic(b"sqlite-revoke");
     repo.revoke_by_subject(
         &RevokeBySubject::new(
-            SqliteHarness::tenant(),
+            SqliteHarness::tenant()?,
             subject,
             relation.id,
             ts("2026-01-01T00:02:00Z")?,
@@ -97,7 +97,7 @@ async fn sqlite_exact_replay_is_idempotent_and_changed_content_conflicts() -> Te
     let relation = upsert_relation::<SqliteHarness>(&repo, ExpiryPolicy::ManualOnly).await?;
     let id = AuditEventId::deterministic(b"sqlite-replay");
     let command = ApplyKeepsake::new(
-        SqliteHarness::tenant(),
+        SqliteHarness::tenant()?,
         SubjectRef::new("account", "sqlite_replay")?,
         relation.id,
         ts("2026-01-01T00:01:00Z")?,
@@ -114,7 +114,7 @@ async fn sqlite_exact_replay_is_idempotent_and_changed_content_conflicts() -> Te
     );
 
     let changed = ApplyKeepsake::new(
-        SqliteHarness::tenant(),
+        SqliteHarness::tenant()?,
         command.subject.clone(),
         relation.id,
         command.at,
@@ -138,7 +138,7 @@ async fn sqlite_replay_rejects_payload_tenant_mismatch() -> TestResult<()> {
     let relation = upsert_relation::<SqliteHarness>(&repo, ExpiryPolicy::ManualOnly).await?;
     let id = AuditEventId::deterministic(b"sqlite-tenant-mismatch");
     let command = ApplyKeepsake::new(
-        SqliteHarness::tenant(),
+        SqliteHarness::tenant()?,
         SubjectRef::new("account", "sqlite_tenant_mismatch")?,
         relation.id,
         ts("2026-01-01T00:01:00Z")?,
@@ -151,7 +151,7 @@ async fn sqlite_replay_rejects_payload_tenant_mismatch() -> TestResult<()> {
     let payload = sqlx::query_scalar::<_, Vec<u8>>(
         "select data from dovecote_events where tenant_id = ? and source = ? and event_id = ?",
     )
-    .bind(SqliteHarness::tenant().as_str())
+    .bind(SqliteHarness::tenant()?.as_str())
     .bind("https://tests.invalid/keepsake/sqlite")
     .bind(&event_id)
     .fetch_one(&pool)
@@ -162,7 +162,7 @@ async fn sqlite_replay_rejects_payload_tenant_mismatch() -> TestResult<()> {
         "update dovecote_events set data = ? where tenant_id = ? and source = ? and event_id = ?",
     )
     .bind(serde_json::to_vec(&payload)?)
-    .bind(SqliteHarness::tenant().as_str())
+    .bind(SqliteHarness::tenant()?.as_str())
     .bind("https://tests.invalid/keepsake/sqlite")
     .bind(event_id)
     .execute(&pool)
@@ -178,5 +178,45 @@ async fn sqlite_replay_rejects_payload_tenant_mismatch() -> TestResult<()> {
             }
         )) if storage_tenant == "sqlite-test-tenant" && payload_tenant == "tenant-other"
     ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_published_occurrence_without_command_cannot_invent_a_receipt() -> TestResult<()> {
+    let (repo, pool) = SqliteHarness::repo().await?;
+    let relation = upsert_relation::<SqliteHarness>(&repo, ExpiryPolicy::ManualOnly).await?;
+    let command = ApplyKeepsake::new(
+        SqliteHarness::tenant()?,
+        SubjectRef::new("account", "legacy")?,
+        relation.id,
+        ts("2026-01-01T00:01:00Z")?,
+        CommandContext::new(ActorRef::new("test", "worker")?),
+    );
+    repo.apply(&command).await?;
+    let payload: Vec<u8> = sqlx::query_scalar("select data from dovecote_events")
+        .fetch_one(&pool)
+        .await?;
+    let mut legacy: AuditEvent = serde_json::from_slice(&payload)?;
+    legacy.command = None;
+    let legacy_bytes = serde_json::to_vec(&legacy)?;
+    // Seed the exact schema-4 payload shape emitted by published version 5.
+    sqlx::query("update dovecote_events set data = ?")
+        .bind(&legacy_bytes)
+        .execute(&pool)
+        .await?;
+    let result = repo.apply(&command).await;
+    assert!(matches!(
+        result,
+        Err(keepsake_sqlx::RepositoryError::ReceiptEvidenceUnavailable)
+    ));
+    let retained: Vec<u8> = sqlx::query_scalar("select data from dovecote_events")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(retained, legacy_bytes);
+    let count: i64 = sqlx::query_scalar("select count(*) from dovecote_events")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(count, 1);
+    assert_eq!(repo.active_for_subject(&command.subject).await?.len(), 1);
     Ok(())
 }

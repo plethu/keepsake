@@ -1,5 +1,26 @@
 # Changelog
 
+## 6.0.0 - 2026-09-07
+
+- SQLite counter overflow is rejected without changing its value or observation time.
+- SQLite legacy schema checks identify extra triggers by their exact owning table.
+- Static relation keys reject the same Unicode edge whitespace as runtime keys.
+- PostgreSQL examples keep connection errors out of external diagnostics.
+- Strengthened public error documentation, lint/feature coverage and documentation
+  gates; separated schema verification and test-provider responsibilities.
+
+- Added caller-owned lifecycle, reconciliation and fulfillment transactions,
+  scoped observations, conditional writes and complete command replay receipts.
+- Added per-assignment expiry overrides and explicit authoritative-time effective
+  relation evaluation. Persisted expiry reconciliation remains separate.
+- **Breaking Rust API:** apply commands accept an expiry override; audit events
+  carry optional typed command evidence; apply receipts identify committed replay.
+  SQL transaction revokes return typed receipts and reconciliation returns IDs.
+- Published migration bytes and domain/audit schema version 4 are unchanged.
+  Existing history stays readable; old occurrences lacking command evidence
+  cannot provide strict replay receipts. See the
+  [transactional lifecycle contract](docs/reference/transactional-lifecycle.md).
+
 ## 5.0.0 - 2026-09-07
 
 - **Breaking Rust API:** `AuditEvent.schema_version` now uses the opaque

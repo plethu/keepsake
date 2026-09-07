@@ -1,5 +1,7 @@
 //! Expiry and fulfillment policy types.
 
+use core::result;
+use serde::de;
 use serde::{Deserialize, Deserializer, Serialize};
 use time::OffsetDateTime;
 
@@ -26,7 +28,7 @@ pub enum ExpiryPolicy {
 }
 
 impl<'de> Deserialize<'de> for ExpiryPolicy {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> result::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -48,7 +50,7 @@ impl<'de> Deserialize<'de> for ExpiryPolicy {
             WireExpiryPolicy::At { timestamp } => Self::At { timestamp },
             WireExpiryPolicy::WhenFulfilled { policy } => Self::WhenFulfilled { policy },
         };
-        policy.validate().map_err(serde::de::Error::custom)?;
+        policy.validate().map_err(de::Error::custom)?;
         Ok(policy)
     }
 }
@@ -64,6 +66,11 @@ impl ExpiryPolicy {
     }
 
     /// Validates the policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-threshold error for a nonpositive counter target, or an identifier
+    /// error for an invalid fulfillment counter key or checklist prefix.
     pub fn validate(&self) -> Result<()> {
         match self {
             Self::ManualOnly | Self::At { .. } => Ok(()),
@@ -91,7 +98,7 @@ pub enum FulfillmentPolicy {
 }
 
 impl<'de> Deserialize<'de> for FulfillmentPolicy {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> result::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -110,13 +117,18 @@ impl<'de> Deserialize<'de> for FulfillmentPolicy {
                 Self::ChecklistComplete { list_key }
             }
         };
-        policy.validate().map_err(serde::de::Error::custom)?;
+        policy.validate().map_err(de::Error::custom)?;
         Ok(policy)
     }
 }
 
 impl FulfillmentPolicy {
     /// Validates the policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-threshold error for a nonpositive counter target, or an identifier
+    /// error for an invalid fulfillment counter key or checklist prefix.
     pub fn validate(&self) -> Result<()> {
         match self {
             Self::CounterAtLeast { threshold, .. } if *threshold <= 0 => {
@@ -128,6 +140,24 @@ impl FulfillmentPolicy {
             Self::ChecklistComplete { list_key } => {
                 validate_persisted_identifier("fulfillment.list_key", list_key)
             }
+        }
+    }
+
+    /// Returns whether the snapshot contains evidence named by this policy.
+    ///
+    /// A counter value of zero and a checklist entry marked false are explicit
+    /// evidence of incomplete fulfillment. For checklists, at least one matching
+    /// key is required. This does not prove that the application supplied the
+    /// complete intended checklist; its membership and observation scope remain
+    /// application-owned.
+    #[must_use]
+    pub fn has_evidence(&self, snapshot: &FulfillmentSnapshot) -> bool {
+        match self {
+            Self::CounterAtLeast { key, .. } => snapshot.counters.contains_key(key),
+            Self::ChecklistComplete { list_key } => snapshot
+                .checklist
+                .keys()
+                .any(|key| key.starts_with(list_key)),
         }
     }
 

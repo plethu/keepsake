@@ -3,12 +3,17 @@
 use keepsake::{ActorRef, ApplyKeepsake, CommandContext, ExpiryPolicy, SubjectRef, TenantId};
 use keepsake_sqlx::{KeepsakeRepository, RepositoryError};
 use sqlx::{PgPool, raw_sql};
+use std::env;
+use std::process::ExitCode;
 use time::{Duration, OffsetDateTime};
 
 #[derive(Debug, thiserror::Error)]
 enum ExampleError {
+    #[error("assignment deadline exceeds the supported timestamp range")]
+    DeadlineOutOfRange,
+
     #[error(transparent)]
-    Env(#[from] std::env::VarError),
+    Env(#[from] env::VarError),
 
     #[error(transparent)]
     Keepsake(#[from] keepsake::KeepsakeError),
@@ -28,9 +33,9 @@ async fn install_dovecote_schema(pool: &PgPool) -> Result<(), ExampleError> {
     if !installed {
         // Fresh databases need the Dovecote schema before the first audited
         // write. Existing databases are checked below and are not rewritten.
-        raw_sql(dovecote_sqlx_postgres::MIGRATIONS[0].sql())
-            .execute(pool)
-            .await?;
+        for migration in dovecote_sqlx_postgres::MIGRATIONS {
+            raw_sql(migration.sql()).execute(pool).await?;
+        }
     }
     Ok(())
 }
@@ -39,19 +44,28 @@ keepsake::relation_spec! {
     struct Mute24hSanction {
         id: 0x018f_0000_0000_7000_8000_0000_0000_0002;
         key: ("sanction", "mute_24h");
-        expiry(at) => ExpiryPolicy::At {
-            timestamp: at + Duration::hours(24),
-        };
+        expiry(_at) => ExpiryPolicy::ManualOnly;
     }
 }
 
 #[tokio::main]
-async fn main() -> Result<(), ExampleError> {
-    let database_url = std::env::var("DATABASE_URL")?;
+async fn main() -> ExitCode {
+    if run().await.is_ok() {
+        ExitCode::SUCCESS
+    } else {
+        // Driver errors may contain connection input. Keep diagnostics safe;
+        // the typed error remains available to an application-owned boundary.
+        eprintln!("Keepsake example failed; check database configuration and schema");
+        ExitCode::FAILURE
+    }
+}
+
+async fn run() -> Result<(), ExampleError> {
+    let database_url = env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&database_url).await?;
-    install_dovecote_schema(&pool).await?;
-    let repo = KeepsakeRepository::new(pool, "https://example.invalid/keepsake")?;
+    let repo = KeepsakeRepository::new(pool.clone(), "https://example.invalid/keepsake")?;
     repo.migrate().await?;
+    install_dovecote_schema(&pool).await?;
     repo.check_schema().await?;
     let tenant_id = TenantId::new("example-tenant")?;
     let scoped_repo = repo.for_tenant(tenant_id.clone());
@@ -67,6 +81,12 @@ async fn main() -> Result<(), ExampleError> {
         now,
         CommandContext::new(ActorRef::new("system", "example")?),
     );
+    let deadline = now
+        .checked_add(Duration::hours(24))
+        .ok_or(ExampleError::DeadlineOutOfRange)?;
+    let command = command.with_expiry(ExpiryPolicy::At {
+        timestamp: deadline,
+    });
     let applied = scoped_repo.apply(&command).await?;
 
     println!("{}", applied.keepsake.id());
