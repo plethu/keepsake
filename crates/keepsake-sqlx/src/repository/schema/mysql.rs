@@ -6,8 +6,9 @@ use super::{
     PERSISTED_IDENTIFIERS, validate_persisted_identifier_bytes,
 };
 use super::{
-    MYSQL_V3_CLEAN_ARTIFACT, RepositoryError, RepositoryResult, artifact_check_expression,
-    compact_sql, default_sql, mismatch, mysql_catalog_check_matches, normalize_check_expression,
+    MYSQL_V3_CLEAN_ARTIFACT, MYSQL_V4_IDENTIFIER_ARTIFACT, RepositoryError, RepositoryResult,
+    artifact_check_expression, compact_sql, default_sql, identifier_check_from_artifact,
+    identifier_check_matches, mismatch, mysql_catalog_check_matches, normalize_check_expression,
     normalize_mysql_generated_expression,
 };
 use crate::repository::backend::KeepsakeSqlxBackend;
@@ -1895,9 +1896,9 @@ async fn mysql_v3_constraints_check(
         "keepsake_fulfillment_checklist",
     ];
     let check_query = if maria_db {
-        "select tc.table_name as table_name, tc.constraint_name as constraint_name, cc.check_clause as check_clause from information_schema.table_constraints tc join information_schema.check_constraints cc on cc.constraint_schema = tc.constraint_schema and cc.table_name = tc.table_name and cc.constraint_name = tc.constraint_name where tc.constraint_schema = database() and tc.table_name in (?,?,?,?,?,?,?,?) and tc.constraint_type = 'CHECK'"
+        "select tc.table_name as table_name, tc.constraint_name as constraint_name, cc.check_clause as check_clause, 'YES' as enforced from information_schema.table_constraints tc join information_schema.check_constraints cc on cc.constraint_schema = tc.constraint_schema and cc.table_name = tc.table_name and cc.constraint_name = tc.constraint_name where tc.constraint_schema = database() and tc.table_name in (?,?,?,?,?,?,?,?) and tc.constraint_type = 'CHECK'"
     } else {
-        "select tc.table_name as table_name, tc.constraint_name as constraint_name, cc.check_clause as check_clause from information_schema.table_constraints tc join information_schema.check_constraints cc on cc.constraint_schema = tc.constraint_schema and cc.constraint_name = tc.constraint_name where tc.constraint_schema = database() and tc.table_name in (?,?,?,?,?,?,?,?) and tc.constraint_type = 'CHECK'"
+        "select tc.table_name as table_name, tc.constraint_name as constraint_name, cc.check_clause as check_clause, tc.enforced as enforced from information_schema.table_constraints tc join information_schema.check_constraints cc on cc.constraint_schema = tc.constraint_schema and cc.constraint_name = tc.constraint_name where tc.constraint_schema = database() and tc.table_name in (?,?,?,?,?,?,?,?) and tc.constraint_type = 'CHECK'"
     };
     let checks = sqlx::query(check_query)
         .bind(tables.first().unwrap_or(&""))
@@ -2001,14 +2002,17 @@ async fn mysql_v3_constraints_check(
         }
 
         if identifier_checks.contains(&name.as_str()) {
-            let normalized = normalize_check_expression(&clause);
-            let has_length = normalized.contains("octet_length") || normalized.contains("length");
-            if !identifier_contract
-                || !has_length
-                || !normalized.contains("<=191")
-                || !normalized.contains("trim")
-                || !normalized.contains("tenant_id")
-            {
+            let expected =
+                identifier_check_from_artifact(MYSQL_V4_IDENTIFIER_ARTIFACT, &table, &name);
+            // MySQL deparses OCTET_LENGTH as LENGTH; both count bytes in MySQL
+            // and MariaDB. PostgreSQL must retain OCTET_LENGTH instead.
+            let matches = expected.is_some_and(|expected| {
+                identifier_check_matches(
+                    &clause.replace("octet_length", "length"),
+                    &expected.replace("octet_length", "length"),
+                )
+            });
+            if !identifier_contract || !matches || row.try_get::<String, _>("enforced")? != "YES" {
                 return Err(mismatch(format!(
                     "identifier CHECK constraint {table}.{name} definition differs"
                 )));

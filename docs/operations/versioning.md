@@ -1,9 +1,21 @@
 # Versioning
 
-Keepsake uses crate versions for API and schema expectations. 4.0 is the
-current breaking boundary: public timestamps use `time::OffsetDateTime`,
-persisted textual identifiers have an explicit portable contract, and the
-SQLx adapter requires the additive v4 schema track alongside Dovecote.
+Keepsake 5.0 changes the Rust audit API while retaining the v4 database track
+and numeric JSON payload schema version 4. Crate major versions and durable
+schema versions are separate contracts.
+
+## Upgrading from 4.0
+
+Replace `schema_version: AUDIT_PAYLOAD_SCHEMA_VERSION` or `schema_version: 4`
+in `AuditEvent` literals with
+`schema_version: AuditPayloadSchemaVersion::CURRENT`. Import
+`keepsake::AuditPayloadSchemaVersion` where those events are constructed.
+
+`AuditEvent.schema_version` can no longer hold a legacy or future version.
+The numeric `AUDIT_PAYLOAD_SCHEMA_VERSION` constant remains available for
+routing raw payloads before decoding. Valid existing v4 JSON is unchanged.
+Existing valid v4 databases need no new migration; run `check_schema()` before
+serving requests to detect incomplete identifier constraints.
 
 ## Semver
 

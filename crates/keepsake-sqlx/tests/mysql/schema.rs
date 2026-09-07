@@ -290,3 +290,85 @@ async fn upgrade_track_activates_after_importer_evidence() -> TestResult<()> {
     assert!(repo.check_schema().await.is_err());
     Ok(())
 }
+
+#[tokio::test]
+#[ignore = "requires an isolated MySQL URL; run explicitly with --ignored --test-threads=1"]
+async fn identifier_checks_reject_weakened_predicates() -> TestResult<()> {
+    let pool = support::mysql_pool().await?;
+    support::reset_schema(&pool).await?;
+    let repo =
+        MySqlKeepsakeRepository::new(pool.clone(), "https://tests.invalid/identifier-checks")?;
+    repo.migrate().await?;
+    sqlx::raw_sql(dovecote_sqlx_mysql::MIGRATIONS[0].sql())
+        .execute(&pool)
+        .await?;
+    repo.check_schema().await?;
+    let version: String = sqlx::query_scalar("select version()")
+        .fetch_one(&pool)
+        .await?;
+    let maria_db = version.to_ascii_lowercase().contains("mariadb");
+    let drop_kind = if maria_db { "constraint" } else { "check" };
+
+    for (table, name) in [
+        (
+            "keepsake_relation_definitions",
+            "keepsake_relation_definitions_identifier_contract",
+        ),
+        ("keepsakes", "keepsakes_identifier_contract"),
+        (
+            "keepsake_fulfillment_counters",
+            "keepsake_fulfillment_counter_identifier_contract",
+        ),
+        (
+            "keepsake_fulfillment_checklist",
+            "keepsake_fulfillment_checklist_identifier_contract",
+        ),
+    ] {
+        let definition: String = sqlx::query_scalar(
+            "select check_clause from information_schema.check_constraints where constraint_schema = database() and constraint_name = ?",
+        )
+        .bind(name)
+        .fetch_one(&pool)
+        .await?;
+        let mut replacements = vec![
+            "CHECK (octet_length(tenant_id) > 0 AND octet_length(tenant_id) <= 191 AND tenant_id = trim(tenant_id))".to_owned(),
+            format!("CHECK (({definition}) OR true)"),
+        ];
+        if !maria_db {
+            replacements.push(format!("CHECK ({definition}) NOT ENFORCED"));
+        }
+
+        // Names are fixed test cases; predicates originate in this disposable schema.
+        for replacement in replacements {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "alter table {table} drop {drop_kind} {name}"
+            )))
+            .execute(&pool)
+            .await?;
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "alter table {table} add constraint {name} {replacement}"
+            )))
+            .execute(&pool)
+            .await?;
+            assert!(
+                matches!(
+                    repo.check_schema().await,
+                    Err(RepositoryError::BackendMismatch { .. })
+                ),
+                "accepted {name}: {replacement}"
+            );
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "alter table {table} drop {drop_kind} {name}"
+            )))
+            .execute(&pool)
+            .await?;
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "alter table {table} add constraint {name} CHECK ({definition})"
+            )))
+            .execute(&pool)
+            .await?;
+            repo.check_schema().await?;
+        }
+    }
+    Ok(())
+}

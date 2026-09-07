@@ -535,7 +535,7 @@ const PG_CLEAN_ARTIFACT: &str =
 const PG_V3_CLEAN_ARTIFACT: &str =
     include_str!("../../migrations/v3/postgres/3000_clean_baseline.sql");
 
-#[cfg(all(test, feature = "postgres", feature = "migrations"))]
+#[cfg(feature = "postgres")]
 const PG_V4_IDENTIFIER_ARTIFACT: &str =
     include_str!("../../migrations/v4/postgres/4000_identifier_contract.sql");
 
@@ -566,11 +566,11 @@ const MYSQL_CLEAN_ARTIFACT: &str =
 const MYSQL_V3_CLEAN_ARTIFACT: &str =
     include_str!("../../migrations/v3/mysql/3000_clean_baseline.sql");
 
-#[cfg(all(test, feature = "mysql"))]
+#[cfg(feature = "mysql")]
 const MYSQL_V4_IDENTIFIER_ARTIFACT: &str =
     include_str!("../../migrations/v4/mysql/4000_identifier_contract.sql");
 
-#[cfg(all(test, feature = "sqlite", feature = "migrations"))]
+#[cfg(feature = "sqlite")]
 const SQLITE_V4_IDENTIFIER_ARTIFACT: &str =
     include_str!("../../migrations/v4/sqlite/4000_identifier_contract.sql");
 
@@ -588,7 +588,7 @@ const MYSQL_UPGRADE_ARTIFACT: &str = concat!(
     include_str!("../../migrations/mysql/0006_dovecote_bridge.sql"),
 );
 
-#[cfg(any(feature = "mysql", all(feature = "postgres", feature = "migrations")))]
+#[cfg(any(feature = "mysql", feature = "postgres"))]
 fn artifact_check_expression(artifact: &str, marker: &str) -> Option<String> {
     let artifact = normalize_sql(artifact);
     let lower = artifact.to_ascii_lowercase();
@@ -619,6 +619,31 @@ fn artifact_check_expression(artifact: &str, marker: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(any(feature = "postgres", feature = "mysql"))]
+fn identifier_check_matches(actual: &str, expected: &str) -> bool {
+    // These artifacts contain only AND-connected length/trim predicates, no
+    // literals or arithmetic. Catalogs add grouping parentheses to individual
+    // predicates. Removing those groups is safe only for this narrow contract;
+    // keep every operand, operator, and conjunction in the comparison.
+    if actual.contains(['\'', '"']) || actual.contains("--") || actual.contains("/*") {
+        return false;
+    }
+
+    let normalize =
+        |expression: &str| normalize_check_expression(expression).replace(['(', ')'], "");
+    normalize(actual) == normalize(expected)
+}
+
+#[cfg(any(feature = "postgres", feature = "mysql"))]
+fn identifier_check_from_artifact(artifact: &str, table: &str, name: &str) -> Option<String> {
+    // Include the table in the marker so a valid constraint on the wrong table
+    // cannot satisfy another table's identifier contract.
+    artifact_check_expression(
+        artifact,
+        &format!("alter table {table} add constraint {name} check"),
+    )
 }
 
 #[cfg(any(feature = "postgres", feature = "mysql"))]

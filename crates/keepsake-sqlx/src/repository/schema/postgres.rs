@@ -9,8 +9,9 @@ use super::{
 };
 #[cfg(feature = "postgres")]
 use super::{
-    RepositoryError, RepositoryResult, compact_sql, default_sql, mismatch,
-    normalize_check_expression, normalize_sql,
+    PG_V4_IDENTIFIER_ARTIFACT, RepositoryError, RepositoryResult, compact_sql, default_sql,
+    identifier_check_from_artifact, identifier_check_matches, mismatch, normalize_check_expression,
+    normalize_sql,
 };
 #[cfg(feature = "postgres")]
 use crate::repository::backend::KeepsakeSqlxBackend;
@@ -1354,7 +1355,7 @@ async fn postgres_v3_constraints_check(
     // details, while the tenant-leading columns and foreign-key pairs are the
     // actual isolation contract.
     let rows = sqlx::query(
-        "select c.relname, x.contype::text as contype, x.conname, pg_get_constraintdef(x.oid, true) as definition from pg_constraint x join pg_class c on c.oid = x.conrelid join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relname = any($1) and x.contype in ('p','u','f','c')",
+        "select c.relname, x.contype::text as contype, x.conname, x.convalidated, pg_get_constraintdef(x.oid, true) as definition from pg_constraint x join pg_class c on c.oid = x.conrelid join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relname = any($1) and x.contype in ('p','u','f','c')",
     )
     .bind([
         "keepsake_schema_metadata",
@@ -1446,11 +1447,12 @@ async fn postgres_v3_constraints_check(
                 | "keepsakes_identifier_contract"
                 | "keepsake_fulfillment_counter_identifier_contract"
                 | "keepsake_fulfillment_checklist_identifier_contract" => {
-                    let check = normalize_check_expression(&definition);
                     identifier_contract
-                        && check.contains("octet_length")
-                        && check.contains("<=191")
-                        && check.contains("btrim")
+                        && row.try_get::<bool, _>("convalidated")?
+                        && identifier_check_from_artifact(PG_V4_IDENTIFIER_ARTIFACT, &table, &name)
+                            .is_some_and(|expected| {
+                                identifier_check_matches(&definition, &expected)
+                            })
                 }
 
                 "keepsakes_state_check" => normalize_check_expression(&definition)

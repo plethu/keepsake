@@ -7,8 +7,9 @@
 
 use keepsake::{
     AUDIT_PAYLOAD_SCHEMA_VERSION, ActorRef, ApplyKeepsake, AuditContext, AuditDecision, AuditEvent,
-    AuditEventId, AuditEventType, CommandContext, ExpiryCause, ExpiryPolicy, Keepsake, KeepsakeId,
-    LifecycleState, RelationDefinition, RelationId, RevokeBySubject, RevokeKeepsake, SubjectRef,
+    AuditEventId, AuditEventType, AuditPayloadSchemaVersion, CommandContext, ExpiryCause,
+    ExpiryPolicy, Keepsake, KeepsakeId, LifecycleState, RelationDefinition, RelationId,
+    RevokeBySubject, RevokeKeepsake, SubjectRef,
 };
 use time::OffsetDateTime;
 #[cfg(any(feature = "mysql", feature = "sqlite"))]
@@ -196,11 +197,11 @@ pub(super) fn decode_current_audit_payload_for_tenant(
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use time::OffsetDateTime;
 /// use keepsake::{ActorRef, AuditContext, AuditDecision, AuditEvent, AuditEventId,
-///     AuditEventType, SubjectRef, TenantId, AUDIT_PAYLOAD_SCHEMA_VERSION};
+///     AuditEventType, AuditPayloadSchemaVersion, SubjectRef, TenantId};
 /// use keepsake_sqlx::{decode_audit_event, DovecoteAuditConfig};
 ///
 /// let event = AuditEvent {
-///     schema_version: AUDIT_PAYLOAD_SCHEMA_VERSION,
+///     schema_version: AuditPayloadSchemaVersion::CURRENT,
 ///     tenant_id: TenantId::new("tenant-a")?,
 ///     id: AuditEventId::from_uuid(uuid::Uuid::nil()),
 ///     event_type: AuditEventType::Apply,
@@ -446,7 +447,7 @@ mod tests {
 
     fn current_event() -> Result<AuditEvent, Box<dyn std::error::Error>> {
         Ok(AuditEvent {
-            schema_version: AUDIT_PAYLOAD_SCHEMA_VERSION,
+            schema_version: AuditPayloadSchemaVersion::CURRENT,
             tenant_id: TenantId::new("tenant-test")?,
             id: AuditEventId::from_uuid(Uuid::nil()),
             event_type: AuditEventType::Apply,
@@ -495,17 +496,6 @@ mod tests {
     }
 
     #[test]
-    fn replay_does_not_equate_different_payload_schema_versions()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let mut legacy = current_event()?;
-        legacy.schema_version = 3;
-        let current = current_event()?;
-
-        assert_eq!(replay_event(Some(legacy), current.clone()), current);
-        Ok(())
-    }
-
-    #[test]
     fn replay_does_not_equate_different_tenants() -> Result<(), Box<dyn std::error::Error>> {
         let existing = current_event()?;
         let mut candidate = current_event()?;
@@ -523,7 +513,7 @@ pub(super) fn apply_event(
     duplicate_prevented: bool,
 ) -> AuditEvent {
     AuditEvent {
-        schema_version: AUDIT_PAYLOAD_SCHEMA_VERSION,
+        schema_version: AuditPayloadSchemaVersion::CURRENT,
         tenant_id: command.tenant_id.clone(),
         id: command.audit_id,
         event_type: if duplicate_prevented {
@@ -551,8 +541,7 @@ pub(super) fn replay_event(existing: Option<AuditEvent>, candidate: AuditEvent) 
         return candidate;
     };
 
-    let equivalent = existing.schema_version == candidate.schema_version
-        && existing.id == candidate.id
+    let equivalent = existing.id == candidate.id
         && existing.tenant_id == candidate.tenant_id
         && existing.actor == candidate.actor
         && existing.at == candidate.at
@@ -583,7 +572,7 @@ fn revoke_audit_event(
     keepsake: &Keepsake,
 ) -> AuditEvent {
     AuditEvent {
-        schema_version: AUDIT_PAYLOAD_SCHEMA_VERSION,
+        schema_version: AuditPayloadSchemaVersion::CURRENT,
         tenant_id: keepsake.tenant_id().clone(),
         id,
         event_type: AuditEventType::Revoke,
@@ -622,7 +611,7 @@ pub(super) fn expiry_event(
 ) -> RepositoryResult<AuditEvent> {
     let at = canonical_timestamp(at);
     Ok(AuditEvent {
-        schema_version: AUDIT_PAYLOAD_SCHEMA_VERSION,
+        schema_version: AuditPayloadSchemaVersion::CURRENT,
         tenant_id,
         id: AuditEventId::deterministic(
             format!("keepsake-expiry:{keepsake_id}:{at}:{cause:?}").as_bytes(),

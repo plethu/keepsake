@@ -15,12 +15,16 @@ test helpers.
 `InMemoryActiveRelations` is the same active-relation read contract used by
 adapters that depend on `ActiveRelationSource`. Test and example code can seed
 typed relation specs directly without building `ActiveRelation` fixtures by
-hand. The helper still takes caller-owned time and a caller-owned instance id:
+hand. The helper takes a tenant, caller-owned time, and caller-owned instance
+id. Use `ActiveRelationSeed` when the fixture needs metadata:
 
 ```rust
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 use keepsake::{
-    ExpiryPolicy, InMemoryActiveRelations, SubjectRef, relation_spec,
+    ActiveRelationSeed, ExpiryPolicy, InMemoryActiveRelations, SubjectRef, TenantId,
+    relation_spec,
 };
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 relation_spec! {
     struct TrustedTag {
@@ -31,25 +35,20 @@ relation_spec! {
 }
 
 let source = InMemoryActiveRelations::empty();
+let tenant = TenantId::new("account-group-a")?;
 let subject = SubjectRef::new("account", "acct_123")?;
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
-
 let at = OffsetDateTime::parse("2026-01-01T00:00:00Z", &Rfc3339)?;
 
 source.insert_active_for_spec::<TrustedTag>(
+    tenant.clone(),
     0xaaaa_aaaa_aaaa_aaaa_aaaa_aaaa_aaaa_aaaa,
-    subject,
+    subject.clone(),
     at,
 )?;
-```
-
-Use `ActiveRelationSeed` when the fixture needs metadata:
-
-```rust
-use keepsake::ActiveRelationSeed;
 
 source.insert_active_relation(
     ActiveRelationSeed::<TrustedTag>::from_u128(
+        tenant,
         0xbbbb_bbbb_bbbb_bbbb_bbbb_bbbb_bbbb_bbbb,
         subject,
         at,
@@ -57,25 +56,27 @@ source.insert_active_relation(
     .with_attribute("fixture", "trusted-account")
     .with_attribute("reason", "integration-test"),
 )?;
+# Ok(())
+# }
 ```
 
-## SQLx Adapter
+## `SQLx` Adapter
 
 `keepsake-sqlx` uses feature flags for backend integration surface area, not
 lifecycle or audit semantics. Every enabled SQL backend also requires the
-matching Dovecote SQLx adapter at runtime.
+matching Dovecote `SQLx` adapter at runtime.
 
 | Feature | Default | Use |
 | --- | --- | --- |
 | `postgres` | Yes | Enables `PostgresKeepsakeRepository` and the `KeepsakeRepository` default alias. |
 | `sqlite` | No | Enables `SqliteKeepsakeRepository`. |
 | `mysql` | No | Enables `MySqlKeepsakeRepository`. |
-| `migrations` | Yes | Exposes embedded SQLx migrations through `KeepsakeRepository::migrate()`. |
+| `migrations` | Yes | Exposes embedded `SQLx` migrations through `KeepsakeRepository::migrate()`. |
 | `cache` | Yes | Exposes opt-in relation-definition caching through repository cache helpers. |
 | `fulfillment-counters` | Yes | Exposes simple built-in counter projection writes. |
 
-Enable the backend or backends used by the application. When selecting SQLite
-or MySQL, disable default features so Postgres is not enabled implicitly:
+Enable the backend or backends used by the application. When selecting `SQLite`
+or `MySQL`, disable default features so Postgres is not enabled implicitly:
 
 ```toml
 [dependencies]
@@ -86,12 +87,12 @@ dovecote-sqlx-sqlite = "0.2"
 Dovecote 0.2 is published on crates.io; use the matching adapter for the
 selected backend.
 
-The 4.0 tenant-scoped SQLx contract is available for PostgreSQL, SQLite, and
-MySQL. Each backend has a v4 clean track. Existing v3 databases must apply the
+The 4.0 tenant-scoped `SQLx` contract is available for `PostgreSQL`, `SQLite`, and
+`MySQL`. Each backend has a v4 clean track. Existing v3 databases must apply the
 forward v4 identifier-contract migration; the historical v3 artifacts remain
 immutable. The older v2-to-v3 prepare/backfill/activate route remains an
-explicit operator path. For regulated workloads, prefer MySQL
-separate-database or SQLite file-per-tenant deployment boundaries when they fit
+explicit operator path. For regulated workloads, prefer `MySQL`
+separate-database or `SQLite` file-per-tenant deployment boundaries when they fit
 the product's operational model.
 
 Disable `migrations` when your service vendors the SQL into a separate

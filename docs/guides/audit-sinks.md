@@ -4,7 +4,9 @@ Audit is durable history. Logging is diagnostic. Metrics are aggregate health
 signals. Keepsake keeps these concerns separate through its typed event model
 and `AuditSink` trait.
 
-In the core crate, `AuditEvent` is a validated, deterministic Rust value.
+In the core crate, `AuditEvent` carries typed identities and lifecycle decisions.
+Its `schema_version` field uses `AuditPayloadSchemaVersion::CURRENT`; it cannot
+represent an unsupported version.
 `AuditEventId` is generated before persistence and must be retained when a
 caller retries the same logical operation. `AuditContext` carries application
 values such as an operator id, ticket id, reason code, tenant id, or request
@@ -24,8 +26,8 @@ Dovecote `(tenant_id, source, event_id)` boundary because delivery remains at
 least once. A transport projection must preserve tenant routing alongside the
 CloudEvents `(source, id)` pair.
 
-Current Keepsake 4.0 payloads include the explicit
-`schema_version: keepsake::AUDIT_PAYLOAD_SCHEMA_VERSION` discriminator (4).
+Keepsake 4.x and 5.x payloads include the explicit
+`"schema_version": 4` discriminator.
 The ordinary decoder accepts only that version. A payload that omits the field
 or declares version 3 is returned as `AuditEventDecodeError::LegacyPayload` and
 must go through an application-owned legacy decoder; an unknown version is

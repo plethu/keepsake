@@ -6,9 +6,17 @@ then reads the active relations for that account.
 Start with a migrated repository. `pool` is a `sqlx::PgPool` connected to the
 Postgres database where Keepsake and
 [Dovecote](https://github.com/plethu/dovecote) store lifecycle and audit rows.
+The `relation_spec!` macro keeps the stable id, natural key, and expiry policy
+together so normal call sites do not repeat strings.
 
-```rust
+```rust,no_run
+# #[tokio::main]
+# async fn main() -> Result<(), Box<dyn std::error::Error>> {
+# let pool = sqlx::postgres::PgPoolOptions::new()
+#     .connect_lazy("postgres://keepsake@example.invalid/keepsake")?;
+use keepsake::{ActorRef, ApplyKeepsake, CommandContext, ExpiryPolicy, SubjectRef};
 use keepsake_sqlx::KeepsakeRepository;
+use time::OffsetDateTime;
 
 let root = KeepsakeRepository::new(pool, "https://accounts.example.test/keepsake")?;
 root.migrate().await?;
@@ -16,15 +24,6 @@ root.migrate().await?;
 root.check_schema().await?;
 let tenant = keepsake::TenantId::new("account-group-a")?;
 let repo = root.for_tenant(tenant.clone());
-```
-
-Define the relation in code. The `relation_spec!` macro creates a typed
-`RelationSpec` that keeps the stable id, natural key, and expiry policy together
-so normal call sites do not repeat strings.
-
-```rust
-use keepsake::{ActorRef, ApplyKeepsake, CommandContext, ExpiryPolicy, SubjectRef};
-use time::OffsetDateTime;
 
 keepsake::relation_spec! {
     struct TrustedTag {
@@ -33,35 +32,29 @@ keepsake::relation_spec! {
         expiry(_at) => ExpiryPolicy::ManualOnly;
     }
 }
-```
 
-Apply the relation using one explicit timestamp for the operation:
-
-```rust
 let now = OffsetDateTime::now_utc();
 let timed_repo = repo.at(now);
-
 timed_repo.upsert_relation_spec::<TrustedTag>().await?;
 
 let subject = SubjectRef::new("account", "acct_123")?;
 let command = ApplyKeepsake::for_spec::<TrustedTag>(
-    tenant,
-    subject,
+    tenant.clone(),
+    subject.clone(),
     now,
     CommandContext::new(ActorRef::new("system", "worker")?),
 );
 let applied = repo.apply(&command).await?;
+
+let active = repo.active_relations_for_subject(&subject).await?;
+# let _ = (applied, active);
+# Ok(())
+# }
 ```
 
 If the same apply command runs again while the tag is active, Keepsake returns
 the existing active row and marks the duplicate as prevented. That makes retry
 loops safe after a committed write.
-
-Read the subject's active relations when a request needs current state:
-
-```rust
-let active = repo.active_relations_for_subject(&subject).await?;
-```
 
 Use `active_relations_for_subject_by_keys` when the request only needs a small
 known set of dynamic relation keys. Use `active_relations_for_subject_by_ids`

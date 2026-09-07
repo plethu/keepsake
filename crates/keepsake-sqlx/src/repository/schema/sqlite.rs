@@ -10,6 +10,9 @@ use super::{
 use super::{RepositoryError, RepositoryResult, compact_sql, mismatch};
 use crate::repository::backend::KeepsakeSqlxBackend;
 
+#[cfg(feature = "sqlite")]
+use super::SQLITE_V4_IDENTIFIER_ARTIFACT;
+
 #[cfg(all(feature = "sqlite", feature = "migrations"))]
 #[allow(clippy::too_many_lines)]
 async fn sqlite_domain_shape_check(
@@ -306,11 +309,10 @@ async fn sqlite_v4_domain_shape_check(pool: &sqlx::SqlitePool) -> RepositoryResu
         .await?
         .flatten()
         .ok_or_else(|| mismatch(format!("missing v4 identifier trigger {trigger}")))?;
-        let compact = compact_sql(&definition);
-        if !compact.contains("length(cast(new.")
-            || !compact.contains("asblob))<=191")
-            || !compact.contains("trim(new.")
-            || !compact.contains("raise(abort,'keepsake_identifier_contract')")
+        let expected = sqlite_v4_identifier_trigger_artifact(trigger)
+            .ok_or_else(|| mismatch(format!("migration artifact lacks trigger {trigger}")))?;
+        if normalize_sql_preserving_literals(&definition)
+            != normalize_sql_preserving_literals(expected)
         {
             return Err(mismatch(format!(
                 "v4 identifier trigger {trigger} definition differs"
@@ -318,6 +320,70 @@ async fn sqlite_v4_domain_shape_check(pool: &sqlx::SqlitePool) -> RepositoryResu
         }
     }
     Ok(())
+}
+
+#[cfg(feature = "sqlite")]
+fn sqlite_v4_identifier_trigger_artifact(name: &str) -> Option<&'static str> {
+    let artifact = SQLITE_V4_IDENTIFIER_ARTIFACT;
+    let lower = artifact.to_ascii_lowercase();
+    let marker = format!("create trigger {name}");
+    let start = lower.find(&marker)?;
+    let end = lower[start..].find("end;")? + "end;".len();
+    Some(&artifact[start..start + end])
+}
+
+#[cfg(feature = "sqlite")]
+fn normalize_sql_preserving_literals(sql: &str) -> String {
+    let mut normalized = String::with_capacity(sql.len());
+    let mut quote = None;
+    let mut pending_whitespace = false;
+    let mut chars = sql.chars().peekable();
+
+    while let Some(character) = chars.next() {
+        if let Some(delimiter) = quote {
+            normalized.push(character);
+            if character == delimiter && chars.next_if_eq(&delimiter).is_some() {
+                normalized.push(delimiter);
+                continue;
+            }
+
+            if character == delimiter {
+                quote = None;
+            }
+            continue;
+        }
+
+        if character == '-' && chars.next_if_eq(&'-').is_some() {
+            let _ = chars
+                .by_ref()
+                .find(|&comment_character| comment_character == '\n');
+            pending_whitespace = true;
+            continue;
+        }
+
+        if matches!(character, '\'' | '"' | '`') {
+            if pending_whitespace && !normalized.is_empty() {
+                normalized.push(' ');
+            }
+            pending_whitespace = false;
+            quote = Some(character);
+            normalized.push(character);
+        } else if character.is_whitespace() {
+            pending_whitespace = true;
+        } else {
+            if pending_whitespace && !normalized.is_empty() {
+                normalized.push(' ');
+            }
+            pending_whitespace = false;
+            normalized.push(character.to_ascii_lowercase());
+        }
+    }
+
+    let normalized = normalized.trim_end();
+    normalized
+        .strip_suffix(';')
+        .unwrap_or(normalized)
+        .to_owned()
 }
 
 #[cfg(all(feature = "sqlite", feature = "migrations"))]
@@ -597,5 +663,22 @@ pub(in crate::repository) async fn sqlite_schema_preflight(
             expected: super::super::SqliteBackend::NAME,
             actual: "unmarked non-empty schema".to_owned(),
         })
+    }
+}
+
+#[cfg(test)]
+mod identifier_trigger_tests {
+    use super::normalize_sql_preserving_literals;
+
+    #[test]
+    fn trigger_normalization_preserves_literal_bytes() {
+        assert_eq!(
+            normalize_sql_preserving_literals("SELECT  'A  B''C--D';"),
+            "select 'A  B''C--D'"
+        );
+        assert_ne!(
+            normalize_sql_preserving_literals("select 'keepsake_identifier_contract'"),
+            normalize_sql_preserving_literals("select ' keepsake_identifier_contract '")
+        );
     }
 }

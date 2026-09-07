@@ -157,3 +157,155 @@ async fn sqlite_v3_preflight_rejects_valid_utf8_blob_type() -> TestResult<()> {
     );
     Ok(())
 }
+
+async fn sqlite_v4_repository() -> TestResult<(SqliteKeepsakeRepository, sqlx::SqlitePool)> {
+    let pool = sqlite_v3_pool().await?;
+    sqlx::raw_sql(include_str!(
+        "../../migrations/v4/sqlite/4000_identifier_contract.sql"
+    ))
+    .execute(&pool)
+    .await?;
+    sqlx::raw_sql(dovecote_sqlx_sqlite::MIGRATIONS[0].sql())
+        .execute(&pool)
+        .await?;
+    let repository =
+        SqliteKeepsakeRepository::new(pool.clone(), "https://tests.invalid/keepsake/sqlite-v4")?;
+    repository.check_schema().await?;
+    Ok((repository, pool))
+}
+
+const SQLITE_V4_IDENTIFIER_TRIGGERS: [(&str, &str, &str); 8] = [
+    (
+        "keepsake_relation_definitions_identifier_contract_insert",
+        "insert",
+        "keepsake_relation_definitions",
+    ),
+    (
+        "keepsake_relation_definitions_identifier_contract_update",
+        "update",
+        "keepsake_relation_definitions",
+    ),
+    (
+        "keepsakes_identifier_contract_insert",
+        "insert",
+        "keepsakes",
+    ),
+    (
+        "keepsakes_identifier_contract_update",
+        "update",
+        "keepsakes",
+    ),
+    (
+        "keepsake_fulfillment_counters_identifier_contract_insert",
+        "insert",
+        "keepsake_fulfillment_counters",
+    ),
+    (
+        "keepsake_fulfillment_counters_identifier_contract_update",
+        "update",
+        "keepsake_fulfillment_counters",
+    ),
+    (
+        "keepsake_fulfillment_checklist_identifier_contract_insert",
+        "insert",
+        "keepsake_fulfillment_checklist",
+    ),
+    (
+        "keepsake_fulfillment_checklist_identifier_contract_update",
+        "update",
+        "keepsake_fulfillment_checklist",
+    ),
+];
+
+async fn replace_identifier_trigger(
+    pool: &sqlx::SqlitePool,
+    name: &str,
+    timing: &str,
+    operation: &str,
+    table: &str,
+    predicate: &str,
+) -> TestResult<()> {
+    // These names come only from the fixed test cases above; raw SQL is
+    // required because SQLite parameters cannot stand in for identifiers.
+    let drop_sql = format!("drop trigger {name}");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(drop_sql))
+        .execute(pool)
+        .await?;
+    let sql = format!(
+        "create trigger {name} {timing} {operation} on {table} for each row when not ({predicate}) begin select raise(abort, 'keepsake_identifier_contract'); end"
+    );
+    sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_v4_schema_check_rejects_a_tenant_only_identifier_trigger() -> TestResult<()> {
+    let predicate = "length(cast(new.tenant_id as blob)) > 0 and length(cast(new.tenant_id as blob)) <= 191 and trim(new.tenant_id) = new.tenant_id";
+    for (name, operation, table) in SQLITE_V4_IDENTIFIER_TRIGGERS {
+        let (repository, pool) = sqlite_v4_repository().await?;
+        replace_identifier_trigger(&pool, name, "before", operation, table, predicate).await?;
+        assert!(
+            repository.check_schema().await.is_err(),
+            "weakened trigger {name} must be rejected"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_v4_schema_check_rejects_a_misbound_identifier_trigger() -> TestResult<()> {
+    let (repository, pool) = sqlite_v4_repository().await?;
+    replace_identifier_trigger(
+        &pool,
+        "keepsakes_identifier_contract_insert",
+        "before",
+        "insert",
+        "keepsake_relation_definitions",
+        "length(cast(new.tenant_id as blob)) > 0 and length(cast(new.tenant_id as blob)) <= 191 and trim(new.tenant_id) = new.tenant_id",
+    )
+    .await?;
+    assert!(repository.check_schema().await.is_err());
+
+    let (repository, pool) = sqlite_v4_repository().await?;
+    replace_identifier_trigger(
+        &pool,
+        "keepsakes_identifier_contract_insert",
+        "before",
+        "delete",
+        "keepsakes",
+        "length(cast(new.tenant_id as blob)) > 0 and length(cast(new.tenant_id as blob)) <= 191 and trim(new.tenant_id) = new.tenant_id",
+    )
+    .await?;
+    assert!(repository.check_schema().await.is_err());
+
+    let (repository, pool) = sqlite_v4_repository().await?;
+    replace_identifier_trigger(
+        &pool,
+        "keepsakes_identifier_contract_insert",
+        "after",
+        "insert",
+        "keepsakes",
+        "length(cast(new.tenant_id as blob)) > 0 and length(cast(new.tenant_id as blob)) <= 191 and trim(new.tenant_id) = new.tenant_id",
+    )
+    .await?;
+    assert!(repository.check_schema().await.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_v4_schema_check_rejects_a_tautological_identifier_trigger() -> TestResult<()> {
+    let (repository, pool) = sqlite_v4_repository().await?;
+    replace_identifier_trigger(
+        &pool,
+        "keepsakes_identifier_contract_insert",
+        "before",
+        "insert",
+        "keepsakes",
+        "length(cast(new.tenant_id as blob)) > 0 and length(cast(new.tenant_id as blob)) <= 191 and trim(new.tenant_id) = new.tenant_id and 1 = 1",
+    )
+    .await?;
+    assert!(repository.check_schema().await.is_err());
+    Ok(())
+}

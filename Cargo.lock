@@ -573,6 +573,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "guide-tests"
+version = "0.1.0"
+dependencies = [
+ "keepsake",
+ "keepsake-sqlx",
+ "sqlx",
+ "time",
+ "tokio",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -769,7 +780,7 @@ dependencies = [
 
 [[package]]
 name = "keepsake"
-version = "4.0.0"
+version = "5.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -780,7 +791,7 @@ dependencies = [
 
 [[package]]
 name = "keepsake-sqlx"
-version = "4.0.0"
+version = "5.0.0"
 dependencies = [
  "async-trait",
  "dovecote",
@@ -1000,7 +1011,6 @@ dependencies = [
  "thiserror",
  "time",
  "tokio",
- "uuid",
 ]
 
 [[package]]
@@ -1014,7 +1024,6 @@ dependencies = [
  "thiserror",
  "time",
  "tokio",
- "uuid",
 ]
 
 [[package]]

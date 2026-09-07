@@ -21,6 +21,10 @@ audit events and their delivery state.
 
 ## Install
 
+The repository is preparing 5.0.0. The commands below install the published
+4.x series; see the [5.0 upgrade notes](docs/operations/versioning.md) when
+building from this checkout.
+
 For Postgres:
 
 ```sh

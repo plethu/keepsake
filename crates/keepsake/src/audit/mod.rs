@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::error::Error;
 
-use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -20,18 +20,48 @@ pub use memory::{InMemoryAuditError, InMemoryAuditSink};
 /// Current durable JSON payload schema version.
 pub const AUDIT_PAYLOAD_SCHEMA_VERSION: u16 = 4;
 
-fn deserialize_current_schema_version<'de, D>(deserializer: D) -> Result<u16, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let schema_version = u16::deserialize(deserializer)?;
-    if schema_version == AUDIT_PAYLOAD_SCHEMA_VERSION {
-        return Ok(schema_version);
-    }
+/// Opaque discriminator for the current durable audit payload.
+///
+/// The JSON representation remains the number `4`. Legacy and future
+/// versions must be routed through an explicit decoder before they become an
+/// [`AuditEvent`], so this type has no public constructor for another value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AuditPayloadSchemaVersion(());
 
-    Err(D::Error::custom(format_args!(
-        "expected current Keepsake audit payload schema version {AUDIT_PAYLOAD_SCHEMA_VERSION}, found {schema_version}"
-    )))
+impl AuditPayloadSchemaVersion {
+    /// The current payload schema version.
+    pub const CURRENT: Self = Self(());
+}
+
+impl Default for AuditPayloadSchemaVersion {
+    fn default() -> Self {
+        Self::CURRENT
+    }
+}
+
+impl Serialize for AuditPayloadSchemaVersion {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u16(AUDIT_PAYLOAD_SCHEMA_VERSION)
+    }
+}
+
+impl<'de> Deserialize<'de> for AuditPayloadSchemaVersion {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let schema_version = u16::deserialize(deserializer)?;
+        if schema_version == AUDIT_PAYLOAD_SCHEMA_VERSION {
+            return Ok(Self::CURRENT);
+        }
+
+        Err(D::Error::custom(format_args!(
+            "expected current Keepsake audit payload schema version {AUDIT_PAYLOAD_SCHEMA_VERSION}, found {schema_version}"
+        )))
+    }
 }
 
 /// Durable audit event.
@@ -42,8 +72,7 @@ pub struct AuditEvent {
     /// Direct serde decoding accepts only the current discriminator. Durable
     /// storage consumers must inspect the discriminator before decoding this
     /// current-only type so legacy and future payloads can be routed explicitly.
-    #[serde(deserialize_with = "deserialize_current_schema_version")]
-    pub schema_version: u16,
+    pub schema_version: AuditPayloadSchemaVersion,
     /// Tenant that owns the audited keepsake.
     pub tenant_id: TenantId,
     /// Stable identity of this audit occurrence.
@@ -217,7 +246,31 @@ impl AuditSink for NoopAuditSink {
 
 #[cfg(test)]
 mod tests {
-    use super::{AuditEvent, AuditEventType};
+    use super::{
+        AUDIT_PAYLOAD_SCHEMA_VERSION, AuditContext, AuditDecision, AuditEvent, AuditEventId,
+        AuditEventType, AuditPayloadSchemaVersion,
+    };
+    use crate::{ActorRef, SubjectRef, TenantId};
+    use time::OffsetDateTime;
+    use uuid::Uuid;
+
+    fn current_event() -> core::result::Result<AuditEvent, Box<dyn std::error::Error>> {
+        Ok(AuditEvent {
+            schema_version: AuditPayloadSchemaVersion::CURRENT,
+            tenant_id: TenantId::new("tenant-test")?,
+            id: AuditEventId::from_uuid(Uuid::nil()),
+            event_type: AuditEventType::Apply,
+            at: OffsetDateTime::UNIX_EPOCH,
+            actor: ActorRef::new("system", "test")?,
+            keepsake_id: Uuid::nil(),
+            subject: SubjectRef::new("account", "acct-1")?,
+            relation_id: Uuid::nil(),
+            decision: AuditDecision::Applied {
+                duplicate_prevented: false,
+            },
+            context: AuditContext::default(),
+        })
+    }
 
     #[test]
     fn event_type_storage_label_round_trips() {
@@ -254,6 +307,38 @@ mod tests {
                     .to_string()
                     .contains("expected current Keepsake audit payload")
             }));
+        }
+    }
+
+    #[test]
+    fn current_schema_version_round_trips_as_numeric_wire_value() {
+        let version = AuditPayloadSchemaVersion::CURRENT;
+        assert_eq!(AuditPayloadSchemaVersion::default(), version);
+        assert_eq!(serde_json::to_string(&version).ok().as_deref(), Some("4"));
+        assert_eq!(
+            serde_json::from_str::<AuditPayloadSchemaVersion>("4").ok(),
+            Some(version)
+        );
+        assert_eq!(AUDIT_PAYLOAD_SCHEMA_VERSION, 4);
+    }
+
+    #[test]
+    fn audit_event_current_schema_version_round_trips()
+    -> core::result::Result<(), Box<dyn std::error::Error>> {
+        let event = current_event()?;
+        let encoded = serde_json::to_string(&event)?;
+        assert!(encoded.contains("\"schema_version\":4"));
+        assert_eq!(serde_json::from_str::<AuditEvent>(&encoded)?, event);
+        Ok(())
+    }
+
+    #[test]
+    fn schema_version_type_rejects_legacy_and_future_values() {
+        for schema_version in ["3", "99"] {
+            assert!(
+                serde_json::from_str::<AuditPayloadSchemaVersion>(schema_version).is_err(),
+                "schema version {schema_version} must be rejected"
+            );
         }
     }
 }

@@ -107,7 +107,7 @@ Migrated v1 identities (`keepsake-outbox-N` and `keepsake-audit-legacy-N`) are
 reported as a typed legacy error because their payloads may not contain the
 current event identity; handle those rows with application-specific legacy
 decoding. Current JSON payloads carry
-`schema_version: keepsake::AUDIT_PAYLOAD_SCHEMA_VERSION` (4). Payloads that
+`"schema_version": 4`. Payloads that
 omit the discriminator, or explicitly carry version 3, return
 `AuditEventDecodeError::LegacyPayload`; unknown versions return
 `UnknownPayloadVersion`. Do not route those payloads through the current

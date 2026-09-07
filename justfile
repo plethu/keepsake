@@ -11,8 +11,9 @@ fmt:
 clippy:
     cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-test:
-    cargo test --workspace --all-features
+[positional-arguments]
+test *args:
+    cargo test --workspace --all-features "$@"
 
 db-up: db-up-postgres
 

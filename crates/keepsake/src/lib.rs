@@ -19,12 +19,12 @@ pub mod prelude {
 
     pub use crate::{
         ActiveRelation, ActiveRelationSource, ActorRef, ApplyKeepsake, AuditContext, AuditDecision,
-        AuditEvent, AuditEventId, AuditEventType, AuditSink, CommandContext,
-        DynActiveRelationSource, ExpiryCause, ExpiryPolicy, FulfillmentPolicy, FulfillmentProvider,
-        FulfillmentSnapshot, Keepsake, KeepsakeError, KeepsakeId, KeepsakeLifecycle,
-        KeepsakeRecord, KeepsakeStore, LifecycleState, RelationDefinition, RelationId, RelationKey,
-        RelationKind, RelationName, RelationSpec, RevokeBySubject, StaticRelationKey, SubjectRef,
-        TenantId,
+        AuditEvent, AuditEventId, AuditEventType, AuditPayloadSchemaVersion, AuditSink,
+        CommandContext, DynActiveRelationSource, ExpiryCause, ExpiryPolicy, FulfillmentPolicy,
+        FulfillmentProvider, FulfillmentSnapshot, Keepsake, KeepsakeError, KeepsakeId,
+        KeepsakeLifecycle, KeepsakeRecord, KeepsakeStore, LifecycleState, RelationDefinition,
+        RelationId, RelationKey, RelationKind, RelationName, RelationSpec, RevokeBySubject,
+        StaticRelationKey, SubjectRef, TenantId,
     };
 
     #[cfg(any(test, feature = "test"))]
@@ -84,7 +84,7 @@ macro_rules! relation_spec {
 
 pub use audit::{
     AUDIT_PAYLOAD_SCHEMA_VERSION, AuditContext, AuditDecision, AuditEvent, AuditEventId,
-    AuditEventType, AuditSink, NoopAuditSink,
+    AuditEventType, AuditPayloadSchemaVersion, AuditSink, NoopAuditSink,
 };
 #[cfg(any(test, feature = "test"))]
 pub use audit::{InMemoryAuditError, InMemoryAuditSink};

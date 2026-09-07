@@ -389,6 +389,13 @@ impl InMemoryKeepsakeStore {
             .into());
         }
 
+        if !relation.enabled {
+            return Err(KeepsakeError::RelationDisabled {
+                relation_id: relation.id,
+            }
+            .into());
+        }
+
         let keepsake = Keepsake::applied(
             command.id,
             command.subject.clone(),
@@ -906,6 +913,36 @@ mod tests {
                 AdminTag::ID,
                 TrustedTag::ID
             ))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn keepsake_store_rejects_new_apply_for_disabled_relation_without_writing() -> TestResult<()> {
+        let store = InMemoryKeepsakeStore::empty();
+        let subject = SubjectRef::new("account", "acct_123")?;
+        let at = ts("2026-01-01T00:00:00Z")?;
+        let relation = RelationDefinition::disabled(
+            tenant()?,
+            TrustedTag::ID,
+            TrustedTag::KEY.to_relation_key()?,
+            ExpiryPolicy::ManualOnly,
+        )?;
+        let command = apply_command(Uuid::from_u128(100), subject.clone(), relation.id, at)?;
+
+        let error = store.apply_with_relation(&command, &relation);
+
+        assert!(matches!(
+            error,
+            Err(InMemoryKeepsakeStoreError::Keepsake(
+                KeepsakeError::RelationDisabled { relation_id }
+            )) if relation_id == relation.id
+        ));
+        assert!(store.get(&command.tenant_id, command.id)?.is_none());
+        assert!(
+            store
+                .active_for_subject(&command.tenant_id, &subject)?
+                .is_empty()
         );
         Ok(())
     }

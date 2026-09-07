@@ -1,5 +1,21 @@
 # Changelog
 
+## 5.0.0 - Unreleased
+
+- **Breaking Rust API:** `AuditEvent.schema_version` now uses the opaque
+  `AuditPayloadSchemaVersion` type. Use `AuditPayloadSchemaVersion::CURRENT`
+  in event literals instead of a numeric value. Serialization always emits
+  schema version 4; existing v4 audit payloads and databases remain compatible.
+- Schema checks now compare complete v4 identifier predicates and SQLite
+  trigger definitions, rejecting weakened or inactive constraints. Published
+  migration files are unchanged; existing valid v4 schemas need no migration.
+- The in-memory keepsake store rejects fresh applies to disabled relations
+  without changing stored state.
+- Fixed the quickstart and test-helper examples and added them to doctest
+  coverage. `just test` now forwards Cargo test filters and runner arguments.
+- Added pinned cargo-machete checks to the project gate and removed unused
+  direct UUID dependencies from the Postgres examples.
+
 ## 4.0.0 - 2026-09-01
 
 - **Breaking core API:** replaced public and internal `chrono::DateTime<Utc>`

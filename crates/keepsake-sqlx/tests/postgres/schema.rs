@@ -300,3 +300,54 @@ async fn tenant_upgrade_activates_v3_schema_with_explicit_backfill() -> TestResu
     assert_eq!(scoped.active_for_subject(&subject).await?.len(), 1);
     Ok(())
 }
+
+#[tokio::test]
+#[ignore = "requires an isolated PostgreSQL URL; run explicitly with --ignored --test-threads=1"]
+async fn identifier_checks_reject_weakened_predicates() -> TestResult<()> {
+    let pool = PgPool::connect(&std::env::var("DATABASE_URL")?).await?;
+    reset_schema(&pool).await?;
+    let repo = KeepsakeRepository::new(pool.clone(), "https://tests.invalid/identifier-checks")?;
+    repo.migrate().await?;
+    sqlx::raw_sql(dovecote_sqlx_postgres::MIGRATIONS[0].sql())
+        .execute(&pool)
+        .await?;
+    repo.check_schema().await?;
+
+    for (table, name) in [
+        (
+            "keepsake_relation_definitions",
+            "keepsake_relation_definitions_identifier_contract",
+        ),
+        ("keepsakes", "keepsakes_identifier_contract"),
+        (
+            "keepsake_fulfillment_counters",
+            "keepsake_fulfillment_counter_identifier_contract",
+        ),
+        (
+            "keepsake_fulfillment_checklist",
+            "keepsake_fulfillment_checklist_identifier_contract",
+        ),
+    ] {
+        let definition: String = sqlx::query_scalar(
+            "select pg_get_constraintdef(oid, true) from pg_constraint where conrelid = $1::regclass and conname = $2",
+        )
+        .bind(table)
+        .bind(name)
+        .fetch_one(&pool)
+        .await?;
+        for replacement in [
+            "CHECK (octet_length(tenant_id) > 0 AND octet_length(tenant_id) <= 191 AND tenant_id = btrim(tenant_id))".to_owned(),
+            format!("{definition} NOT VALID"),
+            format!("CHECK (({}) OR true)", definition.trim_start_matches("CHECK ")),
+        ] {
+            // Identifiers are fixed test cases; predicates come from this disposable schema.
+            sqlx::raw_sql(sqlx::AssertSqlSafe(format!("alter table {table} drop constraint {name}; alter table {table} add constraint {name} {replacement}")))
+                .execute(&pool).await?;
+            assert!(matches!(repo.check_schema().await, Err(RepositoryError::BackendMismatch { .. })), "accepted {name}: {replacement}");
+            sqlx::raw_sql(sqlx::AssertSqlSafe(format!("alter table {table} drop constraint {name}; alter table {table} add constraint {name} {definition}")))
+                .execute(&pool).await?;
+            repo.check_schema().await?;
+        }
+    }
+    Ok(())
+}

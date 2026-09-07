@@ -24,6 +24,9 @@ When a change touches SQLx, migrations, or database queries, also run:
 mise run test-db
 ```
 
+The canonical gate includes cargo-machete unused-dependency checks. For a focused
+test, run `mise exec -- just test <filter> -- --nocapture`.
+
 The structural Rust checks are documented in
 [`tools/ast-grep/README.md`](tools/ast-grep/README.md). Run them on their own
 with `mise run lint-structure`.

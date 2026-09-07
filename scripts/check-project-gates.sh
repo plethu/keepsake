@@ -15,6 +15,7 @@ Runs Keepsake's canonical local project gates:
   6. cargo test -p keepsake-sqlx --features sqlite-tests --test sqlite
   7. cargo deny advisory, ban, license, and source checks
   8. cargo test --workspace --all-features
+  9. cargo machete
 EOF
 }
 
@@ -121,6 +122,20 @@ echo "== cargo test =="
 (
   cd "$repo_root"
   cargo test --workspace --all-features
+)
+
+echo
+echo "== cargo machete unused-dependency checks =="
+(
+  cd "$repo_root"
+  if command -v cargo-machete >/dev/null 2>&1; then
+    cargo machete
+  elif command -v mise >/dev/null 2>&1; then
+    mise exec -- cargo-machete
+  else
+    echo "cargo-machete is unavailable; run 'mise install'" >&2
+    exit 2
+  fi
 )
 
 echo

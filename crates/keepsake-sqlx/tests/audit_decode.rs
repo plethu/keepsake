@@ -4,7 +4,7 @@ use std::error::Error;
 
 use keepsake::{
     AUDIT_PAYLOAD_SCHEMA_VERSION, ActorRef, AuditContext, AuditDecision, AuditEvent, AuditEventId,
-    AuditEventType, KeepsakeId, RelationId, SubjectRef, TenantId,
+    AuditEventType, AuditPayloadSchemaVersion, KeepsakeId, RelationId, SubjectRef, TenantId,
 };
 use keepsake_sqlx::{AuditEventDecodeError, DovecoteAuditConfig, decode_audit_event};
 use time::OffsetDateTime;
@@ -13,7 +13,7 @@ type TestResult<T> = Result<T, Box<dyn Error>>;
 
 fn audit_event() -> TestResult<AuditEvent> {
     Ok(AuditEvent {
-        schema_version: AUDIT_PAYLOAD_SCHEMA_VERSION,
+        schema_version: AuditPayloadSchemaVersion::CURRENT,
         tenant_id: TenantId::new("tenant-test")?,
         id: AuditEventId::from_uuid(uuid::Uuid::nil()),
         event_type: AuditEventType::Apply,
