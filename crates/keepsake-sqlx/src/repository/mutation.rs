@@ -389,7 +389,15 @@ pub(super) async fn keepsake_by_id_tx(
     tenant_id: &keepsake::TenantId,
     keepsake_id: Uuid,
 ) -> RepositoryResult<Option<Keepsake>> {
+    keepsake_by_id_connection(tx, tenant_id, keepsake_id).await
+}
+
+pub(super) async fn keepsake_by_id_connection(
+    connection: &mut sqlx::PgConnection,
+    tenant_id: &keepsake::TenantId,
+    keepsake_id: Uuid,
+) -> RepositoryResult<Option<Keepsake>> {
     sqlx::query_as::<_, AppliedKeepsakeRow>("select tenant_id, id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at, expires_at, fulfilled_at, revoked_at, metadata from keepsakes where tenant_id = $1 and id = $2")
-        .bind(tenant_id.as_str()).bind(keepsake_id).fetch_optional(&mut **tx).await?
+        .bind(tenant_id.as_str()).bind(keepsake_id).fetch_optional(connection).await?
         .map(AppliedKeepsakeRow::try_into_keepsake).transpose()
 }

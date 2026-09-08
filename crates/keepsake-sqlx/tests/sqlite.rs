@@ -11,5 +11,7 @@ mod sqlite {
     mod queries;
     mod support;
     mod tenancy;
+    #[path = "../support/timed_relation_scope.rs"]
+    mod timed_relation_scope;
     mod transactions;
 }

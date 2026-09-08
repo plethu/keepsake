@@ -1,5 +1,13 @@
 # Changelog
 
+## keepsake-sqlx 6.1.0 - 2026-09-08
+
+- Added tenant-scoped exact assignment reads, including terminal rows and
+  caller-owned transaction variants, plus relation-scoped timed expiry helpers
+  for bounded worker and application compositions.
+- Existing APIs, features, Rust 1.94 MSRV and version-4 schemas are unchanged.
+  The `keepsake` core remains at 6.0.0.
+
 ## 6.0.0 - 2026-09-07
 
 - SQLite counter overflow is rejected without changing its value or observation time.

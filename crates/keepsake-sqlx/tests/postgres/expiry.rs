@@ -57,6 +57,185 @@ async fn lifecycle_commands_and_timed_batches_use_stable_order() -> TestResult<(
 
 #[tokio::test]
 #[ignore = "requires docker postgres; run `mise run test-db`"]
+async fn timed_facade_uses_captured_timestamp_for_scoped_expiry() -> TestResult<()> {
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant()?);
+    let relation = timed_relation(&repo, "timed-facade", "2026-01-02T00:00:00Z").await?;
+    let applied = apply_at(
+        &repo,
+        &SubjectRef::new("account", "timed-facade")?,
+        relation.id,
+        "2026-01-01T00:00:00Z",
+    )
+    .await?;
+
+    let before_due = repo.at(ts("2026-01-01T23:59:59Z")?);
+    assert!(
+        before_due
+            .due_timed_expiry_for_relation(relation.id, 1)
+            .await?
+            .is_empty()
+    );
+
+    let at_due = repo.at(ts("2026-01-02T00:00:00Z")?);
+    let candidates = at_due.due_timed_expiry_for_relation(relation.id, 1).await?;
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].keepsake_id, applied.keepsake.id());
+    assert_eq!(
+        at_due.expire_due_timed_for_relation(relation.id, 1).await?,
+        1
+    );
+    assert_eq!(
+        repo.keepsake_by_id(applied.keepsake.id())
+            .await?
+            .ok_or(sqlx::Error::RowNotFound)?
+            .state(),
+        LifecycleState::Expired
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
+async fn scoped_timed_expiry_is_relation_bounded() -> TestResult<()> {
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant()?);
+    let unrelated_relation =
+        timed_relation(&repo, "scoped-unrelated", "2026-01-01T00:01:00Z").await?;
+    let selected_relation =
+        timed_relation(&repo, "scoped-selected", "2026-01-01T00:02:00Z").await?;
+    let disabled_relation =
+        timed_relation(&repo, "scoped-disabled", "2026-01-01T00:00:30Z").await?;
+
+    let unrelated = apply_at(
+        &repo,
+        &SubjectRef::new("account", "postgres_scoped_unrelated")?,
+        unrelated_relation.id,
+        "2026-01-01T00:00:00Z",
+    )
+    .await?;
+    let selected = repo
+        .apply(
+            &ApplyKeepsake::new(
+                test_tenant()?,
+                SubjectRef::new("account", "postgres_scoped_selected")?,
+                selected_relation.id,
+                ts("2026-01-01T00:00:00Z")?,
+                CommandContext::new(ActorRef::new("test", "worker")?),
+            )
+            .with_metadata("source", "scoped-expiry"),
+        )
+        .await?;
+    let disabled = apply_at(
+        &repo,
+        &SubjectRef::new("account", "postgres_scoped_disabled")?,
+        disabled_relation.id,
+        "2026-01-01T00:00:00Z",
+    )
+    .await?;
+    assert!(set_relation_enabled(&repo, disabled_relation.id, false).await?);
+
+    assert_scoped_expiry(
+        &repo,
+        selected_relation.id,
+        disabled_relation.id,
+        selected.keepsake.id(),
+        unrelated.keepsake.id(),
+        disabled.keepsake.id(),
+    )
+    .await
+}
+
+async fn assert_scoped_expiry(
+    repo: &keepsake_sqlx::TenantKeepsakeRepository<'_, keepsake_sqlx::NoopRelationCache>,
+    selected_relation_id: Uuid,
+    disabled_relation_id: Uuid,
+    selected_id: Uuid,
+    unrelated_id: Uuid,
+    disabled_id: Uuid,
+) -> TestResult<()> {
+    let now = ts("2026-01-01T00:03:00Z")?;
+    for limit in [0, 10_001] {
+        assert!(matches!(
+            repo.due_timed_expiry_for_relation(selected_relation_id, now, limit)
+                .await,
+            Err(RepositoryError::InvalidLimit { limit: actual, .. }) if actual == limit
+        ));
+        assert!(matches!(
+            repo.expire_due_timed_for_relation(selected_relation_id, now, limit)
+                .await,
+            Err(RepositoryError::InvalidLimit { limit: actual, .. }) if actual == limit
+        ));
+    }
+
+    let candidates = repo
+        .due_timed_expiry_for_relation(selected_relation_id, now, 1)
+        .await?;
+    assert_eq!(candidates.len(), 1);
+    let candidate = candidates.first().ok_or(sqlx::Error::RowNotFound)?;
+    assert_eq!(candidate.keepsake_id, selected_id);
+    assert_eq!(candidate.relation_id, selected_relation_id);
+    assert_eq!(candidate.subject_kind, "account");
+    assert_eq!(candidate.subject_id, "postgres_scoped_selected");
+    assert_eq!(candidate.due_at, ts("2026-01-01T00:02:00Z")?);
+    assert!(
+        repo.due_timed_expiry_for_relation(Uuid::from_u128(99), now, 1)
+            .await?
+            .is_empty()
+    );
+    assert!(
+        repo.due_timed_expiry_for_relation(disabled_relation_id, now, 1)
+            .await?
+            .is_empty()
+    );
+
+    assert_eq!(
+        repo.expire_due_timed_for_relation(Uuid::from_u128(99), now, 1)
+            .await?,
+        0
+    );
+    assert_eq!(
+        repo.expire_due_timed_for_relation(selected_relation_id, now, 1)
+            .await?,
+        1
+    );
+    assert_eq!(
+        repo.expire_due_timed_for_relation(selected_relation_id, now, 1)
+            .await?,
+        0
+    );
+
+    let selected = repo
+        .keepsake_by_id(selected_id)
+        .await?
+        .ok_or(sqlx::Error::RowNotFound)?;
+    assert_eq!(selected.state(), LifecycleState::Expired);
+    assert_eq!(selected.relation_id(), selected_relation_id);
+    assert_eq!(selected.subject().id(), "postgres_scoped_selected");
+    assert_eq!(
+        selected.metadata().get("source").map(String::as_str),
+        Some("scoped-expiry")
+    );
+    assert_eq!(selected.expires_at(), Some(ts("2026-01-01T00:02:00Z")?));
+    assert_eq!(
+        repo.keepsake_by_id(unrelated_id)
+            .await?
+            .ok_or(sqlx::Error::RowNotFound)?
+            .state(),
+        LifecycleState::Applied
+    );
+    assert_eq!(
+        repo.keepsake_by_id(disabled_id)
+            .await?
+            .ok_or(sqlx::Error::RowNotFound)?
+            .state(),
+        LifecycleState::Applied
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
 async fn disabled_relation_is_excluded_from_timed_expiry() -> TestResult<()> {
     let root = repo().await?;
     let repo = root.for_tenant(test_tenant()?);
@@ -196,6 +375,7 @@ async fn concurrent_expiry_workers_expire_each_due_row_once() -> TestResult<()> 
     for subject in &subjects {
         assert!(repo.active_for_subject(subject).await?.is_empty());
     }
+
     Ok(())
 }
 
@@ -231,6 +411,7 @@ async fn concurrent_expiry_and_disable_have_ordered_outcomes() -> TestResult<()>
         assert_eq!(expired, 1);
         assert!(active.is_empty());
     }
+
     Ok(())
 }
 

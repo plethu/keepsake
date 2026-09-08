@@ -119,6 +119,21 @@ where
         self.repository.due_timed_expiry(self.at, limit).await
     }
 
+    /// Lists due timed expiry candidates for one relation using this view's timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-limit, database or invalid-record decoding errors.
+    pub async fn due_timed_expiry_for_relation(
+        &self,
+        relation_id: RelationId,
+        limit: i64,
+    ) -> super::RepositoryResult<Vec<super::TimedExpiryCandidate>> {
+        self.repository
+            .due_timed_expiry_for_relation(relation_id, self.at, limit)
+            .await
+    }
+
     /// Expires a stable batch of due timed keepsakes using this view's timestamp.
     ///
     /// # Errors
@@ -127,6 +142,21 @@ where
     /// The owned transaction is not committed when reconciliation fails.
     pub async fn expire_due_timed(&self, limit: i64) -> super::RepositoryResult<u64> {
         self.repository.expire_due_timed(self.at, limit).await
+    }
+
+    /// Expires due timed keepsakes for one relation using this view's timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-limit, schema, isolation, storage or mandatory audit errors.
+    pub async fn expire_due_timed_for_relation(
+        &self,
+        relation_id: RelationId,
+        limit: i64,
+    ) -> super::RepositoryResult<u64> {
+        self.repository
+            .expire_due_timed_for_relation(relation_id, self.at, limit)
+            .await
     }
 
     /// Reads the persisted fulfillment counter snapshot for a keepsake.
@@ -278,6 +308,21 @@ where
         self.repository.due_timed_expiry(self.at, limit).await
     }
 
+    /// Lists due timed expiry candidates for one relation using this view's timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-limit, database or invalid-record decoding errors.
+    pub async fn due_timed_expiry_for_relation(
+        &self,
+        relation_id: RelationId,
+        limit: i64,
+    ) -> super::RepositoryResult<Vec<super::TimedExpiryCandidate>> {
+        self.repository
+            .due_timed_expiry_for_relation(relation_id, self.at, limit)
+            .await
+    }
+
     /// Expires a stable batch of due timed keepsakes using this view's timestamp.
     ///
     /// # Errors
@@ -286,6 +331,21 @@ where
     /// The owned transaction is not committed when reconciliation fails.
     pub async fn expire_due_timed(&self, limit: i64) -> super::RepositoryResult<u64> {
         self.repository.expire_due_timed(self.at, limit).await
+    }
+
+    /// Expires due timed keepsakes for one relation using this view's timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-limit, schema, isolation, storage or mandatory audit errors.
+    pub async fn expire_due_timed_for_relation(
+        &self,
+        relation_id: RelationId,
+        limit: i64,
+    ) -> super::RepositoryResult<u64> {
+        self.repository
+            .expire_due_timed_for_relation(relation_id, self.at, limit)
+            .await
     }
 
     /// Reads the persisted fulfillment counter snapshot for a keepsake.
@@ -437,6 +497,21 @@ where
         self.repository.due_timed_expiry(self.at, limit).await
     }
 
+    /// Lists due timed expiry candidates for one relation using this view's timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-limit, database or invalid-record decoding errors.
+    pub async fn due_timed_expiry_for_relation(
+        &self,
+        relation_id: RelationId,
+        limit: i64,
+    ) -> super::RepositoryResult<Vec<super::TimedExpiryCandidate>> {
+        self.repository
+            .due_timed_expiry_for_relation(relation_id, self.at, limit)
+            .await
+    }
+
     /// Expires a stable batch of due timed keepsakes using this view's timestamp.
     ///
     /// # Errors
@@ -445,6 +520,21 @@ where
     /// The owned transaction is not committed when reconciliation fails.
     pub async fn expire_due_timed(&self, limit: i64) -> super::RepositoryResult<u64> {
         self.repository.expire_due_timed(self.at, limit).await
+    }
+
+    /// Expires due timed keepsakes for one relation using this view's timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-limit, schema, isolation, storage or mandatory audit errors.
+    pub async fn expire_due_timed_for_relation(
+        &self,
+        relation_id: RelationId,
+        limit: i64,
+    ) -> super::RepositoryResult<u64> {
+        self.repository
+            .expire_due_timed_for_relation(relation_id, self.at, limit)
+            .await
     }
 
     /// Reads the persisted fulfillment counter snapshot for a keepsake.

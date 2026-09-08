@@ -387,6 +387,14 @@ pub(super) async fn keepsake_by_id_tx(
     tenant_id: &keepsake::TenantId,
     keepsake_id: Uuid,
 ) -> RepositoryResult<Option<Keepsake>> {
+    keepsake_by_id_connection(tx, tenant_id, keepsake_id).await
+}
+
+pub(super) async fn keepsake_by_id_connection(
+    connection: &mut sqlx::SqliteConnection,
+    tenant_id: &keepsake::TenantId,
+    keepsake_id: Uuid,
+) -> RepositoryResult<Option<Keepsake>> {
     let row = sqlx::query(
         r"
         select tenant_id, id, subject_kind, subject_id, relation_id, state, expiry_policy, applied_at,
@@ -397,7 +405,7 @@ pub(super) async fn keepsake_by_id_tx(
     )
     .bind(tenant_id.as_str())
     .bind(keepsake_id.to_string())
-    .fetch_optional(&mut **tx)
+    .fetch_optional(connection)
     .await?;
     row.as_ref().map(keepsake_from_row).transpose()
 }

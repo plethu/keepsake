@@ -136,6 +136,57 @@ async fn mysql_concurrent_duplicate_apply_creates_one_active_keepsake() -> TestR
 async fn mysql_timed_expiry_expires_due_keepsake() -> TestResult<()> {
     backend_cases::timed_expiry_expires_due_keepsake::<MySqlHarness>().await
 }
+
+#[tokio::test]
+#[ignore = "requires docker mysql; run `mise run test-db`"]
+async fn mysql_scoped_timed_expiry_is_relation_bounded() -> TestResult<()> {
+    super::timed_relation_scope::scoped_timed_expiry_is_relation_bounded::<MySqlHarness>().await
+}
+
+#[tokio::test]
+#[ignore = "requires docker mysql; run `mise run test-db`"]
+async fn mysql_timed_facade_uses_captured_timestamp_for_scoped_expiry() -> TestResult<()> {
+    let (repo, _pool) = MySqlHarness::repo().await?;
+    let relation = upsert_relation::<MySqlHarness>(
+        &repo,
+        ExpiryPolicy::At {
+            timestamp: ts("2026-01-02T00:00:00Z")?,
+        },
+    )
+    .await?;
+    let applied = repo
+        .apply(&ApplyKeepsake::new(
+            MySqlHarness::tenant()?,
+            SubjectRef::new("account", "mysql-timed-facade")?,
+            relation.id,
+            ts("2026-01-01T00:00:00Z")?,
+            CommandContext::new(ActorRef::new("test", "worker")?),
+        ))
+        .await?;
+    let before_due = repo.at(ts("2026-01-01T23:59:59Z")?);
+    assert!(
+        before_due
+            .due_timed_expiry_for_relation(relation.id, 1)
+            .await?
+            .is_empty()
+    );
+    let at_due = repo.at(ts("2026-01-02T00:00:00Z")?);
+    let candidates = at_due.due_timed_expiry_for_relation(relation.id, 1).await?;
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].keepsake_id, applied.keepsake.id());
+    assert_eq!(
+        at_due.expire_due_timed_for_relation(relation.id, 1).await?,
+        1
+    );
+    assert_eq!(
+        repo.keepsake_by_id(applied.keepsake.id())
+            .await?
+            .ok_or(sqlx::Error::RowNotFound)?
+            .state(),
+        keepsake::LifecycleState::Expired
+    );
+    Ok(())
+}
 #[tokio::test]
 #[ignore = "requires docker mysql; run `mise run test-db`"]
 async fn mysql_lifecycle_invariants_reject_invalid_rows() -> TestResult<()> {

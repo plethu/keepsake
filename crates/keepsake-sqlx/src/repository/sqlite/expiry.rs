@@ -1,4 +1,4 @@
-use keepsake::{ExpiryCause, KeepsakeId};
+use keepsake::{ExpiryCause, KeepsakeId, RelationId};
 #[cfg(feature = "fulfillment-counters")]
 use keepsake::{ExpiryPolicy, FulfillmentSnapshot};
 #[cfg(feature = "fulfillment-counters")]
@@ -52,6 +52,43 @@ where
             ",
         )
         .bind(self.tenant_id.as_str())
+        .bind(format_timestamp(now))
+        .bind(limit)
+        .fetch_all(self.pool)
+        .await?;
+        rows.iter().map(timed_expiry_candidate_from_row).collect()
+    }
+
+    /// Lists due timed expiry candidates for one relation in stable batch order.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RepositoryError::InvalidLimit` outside the supported batch range, or a database
+    /// or invalid-record decoding error.
+    pub async fn due_timed_expiry_for_relation(
+        &self,
+        relation_id: RelationId,
+        now: OffsetDateTime,
+        limit: i64,
+    ) -> RepositoryResult<Vec<TimedExpiryCandidate>> {
+        let limit = validate_limit(limit)?;
+        let rows = sqlx::query(
+            r"
+            select k.id as keepsake_id, k.relation_id, k.subject_kind, k.subject_id, k.expires_at as due_at
+            from keepsakes k
+            join keepsake_relation_definitions r on r.tenant_id = k.tenant_id and r.id = k.relation_id
+            where k.tenant_id = ?1
+              and k.relation_id = ?2
+              and k.state = 'applied'
+              and r.enabled
+              and k.expires_at is not null
+              and k.expires_at <= ?3
+            order by k.expires_at, k.relation_id, k.subject_kind, k.subject_id, k.id
+            limit ?4
+            ",
+        )
+        .bind(self.tenant_id.as_str())
+        .bind(relation_id.to_string())
         .bind(format_timestamp(now))
         .bind(limit)
         .fetch_all(self.pool)
@@ -229,6 +266,28 @@ where
         Ok(count)
     }
 
+    /// Expires a stable batch of due timed keepsakes for one relation.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-limit, schema, isolation, storage or mandatory audit errors.
+    /// The owned transaction is not committed when reconciliation fails.
+    pub async fn expire_due_timed_for_relation(
+        &self,
+        relation_id: RelationId,
+        now: OffsetDateTime,
+        limit: i64,
+    ) -> RepositoryResult<u64> {
+        let mut tx = super::lifecycle::begin_write_tx(self.pool).await?;
+        let expired = self
+            .expire_due_timed_for_relation_in_transaction(&mut tx, relation_id, now, limit)
+            .await?;
+        let count =
+            u64::try_from(expired.len()).map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
+        tx.commit().await?;
+        Ok(count)
+    }
+
     /// Reconciles due expiry inside the caller's transaction, including lifecycle audit.
     /// Returns only transitioned assignment identities, in candidate order, for composing
     /// notification intents before the caller commits.
@@ -248,9 +307,37 @@ where
         now: OffsetDateTime,
         limit: i64,
     ) -> RepositoryResult<Vec<KeepsakeId>> {
+        self.expire_due_timed_in_transaction_scoped(tx, now, limit, None)
+            .await
+    }
+
+    /// Reconciles due expiry for one relation inside the caller's transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-limit, schema, isolation, storage or mandatory audit errors.
+    /// Roll back the caller transaction on any error; earlier transitions may be staged.
+    pub async fn expire_due_timed_for_relation_in_transaction(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        relation_id: RelationId,
+        now: OffsetDateTime,
+        limit: i64,
+    ) -> RepositoryResult<Vec<KeepsakeId>> {
+        self.expire_due_timed_in_transaction_scoped(tx, now, limit, Some(relation_id))
+            .await
+    }
+
+    async fn expire_due_timed_in_transaction_scoped(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        now: OffsetDateTime,
+        limit: i64,
+        relation_id: Option<RelationId>,
+    ) -> RepositoryResult<Vec<KeepsakeId>> {
         super::observation::require_transaction_schema(tx).await?;
         let limit = validate_limit(limit)?;
-        let candidates = due_timed_expiry_tx(tx, &self.tenant_id, now, limit).await?;
+        let candidates = due_timed_expiry_tx(tx, &self.tenant_id, relation_id, now, limit).await?;
         let mut expired = Vec::new();
         for candidate in candidates {
             let result = sqlx::query(
@@ -259,6 +346,7 @@ where
                 set state = 'expired', updated_at = ?2
                 where tenant_id = ?1
                   and id = ?3
+                  and (?4 is null or relation_id = ?4)
                   and state = 'applied'
                   and exists (
                     select 1
@@ -272,6 +360,7 @@ where
             .bind(self.tenant_id.as_str())
             .bind(format_timestamp(now))
             .bind(candidate.keepsake_id.to_string())
+            .bind(relation_id.map(|id| id.to_string()))
             .execute(&mut **tx)
             .await?;
             let rows_affected = result.rows_affected();
@@ -419,6 +508,7 @@ impl From<&FulfilledExpiryCandidate> for FulfilledExpiryCursor {
 async fn due_timed_expiry_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     tenant_id: &keepsake::TenantId,
+    relation_id: Option<RelationId>,
     now: OffsetDateTime,
     limit: i64,
 ) -> RepositoryResult<Vec<TimedExpiryCandidate>> {
@@ -428,6 +518,7 @@ async fn due_timed_expiry_tx(
             from keepsakes k
             join keepsake_relation_definitions r on r.tenant_id = k.tenant_id and r.id = k.relation_id
             where k.tenant_id = ?1
+              and (?4 is null or k.relation_id = ?4)
               and k.state = 'applied'
               and r.enabled
               and k.expires_at is not null
@@ -439,6 +530,7 @@ async fn due_timed_expiry_tx(
         .bind(tenant_id.as_str())
         .bind(format_timestamp(now))
         .bind(limit)
+        .bind(relation_id.map(|id| id.to_string()))
         .fetch_all(&mut **tx)
         .await?;
     rows.iter().map(timed_expiry_candidate_from_row).collect()

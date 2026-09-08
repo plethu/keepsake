@@ -83,6 +83,22 @@ pub(in super::super) trait BackendHarness {
         now: OffsetDateTime,
         limit: i64,
     ) -> Result<u64, RepositoryError>;
+    async fn due_timed_expiry_for_relation(
+        repo: &Self::Repo,
+        relation_id: Uuid,
+        now: OffsetDateTime,
+        limit: i64,
+    ) -> Result<Vec<keepsake_sqlx::TimedExpiryCandidate>, RepositoryError>;
+    async fn expire_due_timed_for_relation(
+        repo: &Self::Repo,
+        relation_id: Uuid,
+        now: OffsetDateTime,
+        limit: i64,
+    ) -> Result<u64, RepositoryError>;
+    async fn keepsake_by_id(
+        repo: &Self::Repo,
+        keepsake_id: Uuid,
+    ) -> Result<Option<keepsake::Keepsake>, RepositoryError>;
     async fn upsert_counter_projection(
         repo: &Self::Repo,
         keepsake_id: Uuid,

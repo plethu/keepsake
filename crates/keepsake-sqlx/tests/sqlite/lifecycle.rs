@@ -1,5 +1,5 @@
 use super::support::*;
-use keepsake::ExpiryPolicy;
+use keepsake::{ActorRef, ApplyKeepsake, CommandContext, ExpiryPolicy, SubjectRef};
 use uuid::Uuid;
 
 #[tokio::test]
@@ -10,6 +10,50 @@ async fn sqlite_apply_duplicate_and_active_read() -> TestResult<()> {
 #[tokio::test]
 async fn sqlite_nanosecond_timed_policy_round_trips_at_sql_precision() -> TestResult<()> {
     backend_cases::nanosecond_timed_policy_round_trips_at_sql_precision::<SqliteHarness>().await
+}
+
+#[tokio::test]
+async fn sqlite_timed_facade_uses_captured_timestamp_for_scoped_expiry() -> TestResult<()> {
+    let (repo, _pool) = SqliteHarness::repo().await?;
+    let relation = upsert_relation::<SqliteHarness>(
+        &repo,
+        ExpiryPolicy::At {
+            timestamp: ts("2026-01-02T00:00:00Z")?,
+        },
+    )
+    .await?;
+    let applied = repo
+        .apply(&ApplyKeepsake::new(
+            SqliteHarness::tenant()?,
+            SubjectRef::new("account", "sqlite-timed-facade")?,
+            relation.id,
+            ts("2026-01-01T00:00:00Z")?,
+            CommandContext::new(ActorRef::new("test", "worker")?),
+        ))
+        .await?;
+    let before_due = repo.at(ts("2026-01-01T23:59:59Z")?);
+    assert!(
+        before_due
+            .due_timed_expiry_for_relation(relation.id, 1)
+            .await?
+            .is_empty()
+    );
+    let at_due = repo.at(ts("2026-01-02T00:00:00Z")?);
+    let candidates = at_due.due_timed_expiry_for_relation(relation.id, 1).await?;
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].keepsake_id, applied.keepsake.id());
+    assert_eq!(
+        at_due.expire_due_timed_for_relation(relation.id, 1).await?,
+        1
+    );
+    assert_eq!(
+        repo.keepsake_by_id(applied.keepsake.id())
+            .await?
+            .ok_or(sqlx::Error::RowNotFound)?
+            .state(),
+        keepsake::LifecycleState::Expired
+    );
+    Ok(())
 }
 
 #[tokio::test]

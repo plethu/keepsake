@@ -5,6 +5,17 @@ and effective authorization integration. It retains the v4 database track
 and numeric JSON payload schema version 4. Crate major versions and durable
 schema versions are separate contracts.
 
+## SQLx adapter 6.1.0
+
+`keepsake-sqlx` 6.1.0 adds tenant-scoped exact assignment reads and
+relation-scoped timed expiry on PostgreSQL, MySQL and SQLite, including
+caller-owned transaction variants. Existing signatures, features and the Rust
+1.94 MSRV are unchanged. The `keepsake` core remains at 6.0.0; no database
+migration or persisted-data rewrite is required.
+
+This adapter-only minor release uses the `keepsake-sqlx-v6.1.0` Git tag.
+Applications using the new methods should require `keepsake-sqlx = "6.1"`.
+
 ## Upgrading from published 5.0
 
 This release is a major API change, not a database-format rewrite.
@@ -53,9 +64,10 @@ serving requests to detect incomplete identifier constraints.
   can ignore until adopted.
 - **Patch**: bug fixes and non-breaking schema corrections.
 
-Pin `keepsake` and `keepsake-sqlx` to the same release. Select the matching
-Dovecote adapter and apply both schemas before deploying code that depends on
-the new audit contract.
+Use the core version required by the SQLx adapter: `keepsake-sqlx` 6.1
+retains its `keepsake` 6.0 dependency. Additive adapter releases need not
+republish an unchanged core. Select the matching Dovecote adapter and apply
+both schemas before deploying code that depends on the audit contract.
 
 ## Upgrade checklist
 

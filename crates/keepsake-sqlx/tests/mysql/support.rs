@@ -107,6 +107,33 @@ impl BackendHarness for MySqlHarness {
         repo.expire_due_timed(now, limit).await
     }
 
+    async fn due_timed_expiry_for_relation(
+        repo: &Self::Repo,
+        relation_id: Uuid,
+        now: time::OffsetDateTime,
+        limit: i64,
+    ) -> Result<Vec<keepsake_sqlx::TimedExpiryCandidate>, RepositoryError> {
+        repo.due_timed_expiry_for_relation(relation_id, now, limit)
+            .await
+    }
+
+    async fn expire_due_timed_for_relation(
+        repo: &Self::Repo,
+        relation_id: Uuid,
+        now: time::OffsetDateTime,
+        limit: i64,
+    ) -> Result<u64, RepositoryError> {
+        repo.expire_due_timed_for_relation(relation_id, now, limit)
+            .await
+    }
+
+    async fn keepsake_by_id(
+        repo: &Self::Repo,
+        keepsake_id: Uuid,
+    ) -> Result<Option<keepsake::Keepsake>, RepositoryError> {
+        repo.keepsake_by_id(keepsake_id).await
+    }
+
     async fn upsert_counter_projection(
         repo: &Self::Repo,
         keepsake_id: Uuid,

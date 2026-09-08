@@ -143,6 +143,22 @@ databases and SQLite file-per-tenant are the strongest physical boundaries.
 
 ## Read Helpers
 
+`keepsake_by_id` returns one tenant-owned assignment by stable id, including
+terminal assignments. An absent id and an id owned by another tenant both return
+`None`; no cross-tenant row is inferred from a matching UUID. Use
+`keepsake_by_id_in_transaction` when the read belongs to a caller-owned
+transaction. It observes that transaction's pending writes and isolation level,
+and never begins, commits, or rolls back it.
+
+`due_timed_expiry_for_relation` and
+`expire_due_timed_for_relation_in_transaction` provide the bounded expiry shape
+for workers that already own a validated relation catalogue. The candidate
+selection and locked transition both include the relation id, so an unrelated
+relation cannot consume the batch limit. The transactional transition returns
+the assignment ids actually changed and leaves commit and rollback to the
+caller. Use `repo.at(now)` to bind one captured authoritative timestamp across
+the candidate and transition calls.
+
 `active_relations_for_subject` returns active keepsakes with their stored
 relation definitions in one query. Use it when the caller needs relation keys or
 policies immediately after the subject lookup, instead of calling

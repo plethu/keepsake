@@ -18,6 +18,39 @@ impl<C> TenantSqlxKeepsakeRepository<'_, MySqlBackend, C>
 where
     C: RelationCache,
 {
+    /// Returns one assignment owned by this tenant, including terminal assignments.
+    ///
+    /// An absent ID, including one owned by another tenant, returns `None`.
+    /// The persisted assignment is validated through the ordinary repository decoder.
+    ///
+    /// # Errors
+    ///
+    /// Returns database or invalid-assignment decoding errors.
+    pub async fn keepsake_by_id(
+        &self,
+        id: keepsake::KeepsakeId,
+    ) -> RepositoryResult<Option<Keepsake>> {
+        let mut connection = self.pool.acquire().await?;
+        super::lifecycle::keepsake_by_id_connection(&mut connection, &self.tenant_id, id).await
+    }
+
+    /// Returns one assignment, including terminal assignments, in the caller's transaction.
+    ///
+    /// This method never starts, commits, or rolls back the transaction. It observes
+    /// the caller's pending writes and uses the transaction's isolation semantics.
+    /// An absent ID or one owned by another tenant returns `None`.
+    ///
+    /// # Errors
+    ///
+    /// Returns database or invalid-assignment decoding errors.
+    pub async fn keepsake_by_id_in_transaction(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
+        id: keepsake::KeepsakeId,
+    ) -> RepositoryResult<Option<Keepsake>> {
+        super::lifecycle::keepsake_by_id_tx(tx, &self.tenant_id, id).await
+    }
+
     /// Returns active keepsakes for a subject.
     ///
     /// # Errors

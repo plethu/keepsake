@@ -1,6 +1,7 @@
 use super::support::*;
 
 use std::collections::BTreeSet;
+use std::env;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -232,6 +233,102 @@ async fn active_relations_for_subject_by_ids_returns_requested_active_relations(
             .iter()
             .all(|row| row.keepsake().id() != applied_expired.keepsake.id())
     );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires docker postgres; run `mise run test-db`"]
+async fn exact_keepsake_read_is_tenant_scoped_and_transactional() -> TestResult<()> {
+    let root = repo().await?;
+    let repo = root.for_tenant(test_tenant()?);
+    let other_tenant = TenantId::new("tenant-other")?;
+    let other = root.for_tenant(other_tenant.clone());
+    let relation = timed_relation(&repo, "exact-read-a", "2026-02-01T00:00:00Z").await?;
+    let other_relation = timed_relation(&other, "exact-read-b", "2026-02-01T00:00:00Z").await?;
+    let shared_id = Uuid::from_u128(0x018f_0000_0000_7000_8000_0000_0000_0201);
+    let other_id = Uuid::from_u128(0x018f_0000_0000_7000_8000_0000_0000_0202);
+
+    let mut command = ApplyKeepsake::new(
+        test_tenant()?,
+        SubjectRef::new("account", "exact-read-a")?,
+        relation.id,
+        ts("2026-01-01T00:00:00Z")?,
+        test_context("worker")?,
+    );
+    command.id = shared_id;
+    let applied = repo.apply(&command).await?;
+
+    let mut other_command = ApplyKeepsake::new(
+        other_tenant,
+        SubjectRef::new("account", "exact-read-b")?,
+        other_relation.id,
+        ts("2026-01-01T00:00:00Z")?,
+        test_context("worker")?,
+    );
+    other_command.id = shared_id;
+    let other_applied = other.apply(&other_command).await?;
+
+    let mut wrong_tenant_command = ApplyKeepsake::new(
+        other.tenant_id().clone(),
+        SubjectRef::new("account", "exact-read-c")?,
+        other_relation.id,
+        ts("2026-01-01T00:00:00Z")?,
+        test_context("worker")?,
+    );
+    wrong_tenant_command.id = other_id;
+    let wrong_tenant = other.apply(&wrong_tenant_command).await?;
+
+    assert_eq!(
+        repo.keepsake_by_id(shared_id).await?.as_ref(),
+        Some(&applied.keepsake)
+    );
+    assert_eq!(
+        other.keepsake_by_id(shared_id).await?.as_ref(),
+        Some(&other_applied.keepsake)
+    );
+    assert!(repo.keepsake_by_id(other_id).await?.is_none());
+    assert!(
+        repo.keepsake_by_id(Uuid::from_u128(0x018f_0000_0000_7000_8000_0000_0000_0203))
+            .await?
+            .is_none()
+    );
+
+    let pool = PgPool::connect(&env::var("DATABASE_URL")?).await?;
+    let mut tx = pool.begin().await?;
+    assert_eq!(
+        repo.keepsake_by_id_in_transaction(&mut tx, shared_id)
+            .await?
+            .as_ref(),
+        Some(&applied.keepsake)
+    );
+    assert_eq!(
+        other
+            .keepsake_by_id_in_transaction(&mut tx, shared_id)
+            .await?
+            .as_ref(),
+        Some(&other_applied.keepsake)
+    );
+    assert_eq!(
+        other
+            .keepsake_by_id_in_transaction(&mut tx, other_id)
+            .await?
+            .as_ref(),
+        Some(&wrong_tenant.keepsake)
+    );
+    assert!(
+        repo.keepsake_by_id_in_transaction(&mut tx, other_id)
+            .await?
+            .is_none()
+    );
+    assert!(
+        repo.keepsake_by_id_in_transaction(
+            &mut tx,
+            Uuid::from_u128(0x018f_0000_0000_7000_8000_0000_0000_0203)
+        )
+        .await?
+        .is_none()
+    );
+    tx.rollback().await?;
     Ok(())
 }
 

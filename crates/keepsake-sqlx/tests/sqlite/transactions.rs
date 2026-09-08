@@ -100,7 +100,7 @@ async fn caller_transaction_replay_fencing_and_deadline() -> TestResult<()> {
     reject_scope_substitution(&repo, &pool, &command, &absent).await?;
     verify_fulfillment_evidence_scope(&repo, &pool, &command).await?;
     verify_terminal_receipts(&repo, &pool, &command, &active, &applied, &absent).await?;
-    verify_reconciliation_transaction(&repo, &pool, deadline).await
+    verify_reconciliation_transaction(&repo, &pool, relation.id, deadline).await
 }
 
 async fn verify_terminal_receipts(
@@ -275,11 +275,12 @@ async fn reject_scope_substitution(
 async fn verify_reconciliation_transaction(
     repo: &keepsake_sqlx::TenantSqlxKeepsakeRepository<'_, keepsake_sqlx::SqliteBackend>,
     pool: &sqlx::Pool<sqlx::Sqlite>,
+    relation_id: Uuid,
     deadline: time::OffsetDateTime,
 ) -> TestResult<()> {
     let mut tx = pool.begin().await?;
     assert_eq!(
-        repo.expire_due_timed_in_transaction(&mut tx, deadline, 10)
+        repo.expire_due_timed_for_relation_in_transaction(&mut tx, relation_id, deadline, 10)
             .await?
             .len(),
         1
@@ -295,7 +296,7 @@ async fn verify_reconciliation_transaction(
     assert_eq!(count, 3);
     let mut tx = pool.begin().await?;
     assert_eq!(
-        repo.expire_due_timed_in_transaction(&mut tx, deadline, 10)
+        repo.expire_due_timed_for_relation_in_transaction(&mut tx, relation_id, deadline, 10)
             .await?
             .len(),
         1

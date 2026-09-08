@@ -8,6 +8,11 @@ async fn sqlite_timed_expiry_expires_due_keepsake() -> TestResult<()> {
 }
 
 #[tokio::test]
+async fn sqlite_scoped_timed_expiry_is_relation_bounded() -> TestResult<()> {
+    super::timed_relation_scope::scoped_timed_expiry_is_relation_bounded::<SqliteHarness>().await
+}
+
+#[tokio::test]
 async fn sqlite_timed_expiry_writes_typed_dovecote_event() -> TestResult<()> {
     let (repo, pool) = SqliteHarness::repo().await?;
     let relation = upsert_relation::<SqliteHarness>(
