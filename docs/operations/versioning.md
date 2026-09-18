@@ -35,9 +35,6 @@ records. Do not backfill invented commands or republish historical notifications
 
 See [transactional lifecycle](../reference/transactional-lifecycle.md) for
 transaction methods, backend isolation, expiry reconciliation and retry identity.
-The source dependency graph and executable consumer can be verified locally;
-package publication and registry resolution are separate release gates. Verify
-the package versions used by your service before deployment.
 
 ## Upgrading from 4.0
 
@@ -69,22 +66,8 @@ retains its `keepsake` 6.0 dependency. Additive adapter releases need not
 republish an unchanged core. Select the matching Dovecote adapter and apply
 both schemas before deploying code that depends on the audit contract.
 
-## Upgrade checklist
+## Database upgrades
 
-- Read the changelog for API changes, new migration files, changed indexes, and
-  required ordering.
-- For new databases, apply the clean 4.0 domain baseline, v4 contract, and
-  Dovecote schema.
-- For existing clean v3 databases with their SQLx baseline receipt, run
-  `repo.migrate()` to apply the additive v4 track. For operator-managed tenant
-  activation, use `repo.upgrade_identifier_contract()` instead. Resolve the migration's incompatible-row preflight before deploying
-  4.0 writers; do not edit historical v3 SQL.
-- For 1.x databases, select `upgrade_migrate()` explicitly and complete the
-  documented history import before deploying the historical 2.0 writers.
-- Never edit or reorder published historical migrations.
-- Test request paths and workers that use changed query helpers.
-
-Embedded migrations define each track's required domain schema. Your service
-decides when and how to apply it; Dovecote migrations are selected from the
-matching Dovecote SQLx adapter. The adapter refuses a track mismatch rather
-than guessing or dropping tables.
+Follow the [migration guide](migrations.md) for clean installation or an
+existing database. It owns track selection, schema ordering, tenant activation,
+and history import. Never edit or reorder published migrations.

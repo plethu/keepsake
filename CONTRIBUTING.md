@@ -39,6 +39,13 @@ available project commands.
 CI runs `mise run check` on pull requests via GitHub Actions. The same command
 is the local release gate.
 
+## Finding your way around
+
+- `crates/keepsake` owns relation definitions, lifecycle commands, and audit values.
+- `crates/keepsake-sqlx` owns persistence and backend-specific transactions.
+- `examples/postgres-tags` shows schema setup through the first audited write.
+- `examples/guide-tests` compiles the guide examples.
+
 ## Stability
 
 From 1.0 onward, public API and schema changes follow semver. Open an issue

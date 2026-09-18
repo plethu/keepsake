@@ -245,3 +245,27 @@ conditional generated column over `CHAR(36)` identifiers, which MariaDB cannot
 replay. Existing MariaDB installations on that historical track must use an
 operator-owned export/rebuild into the forward v3 baseline; do not edit or
 re-run the published migration files on MariaDB.
+
+## Replacing the 1.x audit API
+
+Removed from `keepsake-sqlx`:
+
+- `AuditEventRecord` and `AuditCursor`;
+- `AuditOutboxRecord` and `AuditOutboxCursor`;
+- `append_audit_event`;
+- `audit_events_for_keepsake` and `audit_events_for_relation`;
+- `audit_outbox`;
+- `claim_audit_outbox`, `ack_audit_outbox`, and `release_audit_outbox`;
+- Keepsake-owned audit tables, context-attribute tables, and outbox tables from
+  the clean 2.0 baseline.
+
+Retained in the core crate:
+
+- `AuditEvent`, `AuditEventId`, `AuditEventType`, `AuditDecision`, and
+  `AuditContext`;
+- `AuditSink` and in-memory testing support;
+- typed lifecycle commands and relation-state queries.
+
+Replacement: use the selected Dovecote SQLx adapter for event live/snapshot
+paging and delivery claims. Decode event data as `keepsake::AuditEvent`; do not
+recreate Keepsake-specific SQL filters or delivery state.

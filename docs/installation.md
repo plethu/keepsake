@@ -20,27 +20,22 @@ sqlx = { version = "0.9", features = ["postgres", "runtime-tokio", "tls-rustls"]
 time = "0.3"
 ```
 
-A clean Postgres setup is short:
+For a complete first write, run the [Postgres tags example](../examples/postgres-tags/src/main.rs)
+against a local development database:
 
-```rust
-use keepsake_sqlx::KeepsakeRepository;
-use sqlx::PgPool;
-
-let pool = PgPool::connect(&database_url).await?;
-let repo = KeepsakeRepository::new(pool, "https://accounts.example.test/keepsake")?;
-repo.migrate().await?;       // clean Keepsake 4.0 domain baseline
-// Install the Dovecote schema with dovecote-sqlx-postgres before this call.
-repo.check_schema().await?;
-let tenant = keepsake::TenantId::new("account-group-a")?;
-let scoped = repo.for_tenant(tenant);
+```sh
+DATABASE_URL=postgres://keepsake:keepsake@localhost:55432/keepsake \
+  cargo run -p postgres-tags
 ```
+
+From a repository checkout, `mise exec -- just db-up` starts that database.
+The example installs both schemas, checks them, defines a tag, and applies it.
+See the [quickstart](quickstart.md) for the application code.
 
 The source URI is application-owned, stable, and absolute. It is copied into
 every Keepsake audit event. Together with the stored tenant and event id, it
 forms the tenant-scoped Dovecote deduplication identity. The adapter supplies
 the `keepsake-audit` stream and its durable event type.
-There is no migration-mode enum, legacy table configuration, bridge worker, or
-duplicate publication setting in the normal constructor.
 
 ## SQLite
 
@@ -99,46 +94,9 @@ The MySQL v4 schema changes these identifier columns to explicit
 with an implicit or case-insensitive collation does not satisfy
 `check_schema()`.
 
-## Upgrade versus clean installation
+## Existing databases
 
-`migrate()` selects the clean 4.0 domain baseline. It refuses a schema
-whose metadata identifies the historical 1.x track. For an existing Keepsake
-1.x installation, call `upgrade_migrate()` explicitly after installing and
-checking Dovecote, then run the complete-history importer described in the
-project migration runbook. Call `activate_upgrade()` only after reconciliation;
-until then, the normal 4.0 schema check remains blocked. The upgrade track leaves old audit and outbox
-tables available for reconciliation and rollback; 4.0 runtime code never
-writes them and the migration does not drop them.
-
-Do not point the clean baseline at an existing 1.x database, and do not point
-the upgrade track at a clean 4.0 database. The adapter fails loudly when the
-metadata does not match the requested track.
-
-For an existing Keepsake 2.x installation on PostgreSQL, MySQL, or SQLite, call
-`prepare_tenant_upgrade()`, apply an independently reviewed mapping that fills
-every nullable `tenant_id`, then call `activate_tenant_upgrade()`. The adapter
-never infers a tenant or uses a sentinel value. MySQL deployments serving
-regulated tenants should prefer a separate database per tenant; SQLite's
-strongest boundary is one file per tenant. Shared-schema tenancy is supported
-by the v3 adapter, but physical separation can make backup, retention, access
-review, and incident containment easier to demonstrate.
-
-For an existing Keepsake 3.x clean database, stop 3.x writers, run
-`repo.migrate()` with the 4.0 binary, and then run `repo.check_schema()` before
-accepting new writes. This applies the additive v4 identifier-contract
-migration; published v3 migration files are not edited. The preflight applies
-the exact Rust identifier validator to existing rows on every backend before
-schema activation. Review and remap any incompatible legacy identifiers before
-retrying.
-
-Audit payload compatibility is explicit. Current payloads carry
-`schema_version = 4`. Payloads from v3 that omit the field, or explicitly carry
-version 3, are routed by `decode_audit_event` to its typed legacy outcome and
-require an application-owned decoder. Unknown versions are rejected. Historical
-outer identities such as `keepsake-outbox-N` and
-`keepsake-audit-legacy-N` remain an explicit legacy path and are never accepted
-as current events.
-
-Applications own authorization, entity tables, and domain-specific joins.
-Keepsake stores opaque subject identifiers and relation lifecycle state;
-Dovecote stores audit occurrences, not live domain state.
+Use the [migration guide](operations/migrations.md) for an existing database;
+it covers each supported upgrade track, tenant mapping, and history import.
+The [versioning guide](operations/versioning.md) covers Rust API changes.
+Published migrations and historical audit bytes must remain unchanged.
