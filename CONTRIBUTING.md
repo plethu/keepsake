@@ -25,8 +25,8 @@ mise run test-db
 ```
 
 The canonical gate includes cargo-machete unused-dependency checks, strict API
-documentation, TOML validation and spelling. The [maintainability contract](docs/operations/maintainability.md)
-records lint coverage and deliberate test/API distinctions. For a focused
+documentation, TOML validation and spelling. Production-only restrictions allow
+test harnesses to use normal fixture assertions and arithmetic. For a focused
 test, run `mise exec -- just test <filter> -- --nocapture`.
 
 The structural Rust checks are documented in

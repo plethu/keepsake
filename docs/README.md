@@ -42,7 +42,6 @@ API reference: [docs.rs/keepsake](https://docs.rs/keepsake) and
 - [Migrations](operations/migrations.md)
 - [Security](../SECURITY.md)
 - [Versioning](operations/versioning.md)
-- [Maintainability](operations/maintainability.md)
 - [Indexes](operations/indexes.md)
 - [Cron and workers](operations/cron-workers.md)
 - [Query performance](operations/query-performance.md)

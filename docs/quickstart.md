@@ -3,7 +3,11 @@
 This example defines a manual `tag:trusted` relation, applies it to an account,
 then reads the active relations for that account.
 
-Start with a migrated repository. `pool` is a `sqlx::PgPool` connected to the
+For a complete example that installs both schemas in a disposable PostgreSQL
+database, run `cargo run -p postgres-tags` with `DATABASE_URL` set. The example
+source is in [postgres-tags](../examples/postgres-tags).
+
+The application code below starts with a migrated repository. `pool` is a `sqlx::PgPool` connected to the
 Postgres database where Keepsake and
 [Dovecote](https://github.com/plethu/dovecote) store lifecycle and audit rows.
 The `relation_spec!` macro keeps the stable id, natural key, and expiry policy
@@ -19,8 +23,6 @@ use keepsake_sqlx::KeepsakeRepository;
 use time::OffsetDateTime;
 
 let root = KeepsakeRepository::new(pool, "https://accounts.example.test/keepsake")?;
-root.migrate().await?;
-// Install the matching Dovecote schema before serving requests.
 root.check_schema().await?;
 let tenant = keepsake::TenantId::new("account-group-a")?;
 let repo = root.for_tenant(tenant.clone());
@@ -52,9 +54,11 @@ let active = repo.active_relations_for_subject(&subject).await?;
 # }
 ```
 
-If the same apply command runs again while the tag is active, Keepsake returns
-the existing active row and marks the duplicate as prevented. That makes retry
-loops safe after a committed write.
+Applying the same tag while it is active returns the existing row with
+`duplicate_prevented` set. This prevents duplicate active assignments; it is not
+an exact receipt for an earlier operation. To recover an uncertain commit
+without repeating business effects, use a stable command occurrence and inspect
+`replayed`, as shown in [transactional lifecycle](reference/transactional-lifecycle.md).
 
 Use `active_relations_for_subject_by_keys` when the request only needs a small
 known set of dynamic relation keys. Use `active_relations_for_subject_by_ids`

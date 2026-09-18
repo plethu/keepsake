@@ -38,15 +38,6 @@ SQLite and MySQL use the matching `keepsake-sqlx` feature and Dovecote adapter.
 The [installation guide](docs/installation.md) covers all three backends and
 schema setup.
 
-Keepsake uses `time::OffsetDateTime` throughout its public API and persists
-timestamps at canonical microsecond precision. Persisted textual identifiers
-are byte-preserving and case-sensitive: they must be non-empty, have no
-leading or trailing Unicode whitespace, and fit within 191 UTF-8 bytes. Existing 3.x
-databases require the v4 migration track before accepting current writes.
-
-The [upgrade notes](docs/operations/versioning.md) cover the 5.x-to-6.0 Rust API
-changes and older supported database migration paths.
-
 Start with the [quickstart](docs/quickstart.md), browse the
 [guides and reference](docs/README.md), or read the API docs for
 [`keepsake`](https://docs.rs/keepsake) and
