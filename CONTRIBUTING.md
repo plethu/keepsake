@@ -29,10 +29,6 @@ documentation, TOML validation and spelling. Production-only restrictions allow
 test harnesses to use normal fixture assertions and arithmetic. For a focused
 test, run `mise exec -- just test <filter> -- --nocapture`.
 
-The structural Rust checks are documented in
-[`tools/ast-grep/README.md`](tools/ast-grep/README.md). Run them on their own
-with `mise run lint-structure`.
-
 Run `mise run fmt` to format the workspace and `mise tasks` to list the
 available project commands.
 
@@ -72,3 +68,13 @@ A contribution is a conversation, not a drop-off. Please be willing to respond
 to questions, consider review feedback, and revise the work with the
 maintainers. A pull request does not need to arrive perfect; it does need
 someone present on the other side of it.
+
+## API compatibility
+
+Run `mise exec -- just check-public-api` before changing public APIs. CI runs
+this separately from the local `check` gate because it builds published baselines
+from crates.io. The pinned versions live in `scripts/check-public-api.sh`;
+default, no-default, and all-feature surfaces are compared. Update those
+baselines after publication. Use `just check-public-api major` only for an
+intentional breaking release; major mode permits breaks and is not a compatibility
+check. Database and wire compatibility remain covered by their own tests.

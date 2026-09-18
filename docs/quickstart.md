@@ -3,7 +3,7 @@
 This example defines a manual `tag:trusted` relation, applies it to an account,
 then reads the active relations for that account.
 
-For a complete example that installs both schemas in a disposable PostgreSQL
+For a complete example that installs both schemas in a disposable `PostgreSQL`
 database, run `cargo run -p postgres-tags` with `DATABASE_URL` set. The example
 source is in [postgres-tags](../examples/postgres-tags).
 

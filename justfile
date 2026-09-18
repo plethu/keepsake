@@ -48,3 +48,6 @@ supply-chain:
 
 clean:
     cargo clean
+
+check-public-api mode="minor":
+    scripts/check-public-api.sh {{ mode }}

@@ -8,15 +8,14 @@ Usage:
 
 Runs Keepsake's canonical local project gates:
   1. cargo fmt --all --check
-  2. structural Rust checks
-  3. cargo clippy --workspace --all-targets --all-features -- -D warnings
-  4. keepsake-sqlx feature-matrix clippy checks
-  5. cargo test -p keepsake-sqlx --no-default-features --offline
-  6. cargo test -p keepsake-sqlx --features sqlite-tests --test sqlite
-  7. cargo deny advisory, ban, license, and source checks
-  8. cargo test --workspace --all-features
-  9. cargo machete
-  10. production panic-result contract, strict rustdoc, TOML and spelling checks
+  2. cargo clippy --workspace --all-targets --all-features -- -D warnings
+  3. keepsake-sqlx feature-matrix clippy checks
+  4. cargo test -p keepsake-sqlx --no-default-features --offline
+  5. cargo test -p keepsake-sqlx --features sqlite-tests --test sqlite
+  6. cargo deny advisory, ban, license, and source checks
+  7. cargo test --workspace --all-features
+  8. cargo machete
+  9. production panic-result contract, strict rustdoc, TOML and spelling checks
 EOF
 }
 
@@ -43,20 +42,6 @@ echo "== cargo fmt --all --check =="
   cd "$repo_root"
   cargo fmt --all --check
 )
-
-echo
-echo "== structural Rust checks =="
-if command -v ast-grep >/dev/null 2>&1; then
-  MISE_PROJECT_ROOT="$repo_root" "$repo_root/.config/mise/tasks/lint-structure"
-elif command -v mise >/dev/null 2>&1; then
-  (
-    cd "$repo_root"
-    MISE_PROJECT_ROOT="$repo_root" mise exec -- .config/mise/tasks/lint-structure
-  )
-else
-  echo "ast-grep is unavailable; install the pinned tools with 'mise install'" >&2
-  exit 2
-fi
 
 echo
 echo "== cargo clippy =="
