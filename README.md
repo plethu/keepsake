@@ -19,11 +19,16 @@ display data, tenant choice, and authorization rules.
 authorization facts; [Dovecote](https://github.com/plethu/dovecote) stores the
 audit events and their delivery state.
 
+> [!NOTE]
+> I’m developing Keepsake alongside my own applications, and I’d love to hear
+> how it fits yours. Questions, bug reports and suggestions are welcome. The
+> [versioning guide](docs/operations/versioning.md) covers maintained versions,
+> compatibility and upgrades.
+
 ## Install
 
 Keepsake 6.0 adds caller-owned lifecycle transactions and effective relation
-observations. See the [versioning guide](docs/operations/versioning.md) when
-upgrading an existing service.
+observations.
 
 For Postgres:
 

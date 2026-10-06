@@ -5,6 +5,26 @@ and effective authorization integration. It retains the v4 database track
 and numeric JSON payload schema version 4. Crate major versions and durable
 schema versions are separate contracts.
 
+> [!NOTE]
+> Those early releases really should’ve stayed at 0.x. I got a bit ahead of
+> myself with 1.0! I’d been used to private projects and writing software at
+> work, so putting my own libraries out there has been a learning experience.
+
+## Maintenance
+
+I’m maintaining these release lines:
+
+| Crate | Maintained versions |
+| --- | --- |
+| `keepsake` | 6.x |
+| `keepsake-sqlx` | 6.x |
+
+Minor and patch releases will preserve compatibility within these lines.
+I’m not promising backports to older major versions.
+
+Planned breaking changes will be tested in a consumer application and offered
+as prereleases, with migration guidance, before a stable release.
+
 ## SQLx adapter 6.1.0
 
 `keepsake-sqlx` 6.1.0 adds tenant-scoped exact assignment reads and

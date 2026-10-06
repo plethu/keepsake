@@ -1,6 +1,6 @@
 # Contributing
 
-Keepsake is stable infrastructure for relation lifecycles. The main consumers
+Keepsake manages relation lifecycles for Rust applications. The main consumers
 are Rust services and policy adapters such as gatekeep that read active relation
 state through `ActiveRelationSource`.
 
@@ -44,8 +44,8 @@ is the local release gate.
 
 ## Stability
 
-From 1.0 onward, public API and schema changes follow semver. Open an issue
-before proposing breaking changes.
+The [versioning guide](docs/operations/versioning.md) covers maintained versions,
+compatibility and migrations. Open an issue before proposing breaking changes.
 
 ## Docs
 
